@@ -130,10 +130,16 @@ public class SlotSharingSlotAllocator implements SlotAllocator {
         return determineParallelism(jobInformation, slots)
                 .map(
                         parallelism -> {
-                            SlotAssigner slotAssigner =
-                                    jobAllocationsInformation.isEmpty()
-                                            ? new DefaultSlotAssigner()
-                                            : new StateLocalitySlotAssigner();
+                            final SlotAssigner slotAssigner;
+                            if (ThesisSlotAssigner.isEnabled()) {
+                                // Thesis fork: route placement through the custom assigner when
+                                // enabled via THESIS_SLOT_ASSIGNER; otherwise keep default behaviour.
+                                slotAssigner = new ThesisSlotAssigner();
+                            } else if (jobAllocationsInformation.isEmpty()) {
+                                slotAssigner = new DefaultSlotAssigner();
+                            } else {
+                                slotAssigner = new StateLocalitySlotAssigner();
+                            }
                             return new JobSchedulingPlan(
                                     parallelism,
                                     slotAssigner.assignSlots(
