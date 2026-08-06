@@ -17,6 +17,7 @@
 
 package org.apache.flink.runtime.scheduler.adaptive.allocator;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.runtime.jobmanager.scheduler.SlotSharingGroup;
 import org.apache.flink.runtime.jobmaster.SlotInfo;
 import org.apache.flink.runtime.scheduler.adaptive.JobSchedulingPlan.SlotAssignment;
@@ -28,6 +29,11 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -39,6 +45,7 @@ import java.util.Set;
 import java.util.StringJoiner;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Thesis {@link SlotAssigner} — Phase 2 (real placement strategies).
@@ -49,15 +56,18 @@ import java.util.TreeSet;
  * picks the target TaskManager explicitly, following a selectable strategy:
  *
  * <ul>
+ *   <li>{@code FCFS} — iteration order unconditionally; the paper's "arbitrary placement" in
+ *       isolation, and the Phase-1 reproduction. Formerly called {@code DEFAULT}.
  *   <li>{@code ROUND_ROBIN} — deal the slices over the TaskManagers cyclically, so consecutive
  *       slices land on different TMs.
  *   <li>{@code LEAST_LOADED} — place each slice on the TaskManager with the most free capacity
  *       left. With homogeneous TMs this converges to round-robin; it diverges when TMs offer
  *       unequal numbers of free slots (a partial rescale, or slots held by another job).
+ *   <li>{@code ACO} / {@code GA} — metaheuristics over the whole instance, minimising the
+ *       balance-versus-state-locality cost in {@link PlacementInstance}. These are the only arms
+ *       that weigh one objective against another instead of maximising a single one.
  *   <li>{@code STOCK} — delegates to the assigner unpatched Flink would have used, which is the
  *       experimental baseline.
- *   <li>{@code DEFAULT} — iteration order unconditionally; the paper's "arbitrary placement" in
- *       isolation, and the Phase-1 reproduction.
  * </ul>
  *
  * <p><b>Which arm is the baseline.</b> {@code STOCK}, not {@code DEFAULT}. Stock Flink picks its
@@ -69,8 +79,17 @@ import java.util.TreeSet;
  *
  * <p>Enablement is unchanged from Phase 1: the {@code THESIS_SLOT_ASSIGNER} environment variable (or
  * the {@code thesis.slot.assigner} system property) routes placement here, so this class stays inert
- * unless explicitly turned on. The strategy is read from {@code THESIS_ASSIGN_STRATEGY} (or {@code
- * thesis.assign.strategy}) and defaults to {@code ROUND_ROBIN}.
+ * unless explicitly turned on.
+ *
+ * <p><b>Where the arm comes from (Phase 3).</b> The strategy in force is re-read on every assignment
+ * round from an <em>arm file</em> — {@code /var/thesis/arm} by default, overridable with {@code
+ * THESIS_ARM_FILE} — which the external meta-scheduler rewrites whenever it changes its mind. That
+ * makes the arm a live signal rather than a process-level setting: Phase 2 could only change strategy
+ * by restarting the JobManager, which is incompatible with learning across the rescale events of a
+ * single run. The file is consulted at most once per {@value #ARM_REFRESH_MILLIS} ms and any read
+ * problem leaves the previous value standing, so a missing or half-written file can never fail a
+ * scheduling decision. {@code THESIS_ASSIGN_STRATEGY} still works and is what the arm file falls back
+ * to, which keeps the Phase-2 fixed-arm experiments reproducible.
  *
  * <p><b>Purity.</b> The adaptive scheduler invokes this assigner speculatively while evaluating
  * candidate rescalings, so it must not mutate any state, and equivalent inputs must yield equivalent
@@ -94,6 +113,19 @@ public class ThesisSlotAssigner implements SlotAssigner {
     private static final String ENV_STRATEGY = "THESIS_ASSIGN_STRATEGY";
     private static final String PROP_STRATEGY = "thesis.assign.strategy";
 
+    private static final String ENV_ARM_FILE = "THESIS_ARM_FILE";
+    private static final String PROP_ARM_FILE = "thesis.arm.file";
+    private static final String DEFAULT_ARM_FILE = "/var/thesis/arm";
+
+    /**
+     * How long a value read from the arm file is reused before the file is consulted again. The
+     * adaptive scheduler calls the assigner several times while evaluating one rescale, so an
+     * unthrottled read would put a file system call on the JobManager's main thread per candidate;
+     * it would also let the arm change <em>within</em> a single evaluation, making the placement it
+     * decided on differ from the one it later executes.
+     */
+    private static final long ARM_REFRESH_MILLIS = 1000;
+
     /** Placement strategies — the arms the external meta-scheduler will eventually select from. */
     public enum Strategy {
         /**
@@ -105,16 +137,31 @@ public class ThesisSlotAssigner implements SlotAssigner {
          */
         STOCK,
         /**
-         * Iteration order, i.e. {@link DefaultSlotAssigner} unconditionally. Stock Flink only
-         * behaves this way on a first submission, so this arm is the paper's "arbitrary placement"
-         * in isolation — useful as a contrast, but NOT the baseline at a rescale.
+         * First come, first served: each slice takes the next slot in iteration order, i.e. {@link
+         * DefaultSlotAssigner} unconditionally. Stock Flink only behaves this way on a first
+         * submission, so this arm is the paper's "arbitrary placement" in isolation — useful as a
+         * contrast, but NOT the baseline at a rescale. Accepted under its old name {@code DEFAULT}.
          */
-        DEFAULT,
+        FCFS,
         /** Cyclic over TaskManagers, so consecutive slices land on different TMs. */
         ROUND_ROBIN,
         /** Each slice goes to the TaskManager with the most free capacity remaining. */
-        LEAST_LOADED
+        LEAST_LOADED,
+        /**
+         * Ant Colony Optimisation over the balance-vs-state-locality cost in {@link
+         * PlacementInstance}. Unlike the three arms above it optimises a trade-off rather than a
+         * single objective, which is what gives the meta-scheduler something to choose between.
+         */
+        ACO,
+        /** A genetic algorithm over the same cost as {@link #ACO}. */
+        GA
     }
+
+    /** Old name of {@link Strategy#FCFS}, still accepted so Phase-2 runs stay reproducible. */
+    private static final String LEGACY_FCFS_NAME = "DEFAULT";
+
+    private static final String ENV_BALANCE_WEIGHT = "THESIS_COST_BALANCE";
+    private static final String ENV_LOCALITY_WEIGHT = "THESIS_COST_LOCALITY";
 
     private static final Strategy DEFAULT_STRATEGY = Strategy.ROUND_ROBIN;
 
@@ -137,29 +184,136 @@ public class ThesisSlotAssigner implements SlotAssigner {
     }
 
     /**
-     * The strategy to apply on this invocation.
+     * The strategy to apply on this invocation — the single point where placement is parameterised,
+     * and therefore the seam through which the external meta-scheduler injects its arm.
      *
-     * <p>This is the single point where placement is parameterised, and therefore the seam where
-     * Phase 3 will plug in the arm published by the external meta-scheduler (a watched file or a
-     * REST poll) instead of a process-level setting. It stays read-only by design: the assigner may
-     * consult the signal, never update it.
+     * <p>Precedence, most specific first: the {@code thesis.assign.strategy} system property (a
+     * manual override, and what the tests use), then the arm file the meta-scheduler publishes, then
+     * the {@code THESIS_ASSIGN_STRATEGY} environment variable baked into the pod, then {@link
+     * #DEFAULT_STRATEGY}. Anything unparseable is ignored in favour of the next source down, so a
+     * garbled signal degrades to the pod's configured arm rather than to an exception.
+     *
+     * <p>It stays read-only by design: the assigner may consult the signal, never update it. All
+     * learning happens outside the JobManager.
      */
     static Strategy currentStrategy() {
-        String raw = System.getProperty(PROP_STRATEGY);
-        if (raw == null) {
-            raw = System.getenv(ENV_STRATEGY);
+        final Strategy override = parseStrategy(System.getProperty(PROP_STRATEGY), PROP_STRATEGY);
+        if (override != null) {
+            return override;
         }
+        final Strategy published = strategyFromArmFile();
+        if (published != null) {
+            return published;
+        }
+        final Strategy configured = parseStrategy(System.getenv(ENV_STRATEGY), ENV_STRATEGY);
+        return configured != null ? configured : DEFAULT_STRATEGY;
+    }
+
+    @Nullable
+    private static Strategy parseStrategy(@Nullable String raw, String source) {
         if (raw == null || raw.trim().isEmpty()) {
-            return DEFAULT_STRATEGY;
+            return null;
+        }
+        final String name = raw.trim().toUpperCase();
+        if (LEGACY_FCFS_NAME.equals(name)) {
+            return Strategy.FCFS;
         }
         try {
-            return Strategy.valueOf(raw.trim().toUpperCase());
+            return Strategy.valueOf(name);
         } catch (IllegalArgumentException e) {
-            LOG.warn(
-                    "[THESIS_ASSIGN] unknown strategy '{}', falling back to {}",
-                    raw.trim(),
-                    DEFAULT_STRATEGY);
-            return DEFAULT_STRATEGY;
+            LOG.warn("[THESIS_ARM] unknown strategy '{}' from {}, ignoring it", raw.trim(), source);
+            return null;
+        }
+    }
+
+    /** The last value read from the arm file, and when it was read. */
+    private static final AtomicReference<PublishedArm> PUBLISHED_ARM = new AtomicReference<>(null);
+
+    /**
+     * The arm published by the external meta-scheduler, or {@code null} if it has not published one
+     * — the file being absent is the normal state of a fixed-arm experiment, not an error.
+     *
+     * <p>The cached value is deliberately kept when a read fails: the meta-scheduler rewrites the
+     * file while the JobManager may be reading it, so a truncated or momentarily missing file is an
+     * expected race, and reverting to another arm mid-run would silently corrupt the very reward
+     * attribution the learning depends on.
+     */
+    @Nullable
+    private static Strategy strategyFromArmFile() {
+        final Path armFile = armFilePath();
+        final PublishedArm cached = PUBLISHED_ARM.get();
+        final long now = System.currentTimeMillis();
+        if (cached != null
+                && cached.path.equals(armFile)
+                && now - cached.readAtMillis < ARM_REFRESH_MILLIS) {
+            return cached.strategy;
+        }
+
+        Strategy strategy = cached == null ? null : cached.strategy;
+        try {
+            if (Files.isReadable(armFile)) {
+                final String contents =
+                        new String(Files.readAllBytes(armFile), StandardCharsets.UTF_8);
+                final Strategy parsed = parseStrategy(contents, armFile.toString());
+                if (parsed != null) {
+                    strategy = parsed;
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            LOG.warn("[THESIS_ARM] could not read arm file {}, keeping {}", armFile, strategy, e);
+        }
+
+        PUBLISHED_ARM.set(new PublishedArm(armFile, strategy, now));
+        if (cached != null && cached.strategy != strategy) {
+            LOG.info(
+                    "[THESIS_ARM] arm changed {} -> {} (published in {})",
+                    cached.strategy,
+                    strategy,
+                    armFile);
+        }
+        return strategy;
+    }
+
+    private static Path armFilePath() {
+        String configured = System.getProperty(PROP_ARM_FILE);
+        if (configured == null) {
+            configured = System.getenv(ENV_ARM_FILE);
+        }
+        if (configured == null || configured.trim().isEmpty()) {
+            configured = DEFAULT_ARM_FILE;
+        }
+        return Paths.get(configured.trim());
+    }
+
+    /**
+     * Ages the cached arm so a test sees a rewritten file without waiting out the refresh interval.
+     * The cached value itself is preserved, because keeping it is exactly the behaviour under test
+     * when the rewritten file turns out to be unreadable.
+     */
+    @VisibleForTesting
+    static void expirePublishedArm() {
+        final PublishedArm cached = PUBLISHED_ARM.get();
+        if (cached != null) {
+            PUBLISHED_ARM.set(new PublishedArm(cached.path, cached.strategy, 0L));
+        }
+    }
+
+    /** Forgets the published arm entirely, so one test cannot leak its arm file into the next. */
+    @VisibleForTesting
+    static void forgetPublishedArm() {
+        PUBLISHED_ARM.set(null);
+    }
+
+    /** An arm read from the arm file, with the path it came from and the time it was read. */
+    private static final class PublishedArm {
+        private final Path path;
+        @Nullable private final Strategy strategy;
+        private final long readAtMillis;
+
+        private PublishedArm(Path path, @Nullable Strategy strategy, long readAtMillis) {
+            this.path = path;
+            this.strategy = strategy;
+            this.readAtMillis = readAtMillis;
         }
     }
 
@@ -202,7 +356,7 @@ public class ThesisSlotAssigner implements SlotAssigner {
 
         final Collection<SlotAssignment> assignments;
         switch (strategy) {
-            case DEFAULT:
+            case FCFS:
                 assignments = assignInIterationOrder(allGroups, freeSlots);
                 break;
             case ROUND_ROBIN:
@@ -210,6 +364,12 @@ public class ThesisSlotAssigner implements SlotAssigner {
                 break;
             case LEAST_LOADED:
                 assignments = assignLeastLoaded(allGroups, groupSlotsByTaskManager(freeSlots));
+                break;
+            case ACO:
+            case GA:
+                assignments =
+                        assignBySearch(
+                                strategy, allGroups, freeSlots, jobInformation, previousAllocations);
                 break;
             default:
                 throw new IllegalStateException("Unhandled strategy " + strategy);
@@ -272,6 +432,69 @@ public class ThesisSlotAssigner implements SlotAssigner {
             assignments.add(new SlotAssignment(takeSlot(target, group), group));
         }
         return assignments;
+    }
+
+    /**
+     * The metaheuristic arms: hand the whole instance to a search that minimises the balance /
+     * state-locality cost, then read the placement back out.
+     *
+     * <p>Solving the instance in one shot is what a {@link SlotAssigner} makes possible and a greedy
+     * per-slice rule does not — the search can trade a worse slot for one slice against a better one
+     * for another, which is precisely the structure Li et al. exploit.
+     */
+    private static Collection<SlotAssignment> assignBySearch(
+            Strategy strategy,
+            List<ExecutionSlotSharingGroup> groups,
+            Collection<? extends SlotInfo> freeSlots,
+            JobInformation jobInformation,
+            JobAllocationsInformation previousAllocations) {
+
+        final PlacementInstance instance =
+                new PlacementInstance(
+                        groups,
+                        sortedSlots(freeSlots),
+                        jobInformation,
+                        previousAllocations,
+                        weightOf(ENV_BALANCE_WEIGHT),
+                        weightOf(ENV_LOCALITY_WEIGHT));
+
+        final int[] placement =
+                strategy == Strategy.ACO
+                        ? AntColonyPlacement.search(instance)
+                        : GeneticPlacement.search(instance);
+
+        final Collection<SlotAssignment> assignments = new ArrayList<>(groups.size());
+        for (int g = 0; g < placement.length; g++) {
+            assignments.add(new SlotAssignment(instance.slot(placement[g]), instance.group(g)));
+        }
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("[THESIS_ASSIGN] {} settled on cost {}", strategy, instance.cost(placement));
+        }
+        return assignments;
+    }
+
+    /** The free slots in the same total order the other arms impose, as a flat list. */
+    private static List<SlotInfo> sortedSlots(Collection<? extends SlotInfo> freeSlots) {
+        final List<SlotInfo> sorted = new ArrayList<>(freeSlots);
+        sorted.sort(
+                Comparator.comparing(ThesisSlotAssigner::taskManagerId)
+                        .thenComparingInt(SlotInfo::getPhysicalSlotNumber));
+        return sorted;
+    }
+
+    /** A cost weight from the environment; anything unparseable falls back to an equal weighting. */
+    private static double weightOf(String variable) {
+        final String raw = System.getProperty(variable.toLowerCase().replace('_', '.'),
+                System.getenv(variable));
+        if (raw == null || raw.trim().isEmpty()) {
+            return 1.0;
+        }
+        try {
+            return Double.parseDouble(raw.trim());
+        } catch (NumberFormatException e) {
+            LOG.warn("[THESIS_ASSIGN] unreadable weight {}='{}', using 1.0", variable, raw.trim());
+            return 1.0;
+        }
     }
 
     private static SlotInfo takeSlot(TaskManagerSlots target, ExecutionSlotSharingGroup group) {

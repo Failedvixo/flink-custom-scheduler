@@ -29,8 +29,13 @@ import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -59,6 +64,8 @@ class ThesisSlotAssignerTest {
     @AfterEach
     void clearStrategy() {
         System.clearProperty("thesis.assign.strategy");
+        System.clearProperty("thesis.arm.file");
+        ThesisSlotAssigner.forgetPublishedArm();
     }
 
     /**
@@ -67,10 +74,10 @@ class ThesisSlotAssignerTest {
      * "before" the strategies are meant to correct.
      */
     @Test
-    void defaultStrategyFollowsIterationOrderAndPacksOneTaskManager() {
+    void fcfsFollowsIterationOrderAndPacksOneTaskManager() {
         final List<SlotInfo> freeSlots = slotsOf(TM_A, 2, TM_B, 2);
 
-        final Map<String, Integer> spread = spreadOf(assign(Strategy.DEFAULT, 2, freeSlots));
+        final Map<String, Integer> spread = spreadOf(assign(Strategy.FCFS, 2, freeSlots));
 
         assertThat(spread).isEqualTo(Collections.singletonMap(TM_A, 2));
     }
@@ -158,7 +165,7 @@ class ThesisSlotAssignerTest {
         final List<SlotInfo> freeSlots = slotsOf(TM_A, 2, TM_B, 2);
 
         assertThat(placementOf(assign(Strategy.STOCK, 2, freeSlots)))
-                .isEqualTo(placementOf(assign(Strategy.DEFAULT, 2, freeSlots)));
+                .isEqualTo(placementOf(assign(Strategy.FCFS, 2, freeSlots)));
     }
 
     /** STOCK places every slice, like any other arm. */
@@ -184,17 +191,184 @@ class ThesisSlotAssignerTest {
         assertThat(ThesisSlotAssigner.currentStrategy()).isEqualTo(Strategy.LEAST_LOADED);
     }
 
+    /** Phase-2 experiments named this arm DEFAULT; the name must keep working. */
+    @Test
+    void legacyDefaultNameStillSelectsFcfs() {
+        System.setProperty("thesis.assign.strategy", "DEFAULT");
+
+        assertThat(ThesisSlotAssigner.currentStrategy()).isEqualTo(Strategy.FCFS);
+    }
+
+    // ------------------------------------------------------------------------
+    // the search arms — ACO and GA
+    // ------------------------------------------------------------------------
+
+    /** Whatever the search decides, it must still be a valid assignment: one slice, one slot. */
+    @Test
+    void searchArmsGiveEverySliceItsOwnSlot() {
+        final List<SlotInfo> freeSlots = slotsOf(TM_A, 2, TM_B, 2, TM_C, 2);
+
+        for (Strategy strategy : new Strategy[] {Strategy.ACO, Strategy.GA}) {
+            final Collection<SlotAssignment> assignments = assign(strategy, 4, freeSlots);
+
+            assertThat(assignments).as("%s places every slice", strategy).hasSize(4);
+            assertThat(assignments.stream().map(a -> a.getSlotInfo().getAllocationId()))
+                    .as("%s never puts two slices in one slot", strategy)
+                    .doesNotHaveDuplicates();
+        }
+    }
+
+    /**
+     * The searches are randomised, and the adaptive scheduler asks the same question repeatedly
+     * while evaluating one rescale. Seeding them from the instance is what keeps the answer stable —
+     * without it the placement the scheduler decided on could differ from the one it executes.
+     */
+    @Test
+    void searchArmsAreDeterministicAndOrderIndependent() {
+        final List<SlotInfo> freeSlots = slotsOf(TM_A, 2, TM_B, 2, TM_C, 2);
+        final List<SlotInfo> shuffled = new ArrayList<>(freeSlots);
+        Collections.reverse(shuffled);
+
+        for (Strategy strategy : new Strategy[] {Strategy.ACO, Strategy.GA}) {
+            final JobVertexID vertexId = new JobVertexID();
+            final List<String> first = placementOf(assign(strategy, 4, freeSlots, vertexId));
+
+            assertThat(placementOf(assign(strategy, 4, freeSlots, vertexId)))
+                    .as("%s repeated on the same instance", strategy)
+                    .isEqualTo(first);
+            assertThat(placementOf(assign(strategy, 4, shuffled, vertexId)))
+                    .as("%s must not depend on slot iteration order", strategy)
+                    .isEqualTo(first);
+        }
+    }
+
+    /**
+     * The point of paying for a search: with no state to preserve, the only cost term left is
+     * balance, so both metaheuristics must spread at least as well as the greedy arms — and strictly
+     * better than FCFS, which packs the first TaskManager.
+     */
+    @Test
+    void searchArmsSpreadSlicesOverAllTaskManagers() {
+        final List<SlotInfo> freeSlots = slotsOf(TM_A, 2, TM_B, 2, TM_C, 2);
+
+        assertThat(spreadOf(assign(Strategy.FCFS, 3, freeSlots))).hasSizeLessThan(3);
+        for (Strategy strategy : new Strategy[] {Strategy.ACO, Strategy.GA}) {
+            assertThat(spreadOf(assign(strategy, 3, freeSlots)))
+                    .as("%s uses every TaskManager", strategy)
+                    .containsOnlyKeys(TM_A, TM_B, TM_C);
+        }
+    }
+
+    /** An unbalanced supply of slots is still fully usable by the searches. */
+    @Test
+    void searchArmsCopeWithUnevenSlotSupply() {
+        final List<SlotInfo> freeSlots = slotsOf(TM_A, 1, TM_B, 3);
+
+        for (Strategy strategy : new Strategy[] {Strategy.ACO, Strategy.GA}) {
+            final Map<String, Integer> spread = spreadOf(assign(strategy, 4, freeSlots));
+
+            assertThat(spread).as("%s", strategy).containsEntry(TM_A, 1).containsEntry(TM_B, 3);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // the arm file — how the external meta-scheduler publishes its choice
+    // ------------------------------------------------------------------------
+
+    /** The published arm takes over from the pod's configured default. */
+    @Test
+    void armFileSelectsTheStrategy(@TempDir Path tempDir) throws IOException {
+        useArmFile(publishArm(tempDir, "LEAST_LOADED"));
+
+        assertThat(ThesisSlotAssigner.currentStrategy()).isEqualTo(Strategy.LEAST_LOADED);
+    }
+
+    /**
+     * The point of Phase 3: the meta-scheduler changes the arm between two rescales of the same run,
+     * with no JobManager restart. (The read is throttled in production, so the test drops the cache
+     * instead of waiting out the interval.)
+     */
+    @Test
+    void republishedArmIsPickedUpWithoutRestart(@TempDir Path tempDir) throws IOException {
+        final Path armFile = publishArm(tempDir, "ROUND_ROBIN");
+        useArmFile(armFile);
+        assertThat(ThesisSlotAssigner.currentStrategy()).isEqualTo(Strategy.ROUND_ROBIN);
+
+        Files.write(armFile, "STOCK\n".getBytes(StandardCharsets.UTF_8));
+        ThesisSlotAssigner.expirePublishedArm();
+
+        assertThat(ThesisSlotAssigner.currentStrategy()).isEqualTo(Strategy.STOCK);
+    }
+
+    /** No published arm at all is the normal state of a fixed-arm experiment, not a failure. */
+    @Test
+    void missingArmFileFallsBackToTheConfiguredStrategy(@TempDir Path tempDir) {
+        useArmFile(tempDir.resolve("never-published"));
+
+        assertThat(ThesisSlotAssigner.currentStrategy()).isEqualTo(Strategy.ROUND_ROBIN);
+    }
+
+    /**
+     * The meta-scheduler rewrites the file while the JobManager may be reading it, so a truncated or
+     * garbled read must not throw and must not silently switch arms — the last good value stands.
+     */
+    @Test
+    void garbledArmFileKeepsTheLastGoodArm(@TempDir Path tempDir) throws IOException {
+        final Path armFile = publishArm(tempDir, "LEAST_LOADED");
+        useArmFile(armFile);
+        assertThat(ThesisSlotAssigner.currentStrategy()).isEqualTo(Strategy.LEAST_LOADED);
+
+        Files.write(armFile, "LEAST_LO".getBytes(StandardCharsets.UTF_8));
+        ThesisSlotAssigner.expirePublishedArm();
+
+        assertThat(ThesisSlotAssigner.currentStrategy()).isEqualTo(Strategy.LEAST_LOADED);
+    }
+
+    /** A manual override still wins, so a fixed-arm run cannot be hijacked by a stale arm file. */
+    @Test
+    void explicitStrategyOverridesThePublishedArm(@TempDir Path tempDir) throws IOException {
+        useArmFile(publishArm(tempDir, "LEAST_LOADED"));
+        System.setProperty("thesis.assign.strategy", "STOCK");
+
+        assertThat(ThesisSlotAssigner.currentStrategy()).isEqualTo(Strategy.STOCK);
+    }
+
     // ------------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------------
 
+    /** Writes an arm file the way the meta-scheduler does: one strategy name, trailing newline. */
+    private static Path publishArm(Path directory, String strategy) throws IOException {
+        final Path armFile = directory.resolve("arm");
+        Files.write(armFile, (strategy + "\n").getBytes(StandardCharsets.UTF_8));
+        return armFile;
+    }
+
+    private static void useArmFile(Path armFile) {
+        System.clearProperty("thesis.assign.strategy");
+        System.setProperty("thesis.arm.file", armFile.toString());
+        ThesisSlotAssigner.forgetPublishedArm();
+    }
+
     /** Runs the assigner over a single-vertex job of the given parallelism. */
     private static Collection<SlotAssignment> assign(
             Strategy strategy, int parallelism, Collection<? extends SlotInfo> freeSlots) {
+        return assign(strategy, parallelism, freeSlots, new JobVertexID());
+    }
+
+    /**
+     * The same run with an explicit vertex id. The search arms seed themselves from the instance,
+     * the job vertex included, so comparing two invocations only makes sense when they describe the
+     * same vertex — which is what the real scheduler does when it re-asks about one rescale.
+     */
+    private static Collection<SlotAssignment> assign(
+            Strategy strategy,
+            int parallelism,
+            Collection<? extends SlotInfo> freeSlots,
+            JobVertexID vertexId) {
         System.setProperty("thesis.assign.strategy", strategy.name());
 
         final SlotSharingGroup slotSharingGroup = new SlotSharingGroup();
-        final JobVertexID vertexId = new JobVertexID();
         final JobInformation jobInformation =
                 new TestJobInformation(
                         Collections.singletonList(
