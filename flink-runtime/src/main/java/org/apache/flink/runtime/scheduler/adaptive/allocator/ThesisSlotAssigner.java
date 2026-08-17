@@ -36,7 +36,9 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -159,6 +161,25 @@ public class ThesisSlotAssigner implements SlotAssigner {
 
     /** Old name of {@link Strategy#FCFS}, still accepted so Phase-2 runs stay reproducible. */
     private static final String LEGACY_FCFS_NAME = "DEFAULT";
+
+    /**
+     * Per-JobVertex processing cost, published by the external controller from Flink's own
+     * `busyTimeMsPerSecond`, one line of "<jobVertexId> <cost>" each.
+     *
+     * <p>Why this exists: the balance term used to count slices per TaskManager, and a count cannot
+     * tell apart arrangements that differ only in WHICH slices share a machine. When one operator
+     * runs at a lower parallelism than the rest — the ordinary case whenever an expensive stage is
+     * scaled independently — some slices carry it and others do not, and putting two expensive ones
+     * together cost 45% of throughput in the 2026-08-17 measurements while scoring identically to
+     * the good arrangements. Summing published per-vertex costs over the vertices a slice actually
+     * contains gives the term something real to minimise.
+     *
+     * <p>Absent or unreadable, every slice weighs 1.0 and the behaviour is exactly the previous one.
+     */
+    private static final String ENV_LOADS_FILE = "THESIS_LOADS_FILE";
+    private static final String PROP_LOADS_FILE = "thesis.loads.file";
+    private static final String DEFAULT_LOADS_FILE = "/var/thesis/loads";
+    private static final AtomicReference<PublishedLoads> PUBLISHED_LOADS = new AtomicReference<>();
 
     private static final String ENV_BALANCE_WEIGHT = "THESIS_COST_BALANCE";
     private static final String ENV_LOCALITY_WEIGHT = "THESIS_COST_LOCALITY";
@@ -456,7 +477,8 @@ public class ThesisSlotAssigner implements SlotAssigner {
                         jobInformation,
                         previousAllocations,
                         weightOf(ENV_BALANCE_WEIGHT),
-                        weightOf(ENV_LOCALITY_WEIGHT));
+                        weightOf(ENV_LOCALITY_WEIGHT),
+                        sliceLoads(groups));
 
         final int[] placement =
                 strategy == Strategy.ACO
@@ -616,4 +638,118 @@ public class ThesisSlotAssigner implements SlotAssigner {
             }
         }
     }
+
+    /** Immutable snapshot of the loads file, refreshed at most once a second. */
+    private static final class PublishedLoads {
+        final Path path;
+        final Map<String, Double> costs;
+        final long readAtMillis;
+
+        PublishedLoads(Path path, Map<String, Double> costs, long readAtMillis) {
+            this.path = path;
+            this.costs = costs;
+            this.readAtMillis = readAtMillis;
+        }
+    }
+
+    private static Path loadsFilePath() {
+        String configured = System.getProperty(PROP_LOADS_FILE);
+        if (configured == null || configured.trim().isEmpty()) {
+            configured = System.getenv(ENV_LOADS_FILE);
+        }
+        if (configured == null || configured.trim().isEmpty()) {
+            configured = DEFAULT_LOADS_FILE;
+        }
+        return Paths.get(configured.trim());
+    }
+
+    /**
+     * The published per-JobVertex costs, or an empty map.
+     *
+     * <p>Cached for a second for the same reason the arm is: the adaptive scheduler re-invokes the
+     * assigner speculatively, and a value that changed between two invocations of the SAME question
+     * would make the answer non-deterministic.
+     */
+    private static Map<String, Double> publishedVertexCosts() {
+        final Path file = loadsFilePath();
+        final long now = System.currentTimeMillis();
+        final PublishedLoads cached = PUBLISHED_LOADS.get();
+        if (cached != null
+                && cached.path.equals(file)
+                && now - cached.readAtMillis < ARM_REFRESH_MILLIS) {
+            return cached.costs;
+        }
+
+        Map<String, Double> costs = cached != null ? cached.costs : Collections.emptyMap();
+        try {
+            if (Files.isReadable(file)) {
+                final Map<String, Double> parsed = new HashMap<>();
+                for (String line :
+                        new String(Files.readAllBytes(file), StandardCharsets.UTF_8).split("\\R")) {
+                    final String trimmed = line.trim();
+                    if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                        continue;
+                    }
+                    final String[] parts = trimmed.split("\\s+");
+                    if (parts.length < 2) {
+                        continue;
+                    }
+                    try {
+                        final double value = Double.parseDouble(parts[1]);
+                        if (value > 0 && !Double.isInfinite(value) && !Double.isNaN(value)) {
+                            parsed.put(parts[0], value);
+                        }
+                    } catch (NumberFormatException ignored) {
+                        // One malformed line must not discard the rest of the file.
+                    }
+                }
+                costs = parsed;
+            }
+        } catch (IOException | RuntimeException e) {
+            // Keep the last good costs: a half-written file must not change the placement.
+            LOG.warn("[THESIS_LOADS] could not read {}, keeping {} entries", file, costs.size(), e);
+        }
+        PUBLISHED_LOADS.set(new PublishedLoads(file, costs, now));
+        return costs;
+    }
+
+    /**
+     * Relative load of each slice: the sum of the published costs of the vertices it contains.
+     *
+     * <p>A slice holds one subtask of every vertex whose parallelism reaches its index, so a vertex
+     * pinned to a lower parallelism than the rest appears in only some slices — which is exactly
+     * the asymmetry the balance term needs to see. Returns null when nothing is published, so the
+     * instance falls back to unit weights.
+     */
+    @Nullable
+    private static double[] sliceLoads(List<ExecutionSlotSharingGroup> groups) {
+        final Map<String, Double> costs = publishedVertexCosts();
+        if (costs.isEmpty()) {
+            return null;
+        }
+        final double[] loads = new double[groups.size()];
+        boolean anyKnown = false;
+        for (int g = 0; g < groups.size(); g++) {
+            double sum = 0;
+            for (ExecutionVertexID vertex : groups.get(g).getContainedExecutionVertices()) {
+                final Double cost = costs.get(vertex.getJobVertexId().toHexString());
+                if (cost != null) {
+                    sum += cost;
+                    anyKnown = true;
+                }
+            }
+            loads[g] = sum;
+        }
+        if (!anyKnown) {
+            // Published costs for a different job entirely; unit weights are the honest fallback.
+            return null;
+        }
+        for (int g = 0; g < loads.length; g++) {
+            if (loads[g] <= 0) {
+                loads[g] = 1e-6;
+            }
+        }
+        return loads;
+    }
+
 }
