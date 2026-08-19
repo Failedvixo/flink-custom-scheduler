@@ -89,6 +89,31 @@ final class PlacementInstance {
      */
     private final double[] sliceLoad;
 
+    /**
+     * Relative speed of each TaskManager, indexed like {@link #taskManagerOfSlot}; all 1.0 unless
+     * published.
+     *
+     * <p>Without this the balance term asks every machine to carry an equal SHARE of the load, which
+     * is only the right target when the machines are equal. On a heterogeneous cluster the optimum
+     * is proportional to capacity, and a cost that does not know capacities will confidently rank a
+     * bad placement first. The offline bench puts a number on why this matters: heterogeneity is
+     * what opens a 9-14% gap at 4 slices, where identical machines leave 0.0%.
+     */
+    private final double[] taskManagerSpeed;
+
+    private final double totalSpeed;
+
+    /**
+     * Whether balance is scored as makespan rather than as dispersion.
+     *
+     * <p>They are not the same objective. RMS dispersion (the original, and still the default so
+     * earlier campaigns stay comparable) penalises every machine's deviation from its fair share;
+     * makespan only cares about the busiest machine, which is what actually bounds throughput and
+     * what the offline bench enumerates. Choose makespan when the run is meant to line up with the
+     * bench's numbers, dispersion when it is meant to line up with the Phase-2/3 runs.
+     */
+    private final boolean makespanBalance;
+
     PlacementInstance(
             List<ExecutionSlotSharingGroup> groups,
             List<SlotInfo> slots,
@@ -96,7 +121,16 @@ final class PlacementInstance {
             JobAllocationsInformation previousAllocations,
             double balanceWeight,
             double localityWeight) {
-        this(groups, slots, jobInformation, previousAllocations, balanceWeight, localityWeight, null);
+        this(
+                groups,
+                slots,
+                jobInformation,
+                previousAllocations,
+                balanceWeight,
+                localityWeight,
+                null,
+                null,
+                false);
     }
 
     PlacementInstance(
@@ -106,11 +140,14 @@ final class PlacementInstance {
             JobAllocationsInformation previousAllocations,
             double balanceWeight,
             double localityWeight,
-            @Nullable double[] sliceLoad) {
+            @Nullable double[] sliceLoad,
+            @Nullable Map<String, Double> speedByTaskManager,
+            boolean makespanBalance) {
         this.groups = groups;
         this.slots = slots;
         this.balanceWeight = balanceWeight;
         this.localityWeight = localityWeight;
+        this.makespanBalance = makespanBalance;
 
         final Map<String, Integer> taskManagerIndex = new HashMap<>();
         this.taskManagerOfSlot = new int[slots.size()];
@@ -121,6 +158,25 @@ final class PlacementInstance {
                     taskManagerIndex.computeIfAbsent(taskManager, ignored -> taskManagerIndex.size());
         }
         this.taskManagerCount = taskManagerIndex.size();
+
+        // Keyed by resource id on the way in, by dense index from here on, so cost() never hashes.
+        this.taskManagerSpeed = new double[taskManagerCount];
+        double speedSum = 0;
+        for (Map.Entry<String, Integer> entry : taskManagerIndex.entrySet()) {
+            final Double published =
+                    speedByTaskManager == null ? null : speedByTaskManager.get(entry.getKey());
+            // An unlisted, non-finite or non-positive speed means "nominal", never "infinitely fast".
+            final double speed =
+                    (published != null
+                                    && published > 0
+                                    && !Double.isInfinite(published)
+                                    && !Double.isNaN(published))
+                            ? published
+                            : 1.0;
+            this.taskManagerSpeed[entry.getValue()] = speed;
+            speedSum += speed;
+        }
+        this.totalSpeed = speedSum;
 
         final Map<JobVertexID, Integer> parallelism = parallelismOf(groups);
         this.localKeyGroups = new long[groups.size()][slots.size()];
@@ -149,6 +205,10 @@ final class PlacementInstance {
                     ? published
                     : 1.0;
         }
+    }
+
+    double taskManagerSpeed(int taskManagerIndex) {
+        return taskManagerSpeed[taskManagerIndex];
     }
 
     double sliceLoad(int groupIndex) {
@@ -199,16 +259,32 @@ final class PlacementInstance {
             retained += localKeyGroups[g][slot];
         }
 
-        final double ideal = totalLoad / Math.max(1, taskManagerCount);
-        double squaredDeviation = 0;
-        for (double load : loadPerTaskManager) {
-            squaredDeviation += (load - ideal) * (load - ideal);
+        // The load a perfectly divisible schedule would put on each machine: proportional to its
+        // speed, which collapses to an equal share exactly when the speeds are equal.
+        final double meanIdeal = totalLoad / Math.max(1, taskManagerCount);
+        final double imbalance;
+        if (makespanBalance) {
+            // How much longer the busiest machine runs than the perfectly divisible schedule would.
+            // Zero for a perfect split, and comparable across instances of different total load.
+            double makespan = 0;
+            for (int t = 0; t < taskManagerCount; t++) {
+                makespan = Math.max(makespan, loadPerTaskManager[t] / taskManagerSpeed[t]);
+            }
+            final double idealMakespan = totalLoad / Math.max(1e-9, totalSpeed);
+            imbalance = makespan / Math.max(1e-9, idealMakespan) - 1.0;
+        } else {
+            double squaredDeviation = 0;
+            for (int t = 0; t < taskManagerCount; t++) {
+                final double ideal = totalLoad * taskManagerSpeed[t] / Math.max(1e-9, totalSpeed);
+                squaredDeviation += (loadPerTaskManager[t] - ideal) * (loadPerTaskManager[t] - ideal);
+            }
+            // Normalised by the mean share rather than by a constant so the term stays comparable
+            // when the published loads change scale; with equal speeds and unit loads this reduces
+            // to the previous formula exactly.
+            imbalance =
+                    Math.sqrt(squaredDeviation / Math.max(1, taskManagerCount))
+                            / Math.max(1e-9, meanIdeal);
         }
-        // Normalised by `ideal` rather than by a constant so the term stays comparable when the
-        // published loads change scale; with unit loads this reduces to the previous formula.
-        final double imbalance =
-                Math.sqrt(squaredDeviation / Math.max(1, taskManagerCount))
-                        / Math.max(1e-9, ideal);
 
         // With no previous allocations every placement retains nothing, so this term is a constant
         // and drops out of the comparison — exactly the right behaviour at a first submission.

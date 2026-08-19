@@ -65,7 +65,10 @@ class ThesisSlotAssignerTest {
     void clearStrategy() {
         System.clearProperty("thesis.assign.strategy");
         System.clearProperty("thesis.arm.file");
+        System.clearProperty("thesis.loads.file");
+        System.clearProperty("thesis.speeds.file");
         ThesisSlotAssigner.forgetPublishedArm();
+        ThesisSlotAssigner.forgetPublishedValues();
     }
 
     /**
@@ -138,6 +141,78 @@ class ThesisSlotAssignerTest {
         assertThat(placement).containsExactly(TM_A, TM_B, TM_A, TM_B);
     }
 
+    // ------------------------------------------------------------------------
+    // LPT — the load-aware greedy, and the only arm that reads TaskManager speeds
+    // ------------------------------------------------------------------------
+
+    /**
+     * The heterogeneity case, and the reason the arm exists. Four equal slices over two
+     * TaskManagers where one is three times the machine: a fast TM should take three of them.
+     *
+     * <p>{@code LEAST_LOADED} splits them 2/2 on the same input, because it balances free SLOTS and
+     * has no idea the machines differ — which is the gap the offline bench measured at 9-14%.
+     */
+    @Test
+    void lptGivesTheFasterTaskManagerMoreSlices(@TempDir Path tempDir) throws IOException {
+        publishSpeeds(tempDir, TM_A, 3.0, TM_B, 1.0);
+        final List<SlotInfo> freeSlots = slotsOf(TM_A, 4, TM_B, 4);
+
+        assertThat(spreadOf(assign(Strategy.LPT, 4, freeSlots)))
+                .containsEntry(TM_A, 3)
+                .containsEntry(TM_B, 1);
+        assertThat(spreadOf(assign(Strategy.LEAST_LOADED, 4, freeSlots)))
+                .as("LEAST_LOADED balances slot counts, so it cannot see the difference")
+                .containsEntry(TM_A, 2)
+                .containsEntry(TM_B, 2);
+    }
+
+    /**
+     * The unequal-slices case. A vertex pinned narrower than the rest makes the first slices
+     * expensive and the rest cheap; LPT must place the expensive ones first and therefore split
+     * them, where iteration order packs both onto one TaskManager.
+     *
+     * <p>This is the arrangement that cost 45% of throughput in the 2026-08-17 cluster runs.
+     */
+    @Test
+    void lptSplitsTheExpensiveSlicesInsteadOfPackingThem(@TempDir Path tempDir) throws IOException {
+        final JobVertexID wide = new JobVertexID();
+        final JobVertexID narrow = new JobVertexID();
+        // Slices 0 and 1 carry both vertices (1 + 3), slices 2 and 3 only the wide one (1).
+        publishLoads(tempDir, wide, 1.0, narrow, 3.0);
+        final List<SlotInfo> freeSlots = slotsOf(TM_A, 2, TM_B, 2);
+
+        final List<String> lpt =
+                placementOf(assignStaggered(Strategy.LPT, freeSlots, wide, 4, narrow, 2));
+        assertThat(lpt)
+                .as("the two expensive slices must not share a TaskManager")
+                .satisfies(placement -> assertThat(placement.get(0)).isNotEqualTo(placement.get(1)));
+
+        final List<String> fcfs =
+                placementOf(assignStaggered(Strategy.FCFS, freeSlots, wide, 4, narrow, 2));
+        assertThat(fcfs.get(0)).as("iteration order packs them").isEqualTo(fcfs.get(1));
+    }
+
+    /** With nothing published every slice weighs 1.0 and every machine is nominal: an even split. */
+    @Test
+    void lptWithoutPublishedFilesSplitsEvenly() {
+        final List<SlotInfo> freeSlots = slotsOf(TM_A, 2, TM_B, 2);
+
+        assertThat(spreadOf(assign(Strategy.LPT, 4, freeSlots)))
+                .containsEntry(TM_A, 2)
+                .containsEntry(TM_B, 2);
+    }
+
+    /** A TaskManager missing from the speeds file is nominal, not unusable. */
+    @Test
+    void lptTreatsUnlistedTaskManagersAsNominal(@TempDir Path tempDir) throws IOException {
+        publishSpeeds(tempDir, TM_A, 3.0);
+        final List<SlotInfo> freeSlots = slotsOf(TM_A, 4, TM_B, 4);
+
+        assertThat(spreadOf(assign(Strategy.LPT, 4, freeSlots)))
+                .containsEntry(TM_A, 3)
+                .containsEntry(TM_B, 1);
+    }
+
     /**
      * The adaptive scheduler calls the assigner speculatively while evaluating candidate rescalings,
      * so the same inputs in a different iteration order must produce the same placement. This is
@@ -149,7 +224,8 @@ class ThesisSlotAssignerTest {
         final List<SlotInfo> shuffled = new ArrayList<>(freeSlots);
         Collections.reverse(shuffled);
 
-        for (Strategy strategy : new Strategy[] {Strategy.ROUND_ROBIN, Strategy.LEAST_LOADED}) {
+        for (Strategy strategy :
+                new Strategy[] {Strategy.ROUND_ROBIN, Strategy.LEAST_LOADED, Strategy.LPT}) {
             assertThat(placementOf(assign(strategy, 4, shuffled)))
                     .as("placement under %s must not depend on slot iteration order", strategy)
                     .isEqualTo(placementOf(assign(strategy, 4, freeSlots)));
@@ -348,6 +424,70 @@ class ThesisSlotAssignerTest {
         System.clearProperty("thesis.assign.strategy");
         System.setProperty("thesis.arm.file", armFile.toString());
         ThesisSlotAssigner.forgetPublishedArm();
+    }
+
+    /**
+     * Runs the assigner over a two-vertex job where the second is pinned to a lower parallelism, so
+     * the slices carry unequal load — the only shape in which a load-aware arm can differ from a
+     * count-based one.
+     */
+    private static Collection<SlotAssignment> assignStaggered(
+            Strategy strategy,
+            Collection<? extends SlotInfo> freeSlots,
+            JobVertexID wide,
+            int wideParallelism,
+            JobVertexID narrow,
+            int narrowParallelism) {
+        System.setProperty("thesis.assign.strategy", strategy.name());
+
+        final SlotSharingGroup slotSharingGroup = new SlotSharingGroup();
+        final List<TestVertexInformation> vertices = new ArrayList<>();
+        vertices.add(new TestVertexInformation(wide, wideParallelism, slotSharingGroup));
+        vertices.add(new TestVertexInformation(narrow, narrowParallelism, slotSharingGroup));
+
+        final Map<JobVertexID, Integer> parallelismForVertices = new HashMap<>();
+        parallelismForVertices.put(wide, wideParallelism);
+        parallelismForVertices.put(narrow, narrowParallelism);
+
+        return new ThesisSlotAssigner()
+                .assignSlots(
+                        new TestJobInformation(vertices),
+                        freeSlots,
+                        new VertexParallelism(parallelismForVertices),
+                        JobAllocationsInformation.empty());
+    }
+
+    /** Publish per-vertex costs the way scripts/publish-loads.sh does. */
+    private static void publishLoads(Path dir, Object... vertexAndCost) throws IOException {
+        final StringBuilder contents = new StringBuilder();
+        for (int i = 0; i < vertexAndCost.length; i += 2) {
+            contents.append(((JobVertexID) vertexAndCost[i]).toHexString())
+                    .append(' ')
+                    .append(vertexAndCost[i + 1])
+                    .append('\n');
+        }
+        publish(dir, "loads", "thesis.loads.file", contents.toString());
+    }
+
+    /** Publish per-TaskManager speeds the way scripts/publish-speeds.sh does. */
+    private static void publishSpeeds(Path dir, Object... taskManagerAndSpeed) throws IOException {
+        final StringBuilder contents = new StringBuilder();
+        for (int i = 0; i < taskManagerAndSpeed.length; i += 2) {
+            contents.append(taskManagerAndSpeed[i])
+                    .append(' ')
+                    .append(taskManagerAndSpeed[i + 1])
+                    .append('\n');
+        }
+        publish(dir, "speeds", "thesis.speeds.file", contents.toString());
+    }
+
+    private static void publish(Path dir, String name, String property, String contents)
+            throws IOException {
+        final Path file = dir.resolve(name);
+        Files.write(file, contents.getBytes(StandardCharsets.UTF_8));
+        System.setProperty(property, file.toString());
+        // The reader caches for a second, and these tests write faster than that.
+        ThesisSlotAssigner.forgetPublishedValues();
     }
 
     /** Runs the assigner over a single-vertex job of the given parallelism. */

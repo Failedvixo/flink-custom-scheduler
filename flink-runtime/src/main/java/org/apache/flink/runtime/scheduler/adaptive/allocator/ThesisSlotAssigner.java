@@ -35,6 +35,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -147,8 +148,28 @@ public class ThesisSlotAssigner implements SlotAssigner {
         FCFS,
         /** Cyclic over TaskManagers, so consecutive slices land on different TMs. */
         ROUND_ROBIN,
-        /** Each slice goes to the TaskManager with the most free capacity remaining. */
+        /**
+         * Each slice goes to the TaskManager with the most free SLOTS remaining. Note this
+         * balances a slot count, not a load: it never looks at what a slice costs, so on
+         * heterogeneous TaskManagers — or with slices of unequal cost — it is not the
+         * load-balancing rule its name suggests. {@link #LPT} is that rule.
+         */
         LEAST_LOADED,
+        /**
+         * Longest-processing-time-first over the published slice loads: place the most expensive
+         * slice first, always on the TaskManager that would finish it soonest ({@code load / speed}).
+         *
+         * <p>This is the strong greedy baseline, and the offline bench (main repo,
+         * {@code scripts/placement_bench.py}, 2026-08-18) is the reason it exists: enumerating the
+         * exact optimum shows a load-aware greedy is optimal on identical TaskManagers (0.0% gap up
+         * to 8 slices), which is why five in-cluster runs could not tell any arm apart. Where the
+         * machines differ, LPT still leaves only 1.6-3.1% — so it, not stock Flink, is the bar a
+         * metaheuristic has to clear.
+         *
+         * <p>Falls back to unit loads and unit speeds when nothing is published, where it degrades
+         * to a load-balancing greedy over slice counts.
+         */
+        LPT,
         /**
          * Ant Colony Optimisation over the balance-vs-state-locality cost in {@link
          * PlacementInstance}. Unlike the three arms above it optimises a trade-off rather than a
@@ -179,7 +200,34 @@ public class ThesisSlotAssigner implements SlotAssigner {
     private static final String ENV_LOADS_FILE = "THESIS_LOADS_FILE";
     private static final String PROP_LOADS_FILE = "thesis.loads.file";
     private static final String DEFAULT_LOADS_FILE = "/var/thesis/loads";
-    private static final AtomicReference<PublishedLoads> PUBLISHED_LOADS = new AtomicReference<>();
+    private static final AtomicReference<PublishedValues> PUBLISHED_LOADS = new AtomicReference<>();
+
+    /**
+     * Relative processing speed of each TaskManager, published from outside as one
+     * "&lt;resourceId&gt; &lt;speed&gt;" line each, and defaulting to 1.0 for anything unlisted.
+     *
+     * <p>Why this exists: every cost the assigner reasons about was implicitly measured in the same
+     * units on every machine, which is only true when the machines are identical. The offline bench
+     * shows identical TaskManagers make the placement problem degenerate — permuting them gives the
+     * same answer, so no policy can beat any other — and that heterogeneity is the single lever that
+     * opens a 9-14% gap at only 4 slices. It is also the premise of Li et al.: their cluster is
+     * heterogeneous, and that is structural load for CETSA rather than incidental detail.
+     *
+     * <p>The natural scale is "cores available to this TaskManager": a TM with {@code limits.cpu=2}
+     * gets 2.0 against a 1.0 sibling. Absent or unreadable, every TaskManager is equally fast and
+     * the behaviour is exactly the previous one.
+     */
+    private static final String ENV_SPEEDS_FILE = "THESIS_SPEEDS_FILE";
+    private static final String PROP_SPEEDS_FILE = "thesis.speeds.file";
+    private static final String DEFAULT_SPEEDS_FILE = "/var/thesis/speeds";
+    private static final AtomicReference<PublishedValues> PUBLISHED_SPEEDS = new AtomicReference<>();
+
+    /**
+     * {@code MAKESPAN} scores balance as the busiest TaskManager's finishing time; anything else
+     * keeps the original dispersion score. Default is dispersion, so the Phase-2/3 campaigns stay
+     * comparable and only a run that opts in changes objective.
+     */
+    private static final String ENV_BALANCE_METRIC = "THESIS_COST_BALANCE_METRIC";
 
     private static final String ENV_BALANCE_WEIGHT = "THESIS_COST_BALANCE";
     private static final String ENV_LOCALITY_WEIGHT = "THESIS_COST_LOCALITY";
@@ -325,6 +373,17 @@ public class ThesisSlotAssigner implements SlotAssigner {
         PUBLISHED_ARM.set(null);
     }
 
+    /**
+     * Drop the cached loads and speeds. Only tests need this: the one-second cache is what keeps a
+     * single rescale evaluation self-consistent in production, and exactly what would make a test
+     * read the file its predecessor wrote.
+     */
+    @VisibleForTesting
+    static void forgetPublishedValues() {
+        PUBLISHED_LOADS.set(null);
+        PUBLISHED_SPEEDS.set(null);
+    }
+
     /** An arm read from the arm file, with the path it came from and the time it was read. */
     private static final class PublishedArm {
         private final Path path;
@@ -385,6 +444,10 @@ public class ThesisSlotAssigner implements SlotAssigner {
                 break;
             case LEAST_LOADED:
                 assignments = assignLeastLoaded(allGroups, groupSlotsByTaskManager(freeSlots));
+                break;
+            case LPT:
+                assignments = assignLongestProcessingTimeFirst(
+                        allGroups, groupSlotsByTaskManager(freeSlots));
                 break;
             case ACO:
             case GA:
@@ -456,6 +519,104 @@ public class ThesisSlotAssigner implements SlotAssigner {
     }
 
     /**
+     * Longest-processing-time-first: sort the slices by descending published load, then give each
+     * one to the TaskManager that would finish it soonest, i.e. the smallest {@code (load + cost) /
+     * speed}. Both halves matter and neither alone is enough — placing the expensive slices first is
+     * what stops a cheap one from occupying the fast machine, and dividing by speed is what makes
+     * "least loaded" mean least loaded RELATIVE TO CAPACITY on unequal machines.
+     *
+     * <p>Unlike {@link Strategy#ACO} / {@link Strategy#GA} this ignores state locality entirely, so
+     * it is a pure balance arm: it is the right comparison for how much of the achievable balance a
+     * greedy already captures, and the wrong one if the rescale's cost is dominated by moving state.
+     *
+     * <p>Deterministic: ties in load are broken by slice index and ties in finish time by the
+     * TaskManager ordering, both of which are stable across the scheduler's speculative re-asks.
+     */
+    private static Collection<SlotAssignment> assignLongestProcessingTimeFirst(
+            List<ExecutionSlotSharingGroup> groups, List<TaskManagerSlots> taskManagers) {
+        final double[] loads = sliceLoadsOrUnit(groups);
+        final double[] speeds = taskManagerSpeeds(taskManagers);
+        final double[] assignedLoad = new double[taskManagers.size()];
+
+        final Integer[] order = new Integer[groups.size()];
+        for (int g = 0; g < order.length; g++) {
+            order[g] = g;
+        }
+        // Descending cost; the index tie-break keeps equal-cost slices in their natural order.
+        Arrays.sort(
+                order,
+                (a, b) -> loads[a] != loads[b] ? Double.compare(loads[b], loads[a]) : Integer.compare(a, b));
+
+        // Placed out of order, but the assignment list must still describe every slice, so the
+        // chosen slot is recorded per slice index rather than appended as we go.
+        final SlotInfo[] slotOfGroup = new SlotInfo[groups.size()];
+        for (int g : order) {
+            int best = -1;
+            double bestFinish = Double.MAX_VALUE;
+            for (int t = 0; t < taskManagers.size(); t++) {
+                if (!taskManagers.get(t).hasFreeSlot()) {
+                    continue;
+                }
+                final double finish = (assignedLoad[t] + loads[g]) / speeds[t];
+                if (best < 0 || finish < bestFinish) {
+                    best = t;
+                    bestFinish = finish;
+                }
+            }
+            final TaskManagerSlots target = best < 0 ? null : taskManagers.get(best);
+            slotOfGroup[g] = takeSlot(target, groups.get(g));
+            assignedLoad[best] += loads[g];
+        }
+
+        final Collection<SlotAssignment> assignments = new ArrayList<>(groups.size());
+        for (int g = 0; g < groups.size(); g++) {
+            assignments.add(new SlotAssignment(slotOfGroup[g], groups.get(g)));
+        }
+        return assignments;
+    }
+
+    /** The published TaskManager speeds keyed by resource id, or an empty map. */
+    private static Map<String, Double> publishedTaskManagerSpeeds() {
+        return publishedValues(
+                filePath(PROP_SPEEDS_FILE, ENV_SPEEDS_FILE, DEFAULT_SPEEDS_FILE),
+                PUBLISHED_SPEEDS,
+                "THESIS_SPEEDS");
+    }
+
+    private static boolean useMakespanBalance() {
+        final String raw =
+                System.getProperty(
+                        ENV_BALANCE_METRIC.toLowerCase().replace('_', '.'),
+                        System.getenv(ENV_BALANCE_METRIC));
+        return raw != null && "MAKESPAN".equalsIgnoreCase(raw.trim());
+    }
+
+    /** Published slice loads, or an all-ones vector when nothing is published. */
+    private static double[] sliceLoadsOrUnit(List<ExecutionSlotSharingGroup> groups) {
+        final double[] published = sliceLoads(groups);
+        if (published != null) {
+            return published;
+        }
+        final double[] unit = new double[groups.size()];
+        Arrays.fill(unit, 1.0);
+        return unit;
+    }
+
+    /**
+     * Published speed of each TaskManager in the given order, defaulting to 1.0 for any TaskManager
+     * the speeds file does not mention — so a partially published file degrades to "the ones I know
+     * about differ, the rest are nominal" instead of to nonsense.
+     */
+    private static double[] taskManagerSpeeds(List<TaskManagerSlots> taskManagers) {
+        final Map<String, Double> published = publishedTaskManagerSpeeds();
+        final double[] speeds = new double[taskManagers.size()];
+        for (int t = 0; t < taskManagers.size(); t++) {
+            speeds[t] = published.getOrDefault(taskManagers.get(t).id(), 1.0);
+        }
+        return speeds;
+    }
+
+    /**
      * The metaheuristic arms: hand the whole instance to a search that minimises the balance /
      * state-locality cost, then read the placement back out.
      *
@@ -478,7 +639,9 @@ public class ThesisSlotAssigner implements SlotAssigner {
                         previousAllocations,
                         weightOf(ENV_BALANCE_WEIGHT),
                         weightOf(ENV_LOCALITY_WEIGHT),
-                        sliceLoads(groups));
+                        sliceLoads(groups),
+                        publishedTaskManagerSpeeds(),
+                        useMakespanBalance());
 
         final int[] placement =
                 strategy == Strategy.ACO
@@ -569,10 +732,17 @@ public class ThesisSlotAssigner implements SlotAssigner {
     /** The free slots one TaskManager currently offers, consumed in order. */
     private static final class TaskManagerSlots {
         private final List<SlotInfo> slots;
+        private final String id;
         private int next;
 
         private TaskManagerSlots(List<SlotInfo> slots) {
             this.slots = slots;
+            this.id = taskManagerId(slots.get(0));
+        }
+
+        /** The resource id the speeds file keys on; every slot here belongs to this TaskManager. */
+        private String id() {
+            return id;
         }
 
         private boolean hasFreeSlot() {
@@ -639,41 +809,50 @@ public class ThesisSlotAssigner implements SlotAssigner {
         }
     }
 
-    /** Immutable snapshot of the loads file, refreshed at most once a second. */
-    private static final class PublishedLoads {
+    /** Immutable snapshot of a published key/value file, refreshed at most once a second. */
+    private static final class PublishedValues {
         final Path path;
         final Map<String, Double> costs;
         final long readAtMillis;
 
-        PublishedLoads(Path path, Map<String, Double> costs, long readAtMillis) {
+        PublishedValues(Path path, Map<String, Double> costs, long readAtMillis) {
             this.path = path;
             this.costs = costs;
             this.readAtMillis = readAtMillis;
         }
     }
 
-    private static Path loadsFilePath() {
-        String configured = System.getProperty(PROP_LOADS_FILE);
+    /** System property first, then environment variable, then the built-in default. */
+    private static Path filePath(String property, String variable, String fallback) {
+        String configured = System.getProperty(property);
         if (configured == null || configured.trim().isEmpty()) {
-            configured = System.getenv(ENV_LOADS_FILE);
+            configured = System.getenv(variable);
         }
         if (configured == null || configured.trim().isEmpty()) {
-            configured = DEFAULT_LOADS_FILE;
+            configured = fallback;
         }
         return Paths.get(configured.trim());
     }
 
+    /** The published per-JobVertex costs, or an empty map. */
+    private static Map<String, Double> publishedVertexCosts() {
+        return publishedValues(
+                filePath(PROP_LOADS_FILE, ENV_LOADS_FILE, DEFAULT_LOADS_FILE),
+                PUBLISHED_LOADS,
+                "THESIS_LOADS");
+    }
+
     /**
-     * The published per-JobVertex costs, or an empty map.
+     * Read a published "&lt;key&gt; &lt;positive double&gt;" file, or return the last good contents.
      *
      * <p>Cached for a second for the same reason the arm is: the adaptive scheduler re-invokes the
      * assigner speculatively, and a value that changed between two invocations of the SAME question
      * would make the answer non-deterministic.
      */
-    private static Map<String, Double> publishedVertexCosts() {
-        final Path file = loadsFilePath();
+    private static Map<String, Double> publishedValues(
+            Path file, AtomicReference<PublishedValues> cache, String what) {
         final long now = System.currentTimeMillis();
-        final PublishedLoads cached = PUBLISHED_LOADS.get();
+        final PublishedValues cached = cache.get();
         if (cached != null
                 && cached.path.equals(file)
                 && now - cached.readAtMillis < ARM_REFRESH_MILLIS) {
@@ -707,9 +886,9 @@ public class ThesisSlotAssigner implements SlotAssigner {
             }
         } catch (IOException | RuntimeException e) {
             // Keep the last good costs: a half-written file must not change the placement.
-            LOG.warn("[THESIS_LOADS] could not read {}, keeping {} entries", file, costs.size(), e);
+            LOG.warn("[{}] could not read {}, keeping {} entries", what, file, costs.size(), e);
         }
-        PUBLISHED_LOADS.set(new PublishedLoads(file, costs, now));
+        cache.set(new PublishedValues(file, costs, now));
         return costs;
     }
 
