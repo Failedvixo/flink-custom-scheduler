@@ -25,7 +25,6 @@ import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.api.java.Utils;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
 import org.apache.flink.api.java.typeutils.TypeExtractor;
@@ -48,6 +47,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.windowing.assigners.WindowAssigner;
 import org.apache.flink.streaming.api.windowing.windows.Window;
 import org.apache.flink.util.Preconditions;
+import org.apache.flink.util.Utils;
 
 import javax.annotation.Nullable;
 
@@ -82,7 +82,10 @@ public class SavepointReader {
 
         SavepointMetadataV2 savepointMetadata =
                 new SavepointMetadataV2(
-                        maxParallelism, metadata.getMasterStates(), metadata.getOperatorStates());
+                        metadata.getCheckpointId(),
+                        maxParallelism,
+                        metadata.getMasterStates(),
+                        metadata.getOperatorStates());
         return new SavepointReader(env, savepointMetadata, null);
     }
 
@@ -111,7 +114,10 @@ public class SavepointReader {
 
         SavepointMetadataV2 savepointMetadata =
                 new SavepointMetadataV2(
-                        maxParallelism, metadata.getMasterStates(), metadata.getOperatorStates());
+                        metadata.getCheckpointId(),
+                        maxParallelism,
+                        metadata.getMasterStates(),
+                        metadata.getOperatorStates());
         return new SavepointReader(env, savepointMetadata, stateBackend);
     }
 
@@ -143,13 +149,6 @@ public class SavepointReader {
         this.stateBackend = stateBackend;
     }
 
-    /** @deprecated use {@link #readListState(OperatorIdentifier, String, TypeInformation)} */
-    @Deprecated
-    public <T> DataStream<T> readListState(String uid, String name, TypeInformation<T> typeInfo)
-            throws IOException {
-        return readListState(OperatorIdentifier.forUid(uid), name, typeInfo);
-    }
-
     /**
      * Read operator {@code ListState} from a {@code Savepoint}.
      *
@@ -164,17 +163,6 @@ public class SavepointReader {
             OperatorIdentifier identifier, String name, TypeInformation<T> typeInfo)
             throws IOException {
         return readListState(identifier, typeInfo, new ListStateDescriptor<>(name, typeInfo));
-    }
-
-    /**
-     * @deprecated use {@link #readListState(OperatorIdentifier, String, TypeInformation,
-     *     TypeSerializer)}
-     */
-    @Deprecated
-    public <T> DataStream<T> readListState(
-            String uid, String name, TypeInformation<T> typeInfo, TypeSerializer<T> serializer)
-            throws IOException {
-        return readListState(OperatorIdentifier.forUid(uid), name, typeInfo, serializer);
     }
 
     /**
@@ -211,15 +199,9 @@ public class SavepointReader {
                         operatorState,
                         MutableConfig.of(env.getConfiguration()),
                         stateBackend,
-                        descriptor);
+                        descriptor,
+                        env.getConfig());
         return SourceBuilder.fromFormat(env, inputFormat, typeInfo);
-    }
-
-    /** @deprecated use {@link #readUnionState(OperatorIdentifier, String, TypeInformation)} */
-    @Deprecated
-    public <T> DataStream<T> readUnionState(String uid, String name, TypeInformation<T> typeInfo)
-            throws IOException {
-        return readListState(OperatorIdentifier.forUid(uid), name, typeInfo);
     }
 
     /**
@@ -236,16 +218,6 @@ public class SavepointReader {
             OperatorIdentifier identifier, String name, TypeInformation<T> typeInfo)
             throws IOException {
         return readUnionState(identifier, typeInfo, new ListStateDescriptor<>(name, typeInfo));
-    }
-
-    /**
-     * @deprecated use {@link #readUnionState(OperatorIdentifier, String, TypeInformation,
-     *     TypeSerializer)}
-     */
-    public <T> DataStream<T> readUnionState(
-            String uid, String name, TypeInformation<T> typeInfo, TypeSerializer<T> serializer)
-            throws IOException {
-        return readUnionState(OperatorIdentifier.forUid(uid), name, typeInfo, serializer);
     }
 
     /**
@@ -282,22 +254,9 @@ public class SavepointReader {
                         operatorState,
                         MutableConfig.of(env.getConfiguration()),
                         stateBackend,
-                        descriptor);
+                        descriptor,
+                        env.getConfig());
         return SourceBuilder.fromFormat(env, inputFormat, typeInfo);
-    }
-
-    /**
-     * @deprecated use {@link #readBroadcastState(OperatorIdentifier, String, TypeInformation,
-     *     TypeInformation)}
-     */
-    @Deprecated
-    public <K, V> DataStream<Tuple2<K, V>> readBroadcastState(
-            String uid,
-            String name,
-            TypeInformation<K> keyTypeInfo,
-            TypeInformation<V> valueTypeInfo)
-            throws IOException {
-        return readBroadcastState(OperatorIdentifier.forUid(uid), name, keyTypeInfo, valueTypeInfo);
     }
 
     /**
@@ -323,28 +282,6 @@ public class SavepointReader {
                 keyTypeInfo,
                 valueTypeInfo,
                 new MapStateDescriptor<>(name, keyTypeInfo, valueTypeInfo));
-    }
-
-    /**
-     * @deprecated use {@link #readBroadcastState(OperatorIdentifier, String, TypeInformation,
-     *     TypeInformation, TypeSerializer, TypeSerializer)}
-     */
-    @Deprecated
-    public <K, V> DataStream<Tuple2<K, V>> readBroadcastState(
-            String uid,
-            String name,
-            TypeInformation<K> keyTypeInfo,
-            TypeInformation<V> valueTypeInfo,
-            TypeSerializer<K> keySerializer,
-            TypeSerializer<V> valueSerializer)
-            throws IOException {
-        return readBroadcastState(
-                OperatorIdentifier.forUid(uid),
-                name,
-                keyTypeInfo,
-                valueTypeInfo,
-                keySerializer,
-                valueSerializer);
     }
 
     /**
@@ -391,16 +328,10 @@ public class SavepointReader {
                         operatorState,
                         MutableConfig.of(env.getConfiguration()),
                         stateBackend,
-                        descriptor);
+                        descriptor,
+                        env.getConfig());
         return SourceBuilder.fromFormat(
                 env, inputFormat, new TupleTypeInfo<>(keyTypeInfo, valueTypeInfo));
-    }
-
-    /** @deprecated use {@link #readKeyedState(OperatorIdentifier, KeyedStateReaderFunction)} */
-    @Deprecated
-    public <K, OUT> DataStream<OUT> readKeyedState(
-            String uid, KeyedStateReaderFunction<K, OUT> function) throws IOException {
-        return readKeyedState(OperatorIdentifier.forUid(uid), function);
     }
 
     /**
@@ -453,20 +384,6 @@ public class SavepointReader {
     }
 
     /**
-     * @deprecated use {@link #readKeyedState(OperatorIdentifier, KeyedStateReaderFunction,
-     *     TypeInformation, TypeInformation)}
-     */
-    @Deprecated
-    public <K, OUT> DataStream<OUT> readKeyedState(
-            String uid,
-            KeyedStateReaderFunction<K, OUT> function,
-            TypeInformation<K> keyTypeInfo,
-            TypeInformation<OUT> outTypeInfo)
-            throws IOException {
-        return readKeyedState(OperatorIdentifier.forUid(uid), function, keyTypeInfo, outTypeInfo);
-    }
-
-    /**
      * Read keyed state from an operator in a {@code Savepoint}.
      *
      * @param identifier The identifier of the operator.
@@ -491,7 +408,8 @@ public class SavepointReader {
                         operatorState,
                         stateBackend,
                         MutableConfig.of(env.getConfiguration()),
-                        new KeyedStateReaderOperator<>(function, keyTypeInfo));
+                        new KeyedStateReaderOperator<>(function, keyTypeInfo),
+                        env.getConfig());
 
         return SourceBuilder.fromFormat(env, inputFormat, outTypeInfo);
     }

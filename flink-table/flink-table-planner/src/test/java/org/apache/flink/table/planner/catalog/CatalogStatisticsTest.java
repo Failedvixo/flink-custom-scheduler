@@ -22,7 +22,6 @@ import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.TableEnvironment;
-import org.apache.flink.table.api.TableSchema;
 import org.apache.flink.table.api.internal.TableEnvironmentImpl;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogPartitionImpl;
@@ -42,6 +41,7 @@ import org.apache.flink.table.catalog.stats.CatalogColumnStatisticsDataLong;
 import org.apache.flink.table.catalog.stats.CatalogColumnStatisticsDataString;
 import org.apache.flink.table.catalog.stats.CatalogTableStatistics;
 import org.apache.flink.table.catalog.stats.Date;
+import org.apache.flink.table.legacy.api.TableSchema;
 import org.apache.flink.table.plan.stats.TableStats;
 import org.apache.flink.table.planner.delegation.PlannerBase;
 import org.apache.flink.table.planner.plan.metadata.FlinkRelMetadataQuery;
@@ -53,12 +53,11 @@ import org.apache.flink.table.utils.DateTimeUtils;
 
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.util.ImmutableBitSet;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -66,7 +65,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for Catalog Statistics. */
-public class CatalogStatisticsTest {
+class CatalogStatisticsTest {
 
     private final String databaseName = "default_database";
 
@@ -83,8 +82,8 @@ public class CatalogStatisticsTest {
     private TableEnvironment tEnv;
     private Catalog catalog;
 
-    @Before
-    public void setup() {
+    @BeforeEach
+    void setup() {
         EnvironmentSettings settings = EnvironmentSettings.newInstance().inBatchMode().build();
         tEnv = TableEnvironment.create(settings);
         catalog = tEnv.getCatalog(tEnv.getCurrentCatalog()).orElse(null);
@@ -92,7 +91,7 @@ public class CatalogStatisticsTest {
     }
 
     @Test
-    public void testGetStatsFromCatalogForConnectorCatalogTable() throws Exception {
+    void testGetStatsFromCatalogForConnectorCatalogTable() throws Exception {
         final TableSchema tableSchema = TableSchema.fromResolvedSchema(resolvedSchema);
         catalog.createTable(
                 new ObjectPath(databaseName, "T1"),
@@ -111,7 +110,7 @@ public class CatalogStatisticsTest {
     }
 
     @Test
-    public void testGetStatsFromCatalogForCatalogTableImpl() throws Exception {
+    void testGetStatsFromCatalogForCatalogTableImpl() throws Exception {
         Map<String, String> properties = new HashMap<>();
         properties.put("connector.type", "filesystem");
         properties.put("connector.property-version", "1");
@@ -124,11 +123,11 @@ public class CatalogStatisticsTest {
         final Schema schema = Schema.newBuilder().fromResolvedSchema(resolvedSchema).build();
         catalog.createTable(
                 new ObjectPath(databaseName, "T1"),
-                CatalogTable.of(schema, "", Collections.emptyList(), properties),
+                CatalogTable.newBuilder().schema(schema).comment("").options(properties).build(),
                 false);
         catalog.createTable(
                 new ObjectPath(databaseName, "T2"),
-                CatalogTable.of(schema, "", Collections.emptyList(), properties),
+                CatalogTable.newBuilder().schema(schema).comment("").options(properties).build(),
                 false);
 
         alterTableStatistics(catalog, "T1");
@@ -149,7 +148,7 @@ public class CatalogStatisticsTest {
     }
 
     @Test
-    public void testGetPartitionStatsFromCatalog() throws Exception {
+    void testGetPartitionStatsFromCatalog() throws Exception {
         TestPartitionableSourceFactory.createTemporaryTable(tEnv, "PartT", true);
         createPartitionStats("A", 1);
         createPartitionColumnStats("A", 1);
@@ -185,7 +184,7 @@ public class CatalogStatisticsTest {
     }
 
     @Test
-    public void testGetPartitionStatsWithUnknownRowCount() throws Exception {
+    void testGetPartitionStatsWithUnknownRowCount() throws Exception {
         TestPartitionableSourceFactory.createTemporaryTable(tEnv, "PartT", true);
         createPartitionStats("A", 1, TableStats.UNKNOWN.getRowCount());
         createPartitionColumnStats("A", 1);
@@ -215,7 +214,7 @@ public class CatalogStatisticsTest {
     }
 
     @Test
-    public void testGetPartitionStatsWithUnknownColumnStats() throws Exception {
+    void testGetPartitionStatsWithUnknownColumnStats() throws Exception {
         TestPartitionableSourceFactory.createTemporaryTable(tEnv, "PartT", true);
         createPartitionStats("A", 1);
         createPartitionStats("A", 2);
@@ -242,7 +241,7 @@ public class CatalogStatisticsTest {
     }
 
     @Test
-    public void testGetPartitionStatsWithSomeUnknownColumnStats() throws Exception {
+    void testGetPartitionStatsWithSomeUnknownColumnStats() throws Exception {
         TestPartitionableSourceFactory.createTemporaryTable(tEnv, "PartT", true);
         createPartitionStats("A", 1);
         createPartitionColumnStats("A", 1, true);

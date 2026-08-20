@@ -1,0 +1,166 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.flink.metrics.otel;
+
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.PublicEvolving;
+import org.apache.flink.annotation.docs.Documentation;
+import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.configuration.ConfigOption;
+import org.apache.flink.configuration.ConfigOptions;
+import org.apache.flink.configuration.description.Description;
+import org.apache.flink.metrics.MetricConfig;
+import org.apache.flink.util.TimeUtils;
+
+import java.time.Duration;
+import java.util.function.Consumer;
+
+import static org.apache.flink.util.Preconditions.checkArgument;
+
+/** Config options for subclasses of {@link OpenTelemetryReporterBase}. */
+@PublicEvolving
+@Documentation.SuffixOption(ConfigConstants.METRICS_REPORTER_PREFIX + "OpenTelemetry")
+public final class OpenTelemetryReporterOptions {
+
+    public enum Protocol {
+        gRPC,
+        HTTP
+    }
+
+    public static final String COMPRESSION_NONE = "none";
+    public static final String COMPRESSION_GZIP = "gzip";
+
+    private OpenTelemetryReporterOptions() {}
+
+    public static final ConfigOption<Protocol> EXPORTER_PROTOCOL =
+            ConfigOptions.key("exporter.protocol")
+                    .enumType(Protocol.class)
+                    .defaultValue(Protocol.gRPC)
+                    .withDescription(
+                            Description.builder()
+                                    .text("Protocol for the OpenTelemetry Reporters.")
+                                    .build());
+
+    public static final ConfigOption<String> EXPORTER_ENDPOINT =
+            ConfigOptions.key("exporter.endpoint")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            Description.builder()
+                                    .text("Endpoint for the OpenTelemetry Reporters.")
+                                    .build());
+
+    public static final ConfigOption<String> EXPORTER_TIMEOUT =
+            ConfigOptions.key("exporter.timeout")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "Timeout for OpenTelemetry Reporters, as Duration string. Example: 10s for 10 seconds")
+                                    .build());
+
+    public static final ConfigOption<String> EXPORTER_COMPRESSION =
+            ConfigOptions.key("exporter.compression")
+                    .stringType()
+                    .defaultValue(COMPRESSION_NONE)
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            String.format(
+                                                    "Compression method for OTel Reporter only '%s' or '%s'. Default is '%s'.",
+                                                    COMPRESSION_GZIP,
+                                                    COMPRESSION_NONE,
+                                                    COMPRESSION_NONE))
+                                    .build());
+
+    public static final ConfigOption<String> SERVICE_NAME =
+            ConfigOptions.key("service.name")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            Description.builder()
+                                    .text("service.name passed to OpenTelemetry Reporters.")
+                                    .build());
+
+    @PublicEvolving
+    public static final ConfigOption<String> SERVICE_VERSION =
+            ConfigOptions.key("service.version")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            Description.builder()
+                                    .text("service.version passed to OpenTelemetry Reporters.")
+                                    .build());
+
+    @PublicEvolving
+    public static final ConfigOption<Integer> BATCH_SIZE =
+            ConfigOptions.key("batch.size")
+                    .intType()
+                    .defaultValue(0)
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "Number of metrics per export batch. "
+                                                    + "Values <= 0 disable batching and all metrics are exported in a single request.")
+                                    .build());
+
+    @PublicEvolving
+    public static final ConfigOption<Long> EXPORT_COMPLETION_TIMEOUT_MILLIS =
+            ConfigOptions.key("export-completion-timeout-millis")
+                    .longType()
+                    .defaultValue(300_000L)
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "Timeout in milliseconds for waiting on async export completion.")
+                                    .build());
+
+    @Internal
+    public static void tryConfigureTimeout(MetricConfig metricConfig, Consumer<Duration> builder) {
+        final String timeoutConfKey = EXPORTER_TIMEOUT.key();
+        if (metricConfig.containsKey(timeoutConfKey)) {
+            builder.accept(TimeUtils.parseDuration(metricConfig.getProperty(timeoutConfKey)));
+        }
+    }
+
+    @Internal
+    public static void tryConfigureEndpoint(MetricConfig metricConfig, Consumer<String> builder) {
+        final String endpointConfKey = EXPORTER_ENDPOINT.key();
+        checkArgument(
+                metricConfig.containsKey(endpointConfKey), "Must set " + EXPORTER_ENDPOINT.key());
+        builder.accept(metricConfig.getProperty(endpointConfKey));
+    }
+
+    @Internal
+    public static void tryConfigureCompression(
+            MetricConfig metricConfig, Consumer<String> builder) {
+        final String compressionConfKey = EXPORTER_COMPRESSION.key();
+        if (metricConfig.containsKey(compressionConfKey)) {
+            String compression = metricConfig.getProperty(compressionConfKey);
+            checkArgument(
+                    COMPRESSION_NONE.equals(compression) || COMPRESSION_GZIP.equals(compression),
+                    "Unsupported compression method: '%s'. Supported values are '%s' and '%s'.",
+                    compression,
+                    COMPRESSION_NONE,
+                    COMPRESSION_GZIP);
+            builder.accept(compression);
+        }
+    }
+}

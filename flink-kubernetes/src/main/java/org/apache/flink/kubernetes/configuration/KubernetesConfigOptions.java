@@ -33,6 +33,7 @@ import org.apache.flink.kubernetes.kubeclient.services.ServiceType;
 import org.apache.flink.kubernetes.utils.Constants;
 import org.apache.flink.runtime.util.EnvironmentInformation;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -301,7 +302,7 @@ public class KubernetesConfigOptions {
                     .stringType()
                     .defaultValue("/opt/flink/conf")
                     .withDescription(
-                            "The flink conf directory that will be mounted in pod. The flink-conf.yaml, log4j.properties, "
+                            "The flink conf directory that will be mounted in pod. The config.yaml, log4j.properties, "
                                     + "logback.xml in this path will be overwritten from config map.");
 
     public static final ConfigOption<String> FLINK_LOG_DIR =
@@ -376,6 +377,30 @@ public class KubernetesConfigOptions {
                             "The user-specified annotations that are set to the rest Service. The value should be "
                                     + "in the form of a1:v1,a2:v2");
 
+    public static final ConfigOption<Map<String, String>> REST_SERVICE_LABELS =
+            key("kubernetes.rest-service.labels")
+                    .mapType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The user-specified labels that are set to the rest Service. The value should be "
+                                    + "in the form of a1:v1,a2:v2");
+
+    public static final ConfigOption<Map<String, String>> INTERNAL_SERVICE_ANNOTATIONS =
+            key("kubernetes.internal-service.annotations")
+                    .mapType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The user-specified annotations that are set to the internal Service. The value should be "
+                                    + "in the form of a1:v1,a2:v2");
+
+    public static final ConfigOption<Map<String, String>> INTERNAL_SERVICE_LABELS =
+            key("kubernetes.internal-service.labels")
+                    .mapType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The user-specified labels that are set to the internal Service. The value should be "
+                                    + "in the form of a1:v1,a2:v2");
+
     /**
      * Defines the configuration key of that external resource in Kubernetes. This is used as a
      * suffix in an actual config.
@@ -431,7 +456,7 @@ public class KubernetesConfigOptions {
     public static final ConfigOption<Integer> KUBERNETES_TRANSACTIONAL_OPERATION_MAX_RETRIES =
             key("kubernetes.transactional-operation.max-retries")
                     .intType()
-                    .defaultValue(5)
+                    .defaultValue(15)
                     .withDescription(
                             Description.builder()
                                     .text(
@@ -439,6 +464,38 @@ public class KubernetesConfigOptions {
                                                     + "client gives up. For example, %s.",
                                             code("FlinkKubeClient#checkAndUpdateConfigMap"))
                                     .build());
+
+    public static final ConfigOption<Duration>
+            KUBERNETES_TRANSACTIONAL_OPERATION_INITIAL_RETRY_DELAY =
+                    key("kubernetes.transactional-operation.initial-retry-delay")
+                            .durationType()
+                            .defaultValue(Duration.ofMillis(50))
+                            .withDescription(
+                                    Description.builder()
+                                            .text(
+                                                    "Defines the initial duration of Kubernetes transactional operation retries "
+                                                            + "after fail")
+                                            .build());
+
+    @Deprecated @Documentation.ExcludeFromDocumentation
+    public static final ConfigOption<Duration>
+            KUBERNETES_TRANSACTIONAL_OPERATION_INITIAL_RETRY_DEALY =
+                    KUBERNETES_TRANSACTIONAL_OPERATION_INITIAL_RETRY_DELAY;
+
+    public static final ConfigOption<Duration> KUBERNETES_TRANSACTIONAL_OPERATION_MAX_RETRY_DELAY =
+            key("kubernetes.transactional-operation.max-retry-delay")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(1))
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "Defines the max duration of Kubernetes transactional operation retries "
+                                                    + "after fail")
+                                    .build());
+
+    @Deprecated @Documentation.ExcludeFromDocumentation
+    public static final ConfigOption<Duration> KUBERNETES_TRANSACTIONAL_OPERATION_MAX_RETRY_DEALY =
+            KUBERNETES_TRANSACTIONAL_OPERATION_MAX_RETRY_DELAY;
 
     public static final ConfigOption<String> JOB_MANAGER_POD_TEMPLATE;
 
@@ -505,6 +562,26 @@ public class KubernetesConfigOptions {
                                     + "Flink. A typical use-case is when one uses Flink Kubernetes "
                                     + "Operator.");
 
+    public static final ConfigOption<Boolean> LOCAL_UPLOAD_ENABLED =
+            ConfigOptions.key("kubernetes.artifacts.local-upload-enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enables uploading 'local://' schemed artifacts to DFS before the application cluster deployment.");
+
+    public static final ConfigOption<Boolean> LOCAL_UPLOAD_OVERWRITE =
+            ConfigOptions.key("kubernetes.artifacts.local-upload-overwrite")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "If enabled, overwrites any existing artifact on the remote target. Disabled by default.");
+
+    public static final ConfigOption<String> LOCAL_UPLOAD_TARGET =
+            ConfigOptions.key("kubernetes.artifacts.local-upload-target")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The target remote DFS directory to upload local artifacts.");
+
     /**
      * This will only be used to support blocklist mechanism, which is experimental currently, so we
      * do not want to expose this option in the documentation.
@@ -517,6 +594,82 @@ public class KubernetesConfigOptions {
                     .withDescription(
                             "The node label whose value is the same as the node name. "
                                     + "Currently, this will only be used to set the node affinity of TM pods to avoid being scheduled on blocked nodes.");
+
+    /**
+     * The user-specified PersistentVolumeClaims (PVCs) that will be mounted into Flink containers.
+     *
+     * <p>The value should be in the form of {@code pvc-name:/mount/path} separated by commas.
+     * Multiple PVCs can be specified by separating them with commas.
+     *
+     * <p>Example: {@code checkpoint-pvc:/opt/flink/checkpoints,data-pvc:/opt/flink/data}
+     *
+     * <p>Prerequisites:
+     *
+     * <ul>
+     *   <li>The PVCs must exist in the same namespace as the Flink cluster before deployment
+     *   <li>The PVCs must have appropriate access modes:
+     *       <ul>
+     *         <li>ReadWriteOnce (RWO): For single pod access
+     *         <li>ReadWriteMany (RWX): For multiple pods (recommended for HA setups)
+     *         <li>ReadOnlyMany (ROX): For read-only access from multiple pods
+     *       </ul>
+     * </ul>
+     *
+     * <p>Common use cases:
+     *
+     * <ul>
+     *   <li>Checkpoint storage: Mount a shared PVC for storing checkpoints
+     *   <li>Savepoint storage: Mount a PVC for savepoint data
+     *   <li>Shared data: Mount read-only PVCs containing reference data
+     *   <li>Job artifacts: Mount PVCs containing job JARs or dependencies
+     * </ul>
+     */
+    public static final ConfigOption<Map<String, String>> KUBERNETES_PERSISTENT_VOLUME_CLAIMS =
+            key("kubernetes.persistent-volume-claims")
+                    .mapType()
+                    .noDefaultValue()
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "The user-specified %s that will be mounted into Flink containers. "
+                                                    + "The value should be in the form of %s. "
+                                                    + "Multiple PVCs can be specified, for example: %s. "
+                                                    + "The PVCs must exist in the same namespace as the Flink cluster before deployment. "
+                                                    + "For HA setups with multiple JobManagers or TaskManagers accessing the same storage, "
+                                                    + "use PVCs with ReadWriteMany (RWX) or ReadOnlyMany (ROX) access modes.",
+                                            link(
+                                                    "https://kubernetes.io/docs/concepts/storage/persistent-volumes/",
+                                                    "PersistentVolumeClaims (PVCs)"),
+                                            code("pvc-name:/mount/path"),
+                                            code(
+                                                    "checkpoint-pvc:/opt/flink/checkpoints,data-pvc:/opt/flink/data"))
+                                    .build());
+
+    /**
+     * Whether to mount PersistentVolumeClaims (PVCs) as read-only.
+     *
+     * <p>When set to true, all PVCs configured via {@link #KUBERNETES_PERSISTENT_VOLUME_CLAIMS}
+     * will be mounted as read-only. This is useful when the PVC contains shared data that should
+     * not be modified by Flink, such as reference datasets or pre-trained models.
+     *
+     * <p>Note: This setting applies globally to all PVCs configured via {@link
+     * #KUBERNETES_PERSISTENT_VOLUME_CLAIMS}. If you need different access modes for different PVCs,
+     * consider using pod templates instead.
+     */
+    public static final ConfigOption<Boolean> KUBERNETES_PERSISTENT_VOLUME_CLAIM_READ_ONLY =
+            key("kubernetes.persistent-volume-claim-read-only")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "Whether to mount PersistentVolumeClaims (PVCs) as read-only. "
+                                                    + "When set to true, all PVCs configured via '%s' will be mounted as read-only. "
+                                                    + "This is useful for shared data that should not be modified by Flink, "
+                                                    + "such as reference datasets or pre-trained models. "
+                                                    + "Note: This setting applies globally to all configured PVCs.",
+                                            text(KUBERNETES_PERSISTENT_VOLUME_CLAIMS.key()))
+                                    .build());
 
     private static String getDefaultFlinkImage() {
         // The default container image that ties to the exact needed versions of both Flink and

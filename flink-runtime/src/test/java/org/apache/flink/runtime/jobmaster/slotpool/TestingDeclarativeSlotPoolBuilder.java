@@ -23,6 +23,7 @@ import org.apache.flink.runtime.clusterframework.types.ResourceID;
 import org.apache.flink.runtime.clusterframework.types.ResourceProfile;
 import org.apache.flink.runtime.jobmanager.slots.TaskManagerGateway;
 import org.apache.flink.runtime.jobmaster.SlotInfo;
+import org.apache.flink.runtime.scheduler.taskexecload.TaskExecutionLoad;
 import org.apache.flink.runtime.slots.ResourceRequirement;
 import org.apache.flink.runtime.taskexecutor.slot.SlotOffer;
 import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
@@ -33,6 +34,8 @@ import org.apache.flink.util.function.TriFunction;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -54,11 +57,12 @@ public class TestingDeclarativeSlotPoolBuilder {
                     Collection<SlotOffer>>
             offerSlotsFunction =
                     (ignoredA, ignoredB, ignoredC, ignoredD) -> Collections.emptyList();
-    private Supplier<Collection<SlotInfo>> getFreeSlotsInformationSupplier = Collections::emptyList;
+    private Supplier<Collection<PhysicalSlot>> getFreeSlotsInformationSupplier =
+            Collections::emptyList;
     private Supplier<Collection<? extends SlotInfo>> getAllSlotsInformationSupplier =
             Collections::emptyList;
-    private Supplier<FreeSlotInfoTracker> getFreeSlotInfoTrackerSupplier =
-            () -> TestingFreeSlotInfoTracker.newBuilder().build();
+    private Supplier<FreeSlotTracker> getFreeSlotTrackerSupplier =
+            () -> TestingFreeSlotTracker.newBuilder().build();
     private BiFunction<ResourceID, Exception, ResourceCounter> releaseSlotsFunction =
             (ignoredA, ignoredB) -> ResourceCounter.empty();
     private BiFunction<AllocationID, Exception, ResourceCounter> releaseSlotFunction =
@@ -79,6 +83,8 @@ public class TestingDeclarativeSlotPoolBuilder {
                     Collection<SlotOffer>>
             registerSlotsFunction =
                     (slotOffers, ignoredB, ignoredC, ignoredD) -> new ArrayList<>(slotOffers);
+    private Supplier<Map<ResourceID, TaskExecutionLoad>> taskExecutionLoadMapSupplier =
+            HashMap::new;
 
     public TestingDeclarativeSlotPoolBuilder setIncreaseResourceRequirementsByConsumer(
             Consumer<ResourceCounter> increaseResourceRequirementsByConsumer) {
@@ -129,14 +135,14 @@ public class TestingDeclarativeSlotPoolBuilder {
     }
 
     public TestingDeclarativeSlotPoolBuilder setGetFreeSlotsInformationSupplier(
-            Supplier<Collection<SlotInfo>> getFreeSlotsInformationSupplier) {
+            Supplier<Collection<PhysicalSlot>> getFreeSlotsInformationSupplier) {
         this.getFreeSlotsInformationSupplier = getFreeSlotsInformationSupplier;
         return this;
     }
 
-    public TestingDeclarativeSlotPoolBuilder setGetFreeSlotInfoTrackerSupplier(
-            Supplier<FreeSlotInfoTracker> getFreeSlotInfoTrackerSupplier) {
-        this.getFreeSlotInfoTrackerSupplier = getFreeSlotInfoTrackerSupplier;
+    public TestingDeclarativeSlotPoolBuilder setGetFreeSlotTrackerSupplier(
+            Supplier<FreeSlotTracker> getFreeSlotTrackerSupplier) {
+        this.getFreeSlotTrackerSupplier = getFreeSlotTrackerSupplier;
         return this;
     }
 
@@ -197,7 +203,7 @@ public class TestingDeclarativeSlotPoolBuilder {
                 offerSlotsFunction,
                 registerSlotsFunction,
                 getFreeSlotsInformationSupplier,
-                getFreeSlotInfoTrackerSupplier,
+                getFreeSlotTrackerSupplier,
                 getAllSlotsInformationSupplier,
                 releaseSlotsFunction,
                 releaseSlotFunction,
@@ -206,6 +212,7 @@ public class TestingDeclarativeSlotPoolBuilder {
                 containsSlotsFunction,
                 containsFreeSlotFunction,
                 returnIdleSlotsConsumer,
-                setResourceRequirementsConsumer);
+                setResourceRequirementsConsumer,
+                taskExecutionLoadMapSupplier);
     }
 }

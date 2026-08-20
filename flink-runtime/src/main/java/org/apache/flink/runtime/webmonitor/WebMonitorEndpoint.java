@@ -19,12 +19,12 @@
 package org.apache.flink.runtime.webmonitor;
 
 import org.apache.flink.api.common.JobID;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.configuration.AkkaOptions;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.RestOptions;
+import org.apache.flink.configuration.RpcOptions;
+import org.apache.flink.runtime.application.ArchivedApplication;
 import org.apache.flink.runtime.blob.TransientBlobService;
 import org.apache.flink.runtime.checkpoint.CheckpointStatsSnapshot;
 import org.apache.flink.runtime.leaderelection.LeaderContender;
@@ -34,6 +34,11 @@ import org.apache.flink.runtime.rest.RestServerEndpoint;
 import org.apache.flink.runtime.rest.handler.AbstractRestHandler;
 import org.apache.flink.runtime.rest.handler.RestHandlerConfiguration;
 import org.apache.flink.runtime.rest.handler.RestHandlerSpecification;
+import org.apache.flink.runtime.rest.handler.application.ApplicationCancellationHandler;
+import org.apache.flink.runtime.rest.handler.application.ApplicationDetailsHandler;
+import org.apache.flink.runtime.rest.handler.application.ApplicationExceptionsHandler;
+import org.apache.flink.runtime.rest.handler.application.ApplicationsOverviewHandler;
+import org.apache.flink.runtime.rest.handler.application.JobManagerApplicationConfigurationHandler;
 import org.apache.flink.runtime.rest.handler.cluster.ClusterConfigHandler;
 import org.apache.flink.runtime.rest.handler.cluster.ClusterOverviewHandler;
 import org.apache.flink.runtime.rest.handler.cluster.DashboardConfigHandler;
@@ -41,6 +46,9 @@ import org.apache.flink.runtime.rest.handler.cluster.JobManagerCustomLogHandler;
 import org.apache.flink.runtime.rest.handler.cluster.JobManagerEnvironmentHandler;
 import org.apache.flink.runtime.rest.handler.cluster.JobManagerLogFileHandler;
 import org.apache.flink.runtime.rest.handler.cluster.JobManagerLogListHandler;
+import org.apache.flink.runtime.rest.handler.cluster.JobManagerProfilingFileHandler;
+import org.apache.flink.runtime.rest.handler.cluster.JobManagerProfilingHandler;
+import org.apache.flink.runtime.rest.handler.cluster.JobManagerProfilingListHandler;
 import org.apache.flink.runtime.rest.handler.cluster.JobManagerThreadDumpHandler;
 import org.apache.flink.runtime.rest.handler.cluster.ShutdownHandler;
 import org.apache.flink.runtime.rest.handler.dataset.ClusterDataSetDeleteHandlers;
@@ -82,11 +90,17 @@ import org.apache.flink.runtime.rest.handler.job.metrics.AggregatingJobsMetricsH
 import org.apache.flink.runtime.rest.handler.job.metrics.AggregatingSubtasksMetricsHandler;
 import org.apache.flink.runtime.rest.handler.job.metrics.AggregatingTaskManagersMetricsHandler;
 import org.apache.flink.runtime.rest.handler.job.metrics.JobManagerMetricsHandler;
+import org.apache.flink.runtime.rest.handler.job.metrics.JobManagerOperatorMetricsHandler;
 import org.apache.flink.runtime.rest.handler.job.metrics.JobMetricsHandler;
 import org.apache.flink.runtime.rest.handler.job.metrics.JobVertexMetricsHandler;
 import org.apache.flink.runtime.rest.handler.job.metrics.JobVertexWatermarksHandler;
 import org.apache.flink.runtime.rest.handler.job.metrics.SubtaskMetricsHandler;
 import org.apache.flink.runtime.rest.handler.job.metrics.TaskManagerMetricsHandler;
+import org.apache.flink.runtime.rest.handler.job.rescales.JobRescaleConfigHandler;
+import org.apache.flink.runtime.rest.handler.job.rescales.JobRescaleDetailsHandler;
+import org.apache.flink.runtime.rest.handler.job.rescales.JobRescalesHistoryHandler;
+import org.apache.flink.runtime.rest.handler.job.rescales.JobRescalesOverviewHandler;
+import org.apache.flink.runtime.rest.handler.job.rescales.JobRescalesSummaryHandler;
 import org.apache.flink.runtime.rest.handler.job.rescaling.RescalingHandlers;
 import org.apache.flink.runtime.rest.handler.job.savepoints.SavepointDisposalHandlers;
 import org.apache.flink.runtime.rest.handler.job.savepoints.SavepointHandlers;
@@ -98,9 +112,14 @@ import org.apache.flink.runtime.rest.handler.taskmanager.TaskManagerCustomLogHan
 import org.apache.flink.runtime.rest.handler.taskmanager.TaskManagerDetailsHandler;
 import org.apache.flink.runtime.rest.handler.taskmanager.TaskManagerLogFileHandler;
 import org.apache.flink.runtime.rest.handler.taskmanager.TaskManagerLogListHandler;
+import org.apache.flink.runtime.rest.handler.taskmanager.TaskManagerProfilingFileHandler;
+import org.apache.flink.runtime.rest.handler.taskmanager.TaskManagerProfilingHandler;
+import org.apache.flink.runtime.rest.handler.taskmanager.TaskManagerProfilingListHandler;
 import org.apache.flink.runtime.rest.handler.taskmanager.TaskManagerStdoutFileHandler;
 import org.apache.flink.runtime.rest.handler.taskmanager.TaskManagerThreadDumpHandler;
 import org.apache.flink.runtime.rest.handler.taskmanager.TaskManagersHandler;
+import org.apache.flink.runtime.rest.messages.ApplicationCancellationHeaders;
+import org.apache.flink.runtime.rest.messages.ApplicationsOverviewHeaders;
 import org.apache.flink.runtime.rest.messages.ClusterConfigurationInfoHeaders;
 import org.apache.flink.runtime.rest.messages.ClusterOverviewHeaders;
 import org.apache.flink.runtime.rest.messages.DashboardConfigurationHeaders;
@@ -124,6 +143,9 @@ import org.apache.flink.runtime.rest.messages.TaskManagerLogUrlHeaders;
 import org.apache.flink.runtime.rest.messages.TerminationModeQueryParameter;
 import org.apache.flink.runtime.rest.messages.YarnCancelJobTerminationHeaders;
 import org.apache.flink.runtime.rest.messages.YarnStopJobTerminationHeaders;
+import org.apache.flink.runtime.rest.messages.application.ApplicationDetailsHeaders;
+import org.apache.flink.runtime.rest.messages.application.ApplicationExceptionsHeaders;
+import org.apache.flink.runtime.rest.messages.application.JobManagerApplicationConfigurationHeaders;
 import org.apache.flink.runtime.rest.messages.checkpoints.CheckpointConfigHeaders;
 import org.apache.flink.runtime.rest.messages.checkpoints.CheckpointStatisticDetailsHeaders;
 import org.apache.flink.runtime.rest.messages.checkpoints.CheckpointingStatisticsHeaders;
@@ -131,6 +153,9 @@ import org.apache.flink.runtime.rest.messages.checkpoints.TaskCheckpointStatisti
 import org.apache.flink.runtime.rest.messages.cluster.JobManagerCustomLogHeaders;
 import org.apache.flink.runtime.rest.messages.cluster.JobManagerLogFileHeader;
 import org.apache.flink.runtime.rest.messages.cluster.JobManagerLogListHeaders;
+import org.apache.flink.runtime.rest.messages.cluster.JobManagerProfilingFileHeaders;
+import org.apache.flink.runtime.rest.messages.cluster.JobManagerProfilingHeaders;
+import org.apache.flink.runtime.rest.messages.cluster.JobManagerProfilingListHeaders;
 import org.apache.flink.runtime.rest.messages.cluster.JobManagerStdoutFileHeader;
 import org.apache.flink.runtime.rest.messages.cluster.JobManagerThreadDumpHeaders;
 import org.apache.flink.runtime.rest.messages.cluster.ShutdownHeaders;
@@ -142,15 +167,24 @@ import org.apache.flink.runtime.rest.messages.job.SubtaskCurrentAttemptDetailsHe
 import org.apache.flink.runtime.rest.messages.job.SubtaskExecutionAttemptAccumulatorsHeaders;
 import org.apache.flink.runtime.rest.messages.job.SubtaskExecutionAttemptDetailsHeaders;
 import org.apache.flink.runtime.rest.messages.job.coordination.ClientCoordinationHeaders;
+import org.apache.flink.runtime.rest.messages.job.rescales.JobRescaleConfigHeaders;
+import org.apache.flink.runtime.rest.messages.job.rescales.JobRescaleDetailsHeaders;
+import org.apache.flink.runtime.rest.messages.job.rescales.JobRescalesHistoryHeaders;
+import org.apache.flink.runtime.rest.messages.job.rescales.JobRescalesOverviewHeaders;
+import org.apache.flink.runtime.rest.messages.job.rescales.JobRescalesSummaryHeaders;
 import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagerCustomLogHeaders;
 import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagerDetailsHeaders;
 import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagerLogFileHeaders;
 import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagerLogsHeaders;
+import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagerProfilingFileHeaders;
+import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagerProfilingHeaders;
+import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagerProfilingListHeaders;
 import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagerStdoutFileHeaders;
 import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagerThreadDumpHeaders;
 import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagersHeaders;
 import org.apache.flink.runtime.rpc.FatalErrorHandler;
 import org.apache.flink.runtime.scheduler.ExecutionGraphInfo;
+import org.apache.flink.runtime.webmonitor.history.ApplicationJsonArchivist;
 import org.apache.flink.runtime.webmonitor.history.ArchivedJson;
 import org.apache.flink.runtime.webmonitor.history.JsonArchivist;
 import org.apache.flink.runtime.webmonitor.retriever.GatewayRetriever;
@@ -165,8 +199,8 @@ import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.concurrent.ExecutorThreadFactory;
 import org.apache.flink.util.concurrent.FutureUtils;
 
-import org.apache.flink.shaded.guava31.com.google.common.cache.Cache;
-import org.apache.flink.shaded.guava31.com.google.common.cache.CacheBuilder;
+import org.apache.flink.shaded.guava33.com.google.common.cache.Cache;
+import org.apache.flink.shaded.guava33.com.google.common.cache.CacheBuilder;
 import org.apache.flink.shaded.netty4.io.netty.channel.ChannelInboundHandler;
 
 import javax.annotation.Nullable;
@@ -192,7 +226,7 @@ import java.util.concurrent.TimeUnit;
  * @param <T> type of the leader gateway
  */
 public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndpoint
-        implements LeaderContender, JsonArchivist {
+        implements LeaderContender, JsonArchivist, ApplicationJsonArchivist {
 
     protected final GatewayRetriever<? extends T> leaderRetriever;
     protected final Configuration clusterConfiguration;
@@ -214,7 +248,10 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
 
     private boolean hasWebUI = false;
 
-    private final Collection<JsonArchivist> archivingHandlers = new ArrayList<>(16);
+    private final Collection<JsonArchivist> jobArchivingHandlers = new ArrayList<>(16);
+
+    private final Collection<ApplicationJsonArchivist> applicationArchivingHandlers =
+            new ArrayList<>(16);
 
     @Nullable private ScheduledFuture<?> executionGraphCleanupTask;
 
@@ -255,7 +292,7 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
     }
 
     private VertexThreadInfoTracker initializeThreadInfoTracker(ScheduledExecutorService executor) {
-        final Duration askTimeout = clusterConfiguration.get(AkkaOptions.ASK_TIMEOUT_DURATION);
+        final Duration askTimeout = clusterConfiguration.get(RpcOptions.ASK_TIMEOUT_DURATION);
 
         final Duration flameGraphCleanUpInterval =
                 clusterConfiguration.get(RestOptions.FLAMEGRAPH_CLEANUP_INTERVAL);
@@ -266,12 +303,12 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
                         resourceManagerRetriever, executor, restConfiguration.getTimeout())
                 .setCoordinator(threadInfoRequestCoordinator)
                 .setCleanUpInterval(flameGraphCleanUpInterval)
-                .setNumSamples(clusterConfiguration.getInteger(RestOptions.FLAMEGRAPH_NUM_SAMPLES))
+                .setNumSamples(clusterConfiguration.get(RestOptions.FLAMEGRAPH_NUM_SAMPLES))
                 .setStatsRefreshInterval(
                         clusterConfiguration.get(RestOptions.FLAMEGRAPH_REFRESH_INTERVAL))
                 .setDelayBetweenSamples(clusterConfiguration.get(RestOptions.FLAMEGRAPH_DELAY))
                 .setMaxThreadInfoDepth(
-                        clusterConfiguration.getInteger(RestOptions.FLAMEGRAPH_STACK_TRACE_DEPTH))
+                        clusterConfiguration.get(RestOptions.FLAMEGRAPH_STACK_TRACE_DEPTH))
                 .build();
     }
 
@@ -288,7 +325,7 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
 
         final Duration asyncOperationStoreDuration =
                 clusterConfiguration.get(RestOptions.ASYNC_OPERATION_STORE_DURATION);
-        final Time timeout = restConfiguration.getTimeout();
+        final Duration timeout = restConfiguration.getTimeout();
 
         ClusterOverviewHandler clusterOverviewHandler =
                 new ClusterOverviewHandler(
@@ -328,6 +365,13 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
                         timeout,
                         responseHeaders,
                         JobsOverviewHeaders.getInstance());
+
+        ApplicationsOverviewHandler applicationsOverviewHandler =
+                new ApplicationsOverviewHandler(
+                        leaderRetriever,
+                        timeout,
+                        responseHeaders,
+                        ApplicationsOverviewHeaders.getInstance());
 
         ClusterConfigHandler clusterConfigurationHandler =
                 new ClusterConfigHandler(
@@ -469,6 +513,28 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
                         executor,
                         metricFetcher);
 
+        ApplicationDetailsHandler applicationDetailsHandler =
+                new ApplicationDetailsHandler(
+                        leaderRetriever,
+                        timeout,
+                        responseHeaders,
+                        ApplicationDetailsHeaders.getInstance());
+
+        JobManagerApplicationConfigurationHandler jobManagerApplicationConfigurationHandler =
+                new JobManagerApplicationConfigurationHandler(
+                        leaderRetriever,
+                        timeout,
+                        responseHeaders,
+                        JobManagerApplicationConfigurationHeaders.getInstance(),
+                        clusterConfiguration);
+
+        ApplicationExceptionsHandler applicationExceptionsHandler =
+                new ApplicationExceptionsHandler(
+                        leaderRetriever,
+                        timeout,
+                        responseHeaders,
+                        ApplicationExceptionsHeaders.getInstance());
+
         JobAccumulatorsHandler jobAccumulatorsHandler =
                 new JobAccumulatorsHandler(
                         leaderRetriever,
@@ -510,6 +576,10 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
                 new TaskManagerMetricsHandler(
                         leaderRetriever, timeout, responseHeaders, metricFetcher);
 
+        final JobManagerOperatorMetricsHandler jobManagerOperatorMetricsHandler =
+                new JobManagerOperatorMetricsHandler(
+                        leaderRetriever, timeout, responseHeaders, metricFetcher);
+
         final JobManagerMetricsHandler jobManagerMetricsHandler =
                 new JobManagerMetricsHandler(
                         leaderRetriever, timeout, responseHeaders, metricFetcher);
@@ -540,7 +610,7 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
                 new JobExecutionResultHandler(leaderRetriever, timeout, responseHeaders);
 
         final String defaultSavepointDir =
-                clusterConfiguration.getString(CheckpointingOptions.SAVEPOINT_DIRECTORY);
+                clusterConfiguration.get(CheckpointingOptions.SAVEPOINT_DIRECTORY);
 
         final SavepointHandlers savepointHandlers = new SavepointHandlers(defaultSavepointDir);
 
@@ -612,6 +682,13 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
                         responseHeaders,
                         JobVertexBackPressureHeaders.getInstance(),
                         metricFetcher);
+
+        final ApplicationCancellationHandler applicationCancellationHandler =
+                new ApplicationCancellationHandler(
+                        leaderRetriever,
+                        timeout,
+                        responseHeaders,
+                        ApplicationCancellationHeaders.getInstance());
 
         final JobCancellationHandler jobCancelTerminationHandler =
                 new JobCancellationHandler(
@@ -737,6 +814,10 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
         handlers.add(Tuple2.of(jobIdsHandler.getMessageHeaders(), jobIdsHandler));
         handlers.add(Tuple2.of(jobStatusHandler.getMessageHeaders(), jobStatusHandler));
         handlers.add(Tuple2.of(jobsOverviewHandler.getMessageHeaders(), jobsOverviewHandler));
+        handlers.add(
+                Tuple2.of(
+                        applicationsOverviewHandler.getMessageHeaders(),
+                        applicationsOverviewHandler));
         handlers.add(Tuple2.of(jobConfigHandler.getMessageHeaders(), jobConfigHandler));
         handlers.add(
                 Tuple2.of(checkpointConfigHandler.getMessageHeaders(), checkpointConfigHandler));
@@ -763,6 +844,17 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
                         subtasksAllAccumulatorsHandler.getMessageHeaders(),
                         subtasksAllAccumulatorsHandler));
         handlers.add(Tuple2.of(jobDetailsHandler.getMessageHeaders(), jobDetailsHandler));
+        handlers.add(
+                Tuple2.of(
+                        applicationDetailsHandler.getMessageHeaders(), applicationDetailsHandler));
+        handlers.add(
+                Tuple2.of(
+                        jobManagerApplicationConfigurationHandler.getMessageHeaders(),
+                        jobManagerApplicationConfigurationHandler));
+        handlers.add(
+                Tuple2.of(
+                        applicationExceptionsHandler.getMessageHeaders(),
+                        applicationExceptionsHandler));
         handlers.add(Tuple2.of(jobAccumulatorsHandler.getMessageHeaders(), jobAccumulatorsHandler));
         handlers.add(Tuple2.of(taskManagersHandler.getMessageHeaders(), taskManagersHandler));
         handlers.add(
@@ -782,6 +874,10 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
                         taskManagerMetricsHandler.getMessageHeaders(), taskManagerMetricsHandler));
         handlers.add(
                 Tuple2.of(jobManagerMetricsHandler.getMessageHeaders(), jobManagerMetricsHandler));
+        handlers.add(
+                Tuple2.of(
+                        jobManagerOperatorMetricsHandler.getMessageHeaders(),
+                        jobManagerOperatorMetricsHandler));
         handlers.add(
                 Tuple2.of(
                         aggregatingTaskManagersMetricsHandler.getMessageHeaders(),
@@ -853,6 +949,10 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
                         jobVertexFlameGraphHandler.getMessageHeaders(),
                         jobVertexFlameGraphHandler));
 
+        handlers.add(
+                Tuple2.of(
+                        applicationCancellationHandler.getMessageHeaders(),
+                        applicationCancellationHandler));
         handlers.add(
                 Tuple2.of(
                         jobCancelTerminationHandler.getMessageHeaders(),
@@ -958,9 +1058,84 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
         handlers.add(
                 Tuple2.of(JobManagerThreadDumpHeaders.getInstance(), jobManagerThreadDumpHandler));
 
-        // TaskManager log and stdout file handler
+        final Duration cacheEntryDuration =
+                Duration.ofMillis(restConfiguration.getRefreshInterval());
 
-        final Time cacheEntryDuration = Time.milliseconds(restConfiguration.getRefreshInterval());
+        // load profiler relative handlers
+        if (clusterConfiguration.get(RestOptions.ENABLE_PROFILER)) {
+            final JobManagerProfilingHandler jobManagerProfilingHandler =
+                    new JobManagerProfilingHandler(
+                            leaderRetriever,
+                            timeout,
+                            responseHeaders,
+                            JobManagerProfilingHeaders.getInstance(),
+                            clusterConfiguration);
+            final JobManagerProfilingListHandler jobManagerProfilingListHandler =
+                    new JobManagerProfilingListHandler(
+                            leaderRetriever,
+                            timeout,
+                            responseHeaders,
+                            JobManagerProfilingListHeaders.getInstance(),
+                            clusterConfiguration);
+            final JobManagerProfilingFileHandler jobManagerProfilingFileHandler =
+                    new JobManagerProfilingFileHandler(
+                            leaderRetriever,
+                            timeout,
+                            responseHeaders,
+                            JobManagerProfilingFileHeaders.getInstance(),
+                            clusterConfiguration);
+
+            final TaskManagerProfilingHandler taskManagerProfilingHandler =
+                    new TaskManagerProfilingHandler(
+                            leaderRetriever,
+                            timeout,
+                            responseHeaders,
+                            TaskManagerProfilingHeaders.getInstance(),
+                            resourceManagerRetriever,
+                            clusterConfiguration);
+
+            final TaskManagerProfilingListHandler taskManagerProfilingListHandler =
+                    new TaskManagerProfilingListHandler(
+                            leaderRetriever,
+                            timeout,
+                            responseHeaders,
+                            TaskManagerProfilingListHeaders.getInstance(),
+                            resourceManagerRetriever);
+            final TaskManagerProfilingFileHandler taskManagerProfilingFileHandler =
+                    new TaskManagerProfilingFileHandler(
+                            leaderRetriever,
+                            timeout,
+                            responseHeaders,
+                            TaskManagerProfilingFileHeaders.getInstance(),
+                            resourceManagerRetriever,
+                            transientBlobService,
+                            cacheEntryDuration);
+            handlers.add(
+                    Tuple2.of(
+                            JobManagerProfilingHeaders.getInstance(), jobManagerProfilingHandler));
+            handlers.add(
+                    Tuple2.of(
+                            JobManagerProfilingListHeaders.getInstance(),
+                            jobManagerProfilingListHandler));
+            handlers.add(
+                    Tuple2.of(
+                            JobManagerProfilingFileHeaders.getInstance(),
+                            jobManagerProfilingFileHandler));
+            handlers.add(
+                    Tuple2.of(
+                            TaskManagerProfilingHeaders.getInstance(),
+                            taskManagerProfilingHandler));
+            handlers.add(
+                    Tuple2.of(
+                            TaskManagerProfilingListHeaders.getInstance(),
+                            taskManagerProfilingListHandler));
+            handlers.add(
+                    Tuple2.of(
+                            TaskManagerProfilingFileHeaders.getInstance(),
+                            taskManagerProfilingFileHandler));
+        }
+
+        // TaskManager log and stdout file handler
 
         final TaskManagerLogFileHandler taskManagerLogFileHandler =
                 new TaskManagerLogFileHandler(
@@ -1034,10 +1209,77 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
                         jobResourceRequirementsUpdateHandler.getMessageHeaders(),
                         jobResourceRequirementsUpdateHandler));
 
+        final JobRescaleConfigHandler jobRescaleConfigHandler =
+                new JobRescaleConfigHandler(
+                        leaderRetriever,
+                        timeout,
+                        responseHeaders,
+                        JobRescaleConfigHeaders.getInstance(),
+                        executionGraphCache,
+                        executor);
+        handlers.add(
+                Tuple2.of(jobRescaleConfigHandler.getMessageHeaders(), jobRescaleConfigHandler));
+
+        final JobRescaleDetailsHandler jobRescaleDetailsHandler =
+                new JobRescaleDetailsHandler(
+                        leaderRetriever,
+                        timeout,
+                        responseHeaders,
+                        JobRescaleDetailsHeaders.getInstance(),
+                        executionGraphCache,
+                        executor);
+        handlers.add(
+                Tuple2.of(jobRescaleDetailsHandler.getMessageHeaders(), jobRescaleDetailsHandler));
+
+        final JobRescalesOverviewHandler jobRescalesOverviewHandler =
+                new JobRescalesOverviewHandler(
+                        leaderRetriever,
+                        timeout,
+                        responseHeaders,
+                        JobRescalesOverviewHeaders.getInstance(),
+                        executionGraphCache,
+                        executor);
+        handlers.add(
+                Tuple2.of(
+                        jobRescalesOverviewHandler.getMessageHeaders(),
+                        jobRescalesOverviewHandler));
+
+        final JobRescalesSummaryHandler jobRescalesSummaryHandler =
+                new JobRescalesSummaryHandler(
+                        leaderRetriever,
+                        timeout,
+                        responseHeaders,
+                        JobRescalesSummaryHeaders.getInstance(),
+                        executionGraphCache,
+                        executor);
+        handlers.add(
+                Tuple2.of(
+                        jobRescalesSummaryHandler.getMessageHeaders(), jobRescalesSummaryHandler));
+
+        final JobRescalesHistoryHandler jobRescalesHistoryHandler =
+                new JobRescalesHistoryHandler(
+                        leaderRetriever,
+                        timeout,
+                        responseHeaders,
+                        JobRescalesHistoryHeaders.getInstance(),
+                        executionGraphCache,
+                        executor);
+        handlers.add(
+                Tuple2.of(
+                        jobRescalesHistoryHandler.getMessageHeaders(), jobRescalesHistoryHandler));
+
         handlers.stream()
                 .map(tuple -> tuple.f1)
                 .filter(handler -> handler instanceof JsonArchivist)
-                .forEachOrdered(handler -> archivingHandlers.add((JsonArchivist) handler));
+                .forEachOrdered(handler -> jobArchivingHandlers.add((JsonArchivist) handler));
+
+        handlers.stream()
+                .map(tuple -> tuple.f1)
+                .filter(handler -> handler instanceof ApplicationJsonArchivist)
+                .forEachOrdered(
+                        handler ->
+                                applicationArchivingHandlers.add(
+                                        (ApplicationJsonArchivist) handler));
 
         return handlers;
     }
@@ -1118,7 +1360,7 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
                 "{} was granted leadership with leaderSessionID={}",
                 getRestBaseUrl(),
                 leaderSessionID);
-        leaderElection.confirmLeadership(leaderSessionID, getRestBaseUrl());
+        leaderElection.confirmLeadershipAsync(leaderSessionID, getRestBaseUrl());
     }
 
     @Override
@@ -1134,9 +1376,22 @@ public class WebMonitorEndpoint<T extends RestfulGateway> extends RestServerEndp
     @Override
     public Collection<ArchivedJson> archiveJsonWithPath(ExecutionGraphInfo executionGraphInfo)
             throws IOException {
-        Collection<ArchivedJson> archivedJson = new ArrayList<>(archivingHandlers.size());
-        for (JsonArchivist archivist : archivingHandlers) {
+        Collection<ArchivedJson> archivedJson = new ArrayList<>(jobArchivingHandlers.size());
+        for (JsonArchivist archivist : jobArchivingHandlers) {
             Collection<ArchivedJson> subArchive = archivist.archiveJsonWithPath(executionGraphInfo);
+            archivedJson.addAll(subArchive);
+        }
+        return archivedJson;
+    }
+
+    @Override
+    public Collection<ArchivedJson> archiveApplicationWithPath(
+            ArchivedApplication archivedApplication) throws IOException {
+        Collection<ArchivedJson> archivedJson =
+                new ArrayList<>(applicationArchivingHandlers.size());
+        for (ApplicationJsonArchivist archivist : applicationArchivingHandlers) {
+            Collection<ArchivedJson> subArchive =
+                    archivist.archiveApplicationWithPath(archivedApplication);
             archivedJson.addAll(subArchive);
         }
         return archivedJson;

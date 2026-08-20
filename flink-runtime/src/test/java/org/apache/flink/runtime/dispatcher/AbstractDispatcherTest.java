@@ -19,7 +19,6 @@ package org.apache.flink.runtime.dispatcher;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobStatus;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.blob.BlobServer;
 import org.apache.flink.runtime.blob.VoidBlobStore;
@@ -27,9 +26,11 @@ import org.apache.flink.runtime.checkpoint.StandaloneCheckpointRecoveryFactory;
 import org.apache.flink.runtime.dispatcher.cleanup.CheckpointResourcesCleanupRunnerFactory;
 import org.apache.flink.runtime.heartbeat.HeartbeatServices;
 import org.apache.flink.runtime.heartbeat.HeartbeatServicesImpl;
+import org.apache.flink.runtime.highavailability.EmbeddedApplicationResultStore;
 import org.apache.flink.runtime.highavailability.TestingHighAvailabilityServices;
 import org.apache.flink.runtime.highavailability.nonha.embedded.EmbeddedJobResultStore;
-import org.apache.flink.runtime.jobmanager.StandaloneJobGraphStore;
+import org.apache.flink.runtime.jobmanager.StandaloneApplicationStore;
+import org.apache.flink.runtime.jobmanager.StandaloneExecutionPlanStore;
 import org.apache.flink.runtime.leaderretrieval.SettableLeaderRetrievalService;
 import org.apache.flink.runtime.rpc.RpcUtils;
 import org.apache.flink.runtime.rpc.TestingRpcService;
@@ -45,12 +46,14 @@ import org.junit.Rule;
 import org.junit.rules.TemporaryFolder;
 import org.junit.rules.TestName;
 
+import java.time.Duration;
+
 /** Abstract test for the {@link Dispatcher} component. */
 public class AbstractDispatcherTest extends TestLogger {
 
     static TestingRpcService rpcService;
 
-    static final Time TIMEOUT = Time.minutes(1L);
+    static final Duration TIMEOUT = Duration.ofMinutes(1L);
 
     @BeforeClass
     public static void setupClass() {
@@ -94,8 +97,10 @@ public class AbstractDispatcherTest extends TestLogger {
         haServices = new TestingHighAvailabilityServices();
         haServices.setCheckpointRecoveryFactory(new StandaloneCheckpointRecoveryFactory());
         haServices.setResourceManagerLeaderRetriever(new SettableLeaderRetrievalService());
-        haServices.setJobGraphStore(new StandaloneJobGraphStore());
+        haServices.setExecutionPlanStore(new StandaloneExecutionPlanStore());
         haServices.setJobResultStore(new EmbeddedJobResultStore());
+        haServices.setApplicationStore(new StandaloneApplicationStore());
+        haServices.setApplicationResultStore(new EmbeddedApplicationResultStore());
 
         configuration = new Configuration();
         blobServer =
@@ -107,8 +112,10 @@ public class AbstractDispatcherTest extends TestLogger {
                 .setConfiguration(configuration)
                 .setHeartbeatServices(heartbeatServices)
                 .setHighAvailabilityServices(haServices)
-                .setJobGraphWriter(haServices.getJobGraphStore())
+                .setExecutionPlanWriter(haServices.getExecutionPlanStore())
                 .setJobResultStore(haServices.getJobResultStore())
+                .setApplicationWriter(haServices.getApplicationStore())
+                .setApplicationResultStore(haServices.getApplicationResultStore())
                 .setJobManagerRunnerFactory(JobMasterServiceLeadershipRunnerFactory.INSTANCE)
                 .setCleanupRunnerFactory(CheckpointResourcesCleanupRunnerFactory.INSTANCE)
                 .setFatalErrorHandler(testingFatalErrorHandlerResource.getFatalErrorHandler())
@@ -118,7 +125,7 @@ public class AbstractDispatcherTest extends TestLogger {
     @After
     public void tearDown() throws Exception {
         if (haServices != null) {
-            haServices.closeAndCleanupAllData();
+            haServices.closeWithOptionalClean(true);
         }
         if (blobServer != null) {
             blobServer.close();

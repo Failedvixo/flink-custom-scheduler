@@ -29,6 +29,7 @@ import org.apache.flink.table.planner.utils.ShortcutUtils.{unwrapClassLoader, un
 import org.apache.calcite.plan.RelOptUtil
 import org.apache.calcite.rel.`type`.RelDataType
 import org.apache.calcite.rel.RelNode
+import org.apache.calcite.rel.core.Join
 import org.apache.calcite.rex._
 import org.apache.calcite.sql.`type`.SqlTypeName
 import org.apache.calcite.sql.SqlKind
@@ -37,7 +38,7 @@ import org.apache.calcite.sql.validate.SqlValidatorUtil
 
 import java.util
 
-import scala.collection.JavaConversions._
+import scala.collection.JavaConverters._
 
 /** Util for interval join operator. */
 object IntervalJoinUtil {
@@ -69,7 +70,7 @@ object IntervalJoinUtil {
    * @return
    *   A Tuple2 of extracted window bounds and remaining predicates.
    */
-  private[flink] def extractWindowBoundsFromPredicate(
+  def extractWindowBoundsFromPredicate(
       predicate: RexNode,
       leftLogicalFieldCnt: Int,
       joinRowType: RelDataType,
@@ -78,17 +79,14 @@ object IntervalJoinUtil {
       classLoader: ClassLoader): (Option[WindowBounds], Option[RexNode]) = {
 
     // Converts the condition to conjunctive normal form (CNF)
-    val cnfCondition = FlinkRexUtil.toCnf(
-      rexBuilder,
-      tableConfig.get(FlinkRexUtil.TABLE_OPTIMIZER_CNF_NODES_LIMIT),
-      predicate)
+    val cnfCondition = FlinkRexUtil.toCnf(rexBuilder, predicate)
 
     // split the condition into time predicates and other predicates
     // We need two range predicates or an equality predicate for a properly bounded window join.
     val (timePreds, otherPreds) = cnfCondition match {
       case call: RexCall if cnfCondition.getKind == SqlKind.AND =>
         // extract all time predicates from conjunctive predicate
-        call.getOperands
+        call.getOperands.asScala
           .map(identifyTimePredicate(_, leftLogicalFieldCnt, joinRowType))
           .foldLeft((Seq[TimePredicate](), Seq[RexNode]()))(
             (preds, analyzed) => {
@@ -290,7 +288,7 @@ object IntervalJoinUtil {
         }
       case c: RexCall =>
         // concat time-attributes of all operands
-        c.operands
+        c.operands.asScala
           .map(extractTimeAttributeAccesses(_, leftFieldCount, inputRowType))
           .reduce(_ ++ _)
       case _ => Seq()
@@ -322,7 +320,7 @@ object IntervalJoinUtil {
           case _ => true
         }
       case c: RexCall =>
-        c.operands.exists(accessesNonTimeAttribute(_, inputType))
+        c.operands.asScala.exists(accessesNonTimeAttribute(_, inputType))
       case _ => false
     }
   }
@@ -427,7 +425,8 @@ object IntervalJoinUtil {
           rexBuilder.makeZeroLiteral(expr.getType)
         case c: RexCall =>
           // replace in call operands
-          val newOps = c.operands.map(replaceTimeFieldWithLiteral)
+          val newOps =
+            c.operands.asScala.map(replaceTimeFieldWithLiteral).asJava
           rexBuilder.makeCall(c.getType, c.getOperator, newOps)
         case i: RexInputRef if FlinkTypeFactory.isTimeIndicatorType(i.getType) =>
           // replace with timestamp
@@ -451,7 +450,7 @@ object IntervalJoinUtil {
     exprReducer.reduce(rexBuilder, originList, reduceList)
 
     // extract bounds from reduced literal
-    val literals = reduceList.map {
+    val literals = reduceList.asScala.map {
       case literal: RexLiteral =>
         Some(literal.getValue2.asInstanceOf[Long])
       case _ =>
@@ -469,11 +468,11 @@ object IntervalJoinUtil {
    * @return
    *   True if input join node satisfy preconditions to convert into interval join, else false.
    */
-  def satisfyIntervalJoin(join: FlinkLogicalJoin): Boolean = {
+  def satisfyIntervalJoin(join: Join): Boolean = {
     satisfyIntervalJoin(join, join.getLeft, join.getRight)
   }
 
-  def satisfyIntervalJoin(join: FlinkLogicalJoin, newLeft: RelNode, newRight: RelNode): Boolean = {
+  def satisfyIntervalJoin(join: Join, newLeft: RelNode, newRight: RelNode): Boolean = {
     // TODO support SEMI/ANTI joinSplitAggregateRuleTest
     if (!join.getJoinType.projectsRight) {
       return false

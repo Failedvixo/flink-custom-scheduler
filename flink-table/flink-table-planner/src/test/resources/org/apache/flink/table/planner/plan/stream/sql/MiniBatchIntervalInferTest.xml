@@ -297,7 +297,7 @@ LogicalProject(a=[$0], b=[$1])
     <Resource name="optimized exec plan">
       <![CDATA[
 Calc(select=[a, b])
-+- Join(joinType=[InnerJoin], where=[(a0 = a1)], select=[a, b, a0, a1], leftInputSpec=[JoinKeyContainsUniqueKey], rightInputSpec=[NoUniqueKey])
++- Join(joinType=[InnerJoin], where=[(a0 = a1)], select=[a, b, a0, a1], leftInputSpec=[JoinKeyContainsUniqueKey], rightInputSpec=[NoUniqueKey], miniBatch=[true])
    :- Exchange(distribution=[hash[a0]])
    :  +- Calc(select=[a, b, CAST(a AS BIGINT) AS a0])
    :     +- GlobalGroupAggregate(groupBy=[a], select=[a, COUNT(count$0) AS b])
@@ -320,7 +320,7 @@ Calc(select=[a, b])
   <TestCase name="testMultipleWindowAggregates">
     <Resource name="explain">
       <![CDATA[== Abstract Syntax Tree ==
-LogicalLegacySink(name=[`default_catalog`.`default_database`.`appendSink1`], fields=[a, b])
+LogicalSink(table=[default_catalog.default_database.appendSink1], fields=[id1, EXPR$1])
 +- LogicalProject(id1=[$1], EXPR$1=[$2])
    +- LogicalAggregate(group=[{0, 1}], EXPR$1=[LISTAGG($2, $3)])
       +- LogicalProject($f0=[$HOP($2, 12000:INTERVAL SECOND, 4000:INTERVAL SECOND)], id1=[$0], text=[$1], $f3=[_UTF-16LE'*'])
@@ -335,7 +335,7 @@ LogicalLegacySink(name=[`default_catalog`.`default_database`.`appendSink1`], fie
                            +- LogicalWatermarkAssigner(rowtime=[rowtime], watermark=[$1])
                               +- LogicalTableScan(table=[[default_catalog, default_database, T2]])
 
-LogicalLegacySink(name=[`default_catalog`.`default_database`.`appendSink2`], fields=[a, b])
+LogicalSink(table=[default_catalog.default_database.appendSink2], fields=[id1, EXPR$1])
 +- LogicalProject(id1=[$1], EXPR$1=[$2])
    +- LogicalAggregate(group=[{0, 1}], EXPR$1=[LISTAGG($2, $3)])
       +- LogicalProject($f0=[$TUMBLE($1, 9000:INTERVAL SECOND)], id1=[$0], text=[$2], $f3=[_UTF-16LE'-'])
@@ -347,7 +347,7 @@ LogicalLegacySink(name=[`default_catalog`.`default_database`.`appendSink2`], fie
                   +- LogicalWatermarkAssigner(rowtime=[rowtime], watermark=[$1])
                      +- LogicalTableScan(table=[[default_catalog, default_database, T2]])
 
-LogicalLegacySink(name=[`default_catalog`.`default_database`.`appendSink3`], fields=[a, b])
+LogicalSink(table=[default_catalog.default_database.retractSink3], fields=[id1, EXPR$1])
 +- LogicalAggregate(group=[{0}], EXPR$1=[COUNT($1)])
    +- LogicalProject(id1=[$0], text=[$1])
       +- LogicalProject(id1=[$1], text=[$2], ts=[TUMBLE_ROWTIME($0)])
@@ -362,7 +362,7 @@ LogicalLegacySink(name=[`default_catalog`.`default_database`.`appendSink3`], fie
                            +- LogicalTableScan(table=[[default_catalog, default_database, T2]])
 
 == Optimized Physical Plan ==
-LegacySink(name=[`default_catalog`.`default_database`.`appendSink1`], fields=[a, b])
+Sink(table=[default_catalog.default_database.appendSink1], fields=[id1, EXPR$1])
 +- GroupWindowAggregate(groupBy=[id1], window=[SlidingGroupWindow('w$, $f0, 4000, 12000)], select=[id1, LISTAGG(text, $f3) AS EXPR$1])
    +- Exchange(distribution=[hash[id1]])
       +- Calc(select=[w$rowtime AS $f0, id1, text, _UTF-16LE'*' AS $f3])
@@ -378,7 +378,7 @@ LegacySink(name=[`default_catalog`.`default_database`.`appendSink1`], fields=[a,
                            +- WatermarkAssigner(rowtime=[rowtime], watermark=[rowtime])
                               +- TableSourceScan(table=[[default_catalog, default_database, T2, project=[id2, rowtime], metadata=[]]], fields=[id2, rowtime])
 
-LegacySink(name=[`default_catalog`.`default_database`.`appendSink2`], fields=[a, b])
+Sink(table=[default_catalog.default_database.appendSink2], fields=[id1, EXPR$1])
 +- GroupWindowAggregate(groupBy=[id1], window=[TumblingGroupWindow('w$, ts, 9000)], select=[id1, LISTAGG(text, $f3) AS EXPR$1])
    +- Exchange(distribution=[hash[id1]])
       +- Calc(select=[ts, id1, text, _UTF-16LE'-' AS $f3])
@@ -391,7 +391,7 @@ LegacySink(name=[`default_catalog`.`default_database`.`appendSink2`], fields=[a,
                   +- WatermarkAssigner(rowtime=[rowtime], watermark=[rowtime])
                      +- TableSourceScan(table=[[default_catalog, default_database, T2, project=[id2, rowtime], metadata=[]]], fields=[id2, rowtime])
 
-LegacySink(name=[`default_catalog`.`default_database`.`appendSink3`], fields=[a, b])
+Sink(table=[default_catalog.default_database.retractSink3], fields=[id1, EXPR$1])
 +- GlobalGroupAggregate(groupBy=[id1], select=[id1, COUNT(count$0) AS EXPR$1])
    +- Exchange(distribution=[hash[id1]])
       +- LocalGroupAggregate(groupBy=[id1], select=[id1, COUNT(text) AS count$0])
@@ -421,20 +421,20 @@ Exchange(distribution=[hash[id1]])(reuse_id=[2])
 +- Calc(select=[ts, id1, text, '#' AS $f3])
    +- Reused(reference_id=[1])
 
-LegacySink(name=[`default_catalog`.`default_database`.`appendSink1`], fields=[a, b])
+Sink(table=[default_catalog.default_database.appendSink1], fields=[id1, EXPR$1])
 +- GroupWindowAggregate(groupBy=[id1], window=[SlidingGroupWindow('w$, $f0, 4000, 12000)], select=[id1, LISTAGG(text, $f3) AS EXPR$1])
    +- Exchange(distribution=[hash[id1]])
       +- Calc(select=[w$rowtime AS $f0, id1, text, '*' AS $f3])
          +- GroupWindowAggregate(groupBy=[id1], window=[TumblingGroupWindow('w$, ts, 6000)], properties=[w$start, w$end, w$rowtime, w$proctime], select=[id1, LISTAGG(text, $f3) AS text, start('w$) AS w$start, end('w$) AS w$end, rowtime('w$) AS w$rowtime, proctime('w$) AS w$proctime])
             +- Reused(reference_id=[2])
 
-LegacySink(name=[`default_catalog`.`default_database`.`appendSink2`], fields=[a, b])
+Sink(table=[default_catalog.default_database.appendSink2], fields=[id1, EXPR$1])
 +- GroupWindowAggregate(groupBy=[id1], window=[TumblingGroupWindow('w$, ts, 9000)], select=[id1, LISTAGG(text, $f3) AS EXPR$1])
    +- Exchange(distribution=[hash[id1]])
       +- Calc(select=[ts, id1, text, '-' AS $f3])
          +- Reused(reference_id=[1])
 
-LegacySink(name=[`default_catalog`.`default_database`.`appendSink3`], fields=[a, b])
+Sink(table=[default_catalog.default_database.retractSink3], fields=[id1, EXPR$1])
 +- GlobalGroupAggregate(groupBy=[id1], select=[id1, COUNT(count$0) AS EXPR$1])
    +- Exchange(distribution=[hash[id1]])
       +- LocalGroupAggregate(groupBy=[id1], select=[id1, COUNT(text) AS count$0])
@@ -477,6 +477,32 @@ GlobalGroupAggregate(groupBy=[cnt], select=[cnt, COUNT(count$0) AS EXPR$1])
 ]]>
     </Resource>
   </TestCase>
+  <TestCase name="testRedundantWatermarkDefinition">
+    <Resource name="sql">
+      <![CDATA[SELECT b, COUNT(DISTINCT a), MAX(b), SUM(c) FROM wmTable1 GROUP BY b]]>
+    </Resource>
+    <Resource name="ast">
+      <![CDATA[
+LogicalAggregate(group=[{0}], EXPR$1=[COUNT(DISTINCT $1)], EXPR$2=[MAX($0)], EXPR$3=[SUM($2)])
++- LogicalProject(b=[$1], a=[$0], c=[$2])
+   +- LogicalWatermarkAssigner(rowtime=[rowtime], watermark=[$4])
+      +- LogicalProject(a=[$0], b=[$1], c=[$2], proctime=[PROCTIME()], rowtime=[$3])
+         +- LogicalTableScan(table=[[default_catalog, default_database, wmTable1]])
+]]>
+    </Resource>
+    <Resource name="optimized exec plan">
+      <![CDATA[
+GlobalGroupAggregate(groupBy=[b], select=[b, COUNT(distinct$0 count$0) AS EXPR$1, MAX(max$1) AS EXPR$2, SUM(sum$2) AS EXPR$3])
++- Exchange(distribution=[hash[b]])
+   +- LocalGroupAggregate(groupBy=[b], select=[b, COUNT(distinct$0 a) AS count$0, MAX(b) AS max$1, SUM(c) AS sum$2, DISTINCT(a) AS distinct$0])
+      +- Calc(select=[b, a, c])
+         +- MiniBatchAssigner(interval=[1000ms], mode=[ProcTime])
+            +- WatermarkAssigner(rowtime=[rowtime], watermark=[rowtime])
+               +- Calc(select=[b, a, c, rowtime])
+                  +- TableSourceScan(table=[[default_catalog, default_database, wmTable1]], fields=[a, b, c, rowtime])
+]]>
+    </Resource>
+  </TestCase>
   <TestCase name="testRowtimeRowsOverWithMiniBatch">
     <Resource name="sql">
       <![CDATA[
@@ -513,32 +539,6 @@ GlobalGroupAggregate(groupBy=[cnt], select=[cnt, COUNT(count$0) AS EXPR$1])
 ]]>
     </Resource>
   </TestCase>
-  <TestCase name="testRedundantWatermarkDefinition">
-    <Resource name="sql">
-      <![CDATA[SELECT b, COUNT(DISTINCT a), MAX(b), SUM(c) FROM wmTable1 GROUP BY b]]>
-    </Resource>
-    <Resource name="ast">
-      <![CDATA[
-LogicalAggregate(group=[{0}], EXPR$1=[COUNT(DISTINCT $1)], EXPR$2=[MAX($0)], EXPR$3=[SUM($2)])
-+- LogicalProject(b=[$1], a=[$0], c=[$2])
-   +- LogicalWatermarkAssigner(rowtime=[rowtime], watermark=[$4])
-      +- LogicalProject(a=[$0], b=[$1], c=[$2], proctime=[PROCTIME()], rowtime=[$3])
-         +- LogicalTableScan(table=[[default_catalog, default_database, wmTable1]])
-]]>
-    </Resource>
-    <Resource name="optimized exec plan">
-      <![CDATA[
-GlobalGroupAggregate(groupBy=[b], select=[b, COUNT(distinct$0 count$0) AS EXPR$1, MAX(max$1) AS EXPR$2, SUM(sum$2) AS EXPR$3])
-+- Exchange(distribution=[hash[b]])
-   +- LocalGroupAggregate(groupBy=[b], select=[b, COUNT(distinct$0 a) AS count$0, MAX(b) AS max$1, SUM(c) AS sum$2, DISTINCT(a) AS distinct$0])
-      +- Calc(select=[b, a, c])
-         +- MiniBatchAssigner(interval=[1000ms], mode=[ProcTime])
-            +- WatermarkAssigner(rowtime=[rowtime], watermark=[rowtime])
-               +- Calc(select=[b, a, c, rowtime])
-                  +- TableSourceScan(table=[[default_catalog, default_database, wmTable1]], fields=[a, b, c, rowtime])
-]]>
-    </Resource>
-  </TestCase>
   <TestCase name="testTemporalTableFunctionJoinWithMiniBatch">
     <Resource name="sql">
       <![CDATA[
@@ -561,7 +561,7 @@ LogicalAggregate(group=[{0}], EXPR$1=[COUNT($1)])
          +- LogicalCorrelate(correlation=[$cor0], joinType=[inner], requiredColumns=[{4}])
             :- LogicalWatermarkAssigner(rowtime=[rowtime], watermark=[-($4, 0:INTERVAL MILLISECOND)])
             :  +- LogicalTableScan(table=[[default_catalog, default_database, MyDataStream1]])
-            +- LogicalTableFunctionScan(invocation=[Rates($cor0.rowtime)], rowType=[RecordType:peek_no_expand(INTEGER a, VARCHAR(2147483647) b, BIGINT c, TIMESTAMP_LTZ(3) *PROCTIME* proctime, TIMESTAMP(3) *ROWTIME* rowtime)])
+            +- LogicalTableFunctionScan(invocation=[Rates($cor0.rowtime)], rowType=[RecordType(INTEGER a, VARCHAR(2147483647) b, BIGINT c, TIMESTAMP_LTZ(3) *PROCTIME* proctime, TIMESTAMP(3) *ROWTIME* rowtime)])
 ]]>
     </Resource>
     <Resource name="optimized exec plan">

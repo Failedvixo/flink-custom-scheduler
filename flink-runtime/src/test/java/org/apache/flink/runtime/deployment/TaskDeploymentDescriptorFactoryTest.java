@@ -35,6 +35,7 @@ import org.apache.flink.runtime.executiongraph.ExecutionVertex;
 import org.apache.flink.runtime.executiongraph.IntermediateResult;
 import org.apache.flink.runtime.executiongraph.MarkPartitionFinishedStrategy;
 import org.apache.flink.runtime.executiongraph.TestingDefaultExecutionGraphBuilder;
+import org.apache.flink.runtime.executiongraph.utils.ExecutionUtils;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
 import org.apache.flink.runtime.jobgraph.DistributionPattern;
 import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
@@ -49,6 +50,7 @@ import org.apache.flink.runtime.scheduler.SchedulerBase;
 import org.apache.flink.runtime.shuffle.ShuffleDescriptor;
 import org.apache.flink.testutils.TestingUtils;
 import org.apache.flink.testutils.executor.TestExecutorExtension;
+import org.apache.flink.util.Preconditions;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -58,10 +60,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 
 import static org.apache.flink.configuration.JobManagerOptions.HybridPartitionDataConsumeConstraint.ONLY_FINISHED_PRODUCERS;
 import static org.apache.flink.runtime.deployment.TaskDeploymentDescriptorTestUtils.deserializeShuffleDescriptors;
+import static org.apache.flink.runtime.util.JobVertexConnectionUtils.connectNewDataSetAsInput;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -197,7 +201,7 @@ class TaskDeploymentDescriptorFactoryTest {
         final JobVertex v1 = createJobVertex("v1", PARALLELISM);
         final JobVertex v2 = createJobVertex("v2", PARALLELISM);
 
-        v2.connectNewDataSetAsInput(v1, DistributionPattern.ALL_TO_ALL, resultPartitionType);
+        connectNewDataSetAsInput(v2, v1, DistributionPattern.ALL_TO_ALL, resultPartitionType);
 
         final List<JobVertex> ordered = new ArrayList<>(Arrays.asList(v1, v2));
 
@@ -213,22 +217,32 @@ class TaskDeploymentDescriptorFactoryTest {
         final JobVertex producer = createJobVertex("v1", PARALLELISM);
         final JobVertex consumer = createJobVertex("v2", PARALLELISM);
 
-        consumer.connectNewDataSetAsInput(
-                producer, DistributionPattern.ALL_TO_ALL, ResultPartitionType.HYBRID_FULL);
+        connectNewDataSetAsInput(
+                consumer,
+                producer,
+                DistributionPattern.ALL_TO_ALL,
+                ResultPartitionType.HYBRID_FULL);
 
         JobGraph jobGraph = JobGraphTestUtils.batchJobGraph(producer, consumer);
+
         SchedulerBase scheduler =
                 new DefaultSchedulerBuilder(
                                 jobGraph,
-                                ComponentMainThreadExecutorServiceAdapter.forMainThread(),
+                                ComponentMainThreadExecutorServiceAdapter.forSingleThreadExecutor(
+                                        EXECUTOR_RESOURCE.getExecutor()),
                                 EXECUTOR_RESOURCE.getExecutor())
                         .setHybridPartitionDataConsumeConstraint(ONLY_FINISHED_PRODUCERS)
                         .buildAdaptiveBatchJobScheduler();
-        scheduler.startScheduling();
+        CompletableFuture.runAsync(scheduler::startScheduling, EXECUTOR_RESOURCE.getExecutor())
+                .join();
+        // Barrier: ensure the async vertex-initialization action queued inside startScheduling
+        // has completed before we access getTaskVertices().
+        CompletableFuture.runAsync(() -> {}, EXECUTOR_RESOURCE.getExecutor()).join();
         ExecutionGraph executionGraph = scheduler.getExecutionGraph();
-        return Tuple2.of(
-                executionGraph.getJobVertex(producer.getID()),
-                executionGraph.getJobVertex(consumer.getID()));
+        ExecutionJobVertex producerVertex =
+                Preconditions.checkNotNull(executionGraph.getJobVertex(producer.getID()));
+        ExecutionUtils.waitForTaskDeploymentDescriptorsCreation(producerVertex.getTaskVertices());
+        return Tuple2.of(producerVertex, executionGraph.getJobVertex(consumer.getID()));
     }
 
     // ============== Utils ==============

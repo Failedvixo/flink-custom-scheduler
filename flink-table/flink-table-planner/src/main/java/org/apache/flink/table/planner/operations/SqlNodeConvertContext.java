@@ -18,7 +18,9 @@
 
 package org.apache.flink.table.planner.operations;
 
+import org.apache.flink.table.api.TableConfig;
 import org.apache.flink.table.catalog.CatalogManager;
+import org.apache.flink.table.planner.calcite.FlinkCalciteSqlValidator;
 import org.apache.flink.table.planner.calcite.FlinkPlannerImpl;
 import org.apache.flink.table.planner.calcite.SqlToRexConverter;
 import org.apache.flink.table.planner.operations.converters.SqlNodeConverter;
@@ -35,13 +37,14 @@ import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.dialect.AnsiSqlDialect;
 import org.apache.calcite.sql.parser.SqlParser;
-import org.apache.calcite.sql.validate.SqlValidator;
 
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+
+import static org.apache.flink.table.planner.utils.ShortcutUtils.unwrapTableConfig;
 
 /** An implementation of {@link SqlNodeConverter.ConvertContext}. */
 public class SqlNodeConvertContext implements SqlNodeConverter.ConvertContext {
@@ -55,13 +58,23 @@ public class SqlNodeConvertContext implements SqlNodeConverter.ConvertContext {
     }
 
     @Override
-    public SqlValidator getSqlValidator() {
+    public TableConfig getTableConfig() {
+        return unwrapTableConfig(flinkPlanner.cluster());
+    }
+
+    @Override
+    public FlinkCalciteSqlValidator getSqlValidator() {
         return flinkPlanner.getOrCreateSqlValidator();
     }
 
     @Override
     public CatalogManager getCatalogManager() {
         return catalogManager;
+    }
+
+    @Override
+    public FlinkPlannerImpl getFlinkPlanner() {
+        return flinkPlanner;
     }
 
     @Override

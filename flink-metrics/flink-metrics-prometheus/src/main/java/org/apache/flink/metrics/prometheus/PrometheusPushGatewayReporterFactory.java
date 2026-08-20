@@ -35,11 +35,11 @@ import java.util.Properties;
 
 import static org.apache.flink.metrics.prometheus.PrometheusPushGatewayReporterOptions.DELETE_ON_SHUTDOWN;
 import static org.apache.flink.metrics.prometheus.PrometheusPushGatewayReporterOptions.GROUPING_KEY;
-import static org.apache.flink.metrics.prometheus.PrometheusPushGatewayReporterOptions.HOST;
 import static org.apache.flink.metrics.prometheus.PrometheusPushGatewayReporterOptions.HOST_URL;
 import static org.apache.flink.metrics.prometheus.PrometheusPushGatewayReporterOptions.JOB_NAME;
-import static org.apache.flink.metrics.prometheus.PrometheusPushGatewayReporterOptions.PORT;
+import static org.apache.flink.metrics.prometheus.PrometheusPushGatewayReporterOptions.PASSWORD;
 import static org.apache.flink.metrics.prometheus.PrometheusPushGatewayReporterOptions.RANDOM_JOB_NAME_SUFFIX;
+import static org.apache.flink.metrics.prometheus.PrometheusPushGatewayReporterOptions.USERNAME;
 
 /** {@link MetricReporterFactory} for {@link PrometheusPushGatewayReporter}. */
 public class PrometheusPushGatewayReporterFactory implements MetricReporterFactory {
@@ -50,8 +50,6 @@ public class PrometheusPushGatewayReporterFactory implements MetricReporterFacto
     @Override
     public PrometheusPushGatewayReporter createMetricReporter(Properties properties) {
         MetricConfig metricConfig = (MetricConfig) properties;
-        String host = metricConfig.getString(HOST.key(), HOST.defaultValue());
-        int port = metricConfig.getInteger(PORT.key(), PORT.defaultValue());
         String configuredJobName = metricConfig.getString(JOB_NAME.key(), JOB_NAME.defaultValue());
         boolean randomSuffix =
                 metricConfig.getBoolean(
@@ -63,18 +61,10 @@ public class PrometheusPushGatewayReporterFactory implements MetricReporterFacto
                 parseGroupingKey(
                         metricConfig.getString(GROUPING_KEY.key(), GROUPING_KEY.defaultValue()));
 
-        String hostUrlConfig = metricConfig.getString(HOST_URL.key(), HOST_URL.defaultValue());
+        String hostUrl = metricConfig.getString(HOST_URL.key(), HOST_URL.defaultValue());
 
-        final String hostUrl;
-        if (!StringUtils.isNullOrWhitespaceOnly(hostUrlConfig)) {
-            hostUrl = hostUrlConfig;
-        } else {
-            if (StringUtils.isNullOrWhitespaceOnly(host) || port < 1) {
-                throw new IllegalArgumentException(
-                        "Invalid host/port configuration. Host: " + host + " Port: " + port);
-            } else {
-                hostUrl = "http://" + host + ":" + port;
-            }
+        if (StringUtils.isNullOrWhitespaceOnly(hostUrl)) {
+            throw new IllegalArgumentException("hostUrl must not be null or empty");
         }
 
         String jobName = configuredJobName;
@@ -82,17 +72,36 @@ public class PrometheusPushGatewayReporterFactory implements MetricReporterFacto
             jobName = configuredJobName + new AbstractID();
         }
 
-        LOG.info(
-                "Configured PrometheusPushGatewayReporter with {hostUrl:{}, jobName:{}, randomJobNameSuffix:{}, deleteOnShutdown:{}, groupingKey:{}}",
-                hostUrl,
-                jobName,
-                randomSuffix,
-                deleteOnShutdown,
-                groupingKey);
+        String username = metricConfig.getString(USERNAME.key(), USERNAME.defaultValue());
+        String password = metricConfig.getString(PASSWORD.key(), PASSWORD.defaultValue());
+
+        if ((username != null && password == null) || (username == null && password != null)) {
+            LOG.warn(
+                    "Both username and password must be configured to enable HTTP Basic Authentication. "
+                            + "Currently only {} is configured, Basic Auth will be disabled.",
+                    username != null ? "username" : "password");
+        }
 
         try {
-            return new PrometheusPushGatewayReporter(
-                    new URL(hostUrl), jobName, groupingKey, deleteOnShutdown);
+            PrometheusPushGatewayReporter reporter =
+                    new PrometheusPushGatewayReporter(
+                            new URL(hostUrl),
+                            jobName,
+                            groupingKey,
+                            deleteOnShutdown,
+                            username,
+                            password);
+
+            LOG.info(
+                    "Configured PrometheusPushGatewayReporter with {hostUrl:{}, jobName:{}, randomJobNameSuffix:{}, deleteOnShutdown:{}, groupingKey:{}, basicAuth:{}}",
+                    hostUrl,
+                    jobName,
+                    randomSuffix,
+                    deleteOnShutdown,
+                    groupingKey,
+                    reporter.basicAuthEnabled);
+
+            return reporter;
         } catch (MalformedURLException e) {
             throw new RuntimeException(e);
         }

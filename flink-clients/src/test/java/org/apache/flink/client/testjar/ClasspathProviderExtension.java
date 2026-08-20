@@ -43,6 +43,8 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 /**
  * {@code ClasspathProviderExtension} offers utility methods for creating a classpath based on
  * actual jars.
@@ -57,6 +59,9 @@ public class ClasspathProviderExtension implements BeforeEachCallback, AfterEach
             Paths.get("target", "flink-clients-test-utils-job-jar.jar");
     private static final Path JOB_LIB_JAR_PATH =
             Paths.get("target", "flink-clients-test-utils-job-lib-jar.jar");
+
+    private static final Path ADDITIONAL_ARTIFACT_JAR_PATH =
+            Paths.get("target", "flink-clients-test-utils-additional-artifact-jar.jar");
 
     protected File temporaryFolder = org.assertj.core.util.Files.newTemporaryFolder();
 
@@ -89,6 +94,24 @@ public class ClasspathProviderExtension implements BeforeEachCallback, AfterEach
                 JOB_JAR_PATH.toFile());
     }
 
+    public static ClasspathProviderExtension createWithSymlink() {
+        return new ClasspathProviderExtension(
+                "_user_dir_with_symlink",
+                directory -> {
+                    final File actualUsrLib = new File(directory, "usrlib");
+                    final File symLinkDir = new File(directory, "symlink");
+                    assertThat(actualUsrLib.mkdirs()).isTrue();
+                    assertThat(symLinkDir.mkdirs()).isTrue();
+
+                    copyJar(JOB_LIB_JAR_PATH, symLinkDir);
+                    copyJar(JOB_JAR_PATH, actualUsrLib);
+
+                    Files.createSymbolicLink(
+                            actualUsrLib.toPath().resolve("symlink"), symLinkDir.toPath());
+                },
+                JOB_JAR_PATH.toFile());
+    }
+
     public static ClasspathProviderExtension createWithMultipleEntryClasses() {
         return new ClasspathProviderExtension(
                 "_user_dir_with_multiple_entry_classes",
@@ -108,6 +131,14 @@ public class ClasspathProviderExtension implements BeforeEachCallback, AfterEach
                 "_user_dir_with_testjob_entry_class_only",
                 directory -> copyJar(TEST_JOB_JAR_PATH, directory),
                 TEST_JOB_JAR_PATH.toFile());
+    }
+
+    public static ClasspathProviderExtension createWithAdditionalArtifact() {
+        return new ClasspathProviderExtension(
+                "_user_dir_with_additional_artifact",
+                directory -> copyJar(ADDITIONAL_ARTIFACT_JAR_PATH, directory),
+                ADDITIONAL_ARTIFACT_JAR_PATH.toFile(),
+                null);
     }
 
     public static String[] parametersForTestJob(String strValue) {

@@ -18,7 +18,7 @@
 
 package org.apache.flink.test.checkpointing;
 
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.JobManagerOptions;
@@ -31,12 +31,13 @@ import org.apache.flink.runtime.minicluster.MiniClusterConfiguration;
 import org.apache.flink.runtime.state.StateSnapshotContext;
 import org.apache.flink.runtime.testutils.CommonTestUtils;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
-import org.apache.flink.streaming.api.functions.source.RichSourceFunction;
+import org.apache.flink.streaming.api.functions.sink.legacy.RichSinkFunction;
+import org.apache.flink.streaming.api.functions.source.legacy.RichSourceFunction;
 import org.apache.flink.streaming.api.graph.StreamGraph;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.streaming.util.RestartStrategyUtils;
 import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.testutils.junit.SharedObjectsExtension;
 import org.apache.flink.testutils.junit.SharedReference;
@@ -46,6 +47,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -55,7 +57,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Tests an immediate checkpoint should be triggered right after all tasks reached the end of data.
  */
-public class CheckpointAfterAllTasksFinishedITCase extends AbstractTestBase {
+class CheckpointAfterAllTasksFinishedITCase extends AbstractTestBase {
     private static final int SMALL_SOURCE_NUM_RECORDS = 20;
     private static final int BIG_SOURCE_NUM_RECORDS = 100;
 
@@ -69,7 +71,7 @@ public class CheckpointAfterAllTasksFinishedITCase extends AbstractTestBase {
     private final SharedObjectsExtension sharedObjects = SharedObjectsExtension.create();
 
     @BeforeEach
-    public void setUp() {
+    void setUp() {
         env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(4);
         smallResult = sharedObjects.add(new CopyOnWriteArrayList<>());
@@ -79,9 +81,11 @@ public class CheckpointAfterAllTasksFinishedITCase extends AbstractTestBase {
     }
 
     @Test
-    public void testImmediateCheckpointing() throws Exception {
-        env.setRestartStrategy(RestartStrategies.noRestart());
-        env.enableCheckpointing(Long.MAX_VALUE - 1);
+    void testImmediateCheckpointing() throws Exception {
+        RestartStrategyUtils.configureNoRestartStrategy(env);
+        // Checkpointing is enabled with a large interval, and no checkpoints will be triggered.
+        env.enableCheckpointing(
+                Duration.ofNanos(Long.MAX_VALUE) /* max duration allowed by FLINK */.toMillis());
         StreamGraph streamGraph = getStreamGraph(env, false, false);
         env.execute(streamGraph);
         assertThat(smallResult.get().size()).isEqualTo(SMALL_SOURCE_NUM_RECORDS);
@@ -89,7 +93,7 @@ public class CheckpointAfterAllTasksFinishedITCase extends AbstractTestBase {
     }
 
     @Test
-    public void testRestoreAfterSomeTasksFinished() throws Exception {
+    void testRestoreAfterSomeTasksFinished() throws Exception {
         final MiniClusterConfiguration cfg =
                 new MiniClusterConfiguration.Builder()
                         .withRandomPorts()
@@ -99,7 +103,7 @@ public class CheckpointAfterAllTasksFinishedITCase extends AbstractTestBase {
         try (MiniCluster miniCluster = new MiniCluster(cfg)) {
             miniCluster.start();
 
-            env.setRestartStrategy(RestartStrategies.noRestart());
+            RestartStrategyUtils.configureNoRestartStrategy(env);
             env.enableCheckpointing(100);
             JobGraph jobGraph = getStreamGraph(env, true, false).getJobGraph();
             miniCluster.submitJob(jobGraph).get();
@@ -120,7 +124,10 @@ public class CheckpointAfterAllTasksFinishedITCase extends AbstractTestBase {
                             .get();
             bigResult.get().clear();
 
-            env.enableCheckpointing(Long.MAX_VALUE - 1);
+            // Checkpointing is enabled with a large interval, and no checkpoints will be triggered.
+            env.enableCheckpointing(
+                    Duration.ofNanos(Long.MAX_VALUE) /* max duration allowed by FLINK */
+                            .toMillis());
             JobGraph restoredJobGraph = getStreamGraph(env, true, false).getJobGraph();
             restoredJobGraph.setSavepointRestoreSettings(
                     SavepointRestoreSettings.forPath(savepointPath, false));
@@ -129,8 +136,8 @@ public class CheckpointAfterAllTasksFinishedITCase extends AbstractTestBase {
             IntegerStreamSource.latch.countDown();
 
             miniCluster.requestJobResult(restoredJobGraph.getJobID()).get();
-            assertThat(smallResult.get().size()).isEqualTo(SMALL_SOURCE_NUM_RECORDS);
-            assertThat(bigResult.get().size()).isEqualTo(BIG_SOURCE_NUM_RECORDS);
+            assertThat(smallResult.get()).hasSize(SMALL_SOURCE_NUM_RECORDS);
+            assertThat(bigResult.get()).hasSize(BIG_SOURCE_NUM_RECORDS);
         }
     }
 
@@ -145,9 +152,9 @@ public class CheckpointAfterAllTasksFinishedITCase extends AbstractTestBase {
      * this time a full-strategy failover happens.
      */
     @Test
-    public void testFailoverAfterSomeTasksFinished() throws Exception {
+    void testFailoverAfterSomeTasksFinished() throws Exception {
         final Configuration config = new Configuration();
-        config.setString(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, "full");
+        config.set(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, "full");
 
         final MiniClusterConfiguration cfg =
                 new MiniClusterConfiguration.Builder()
@@ -178,9 +185,14 @@ public class CheckpointAfterAllTasksFinishedITCase extends AbstractTestBase {
             // However, in a few cases, a checkpoint happens to be triggered before failover, and
             // the source would not restart so the sink will only receive SMALL_SOURCE_NUM_RECORDS
             // records.
-            assertThat(smallResult.get().size())
-                    .isIn(SMALL_SOURCE_NUM_RECORDS, SMALL_SOURCE_NUM_RECORDS * 2);
-            assertThat(bigResult.get().size()).isEqualTo(BIG_SOURCE_NUM_RECORDS);
+            assertThat(smallResult.get())
+                    .satisfiesAnyOf(
+                            smallResultList ->
+                                    assertThat(smallResultList).hasSize(SMALL_SOURCE_NUM_RECORDS),
+                            smallResultList ->
+                                    assertThat(smallResultList)
+                                            .hasSize(SMALL_SOURCE_NUM_RECORDS * 2));
+            assertThat(bigResult.get()).hasSize(BIG_SOURCE_NUM_RECORDS);
         }
     }
 
@@ -282,8 +294,8 @@ public class CheckpointAfterAllTasksFinishedITCase extends AbstractTestBase {
         }
 
         @Override
-        public void open(Configuration parameters) throws Exception {
-            super.open(parameters);
+        public void open(OpenContext openContext) throws Exception {
+            super.open(openContext);
         }
 
         @Override

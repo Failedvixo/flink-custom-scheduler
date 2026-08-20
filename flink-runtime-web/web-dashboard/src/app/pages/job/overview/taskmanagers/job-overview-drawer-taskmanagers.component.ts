@@ -32,9 +32,8 @@ import {
   JobOverviewModuleConfig
 } from '@flink-runtime-web/pages/job/overview/job-overview.config';
 import { JobService } from '@flink-runtime-web/services';
-import { typeDefinition } from '@flink-runtime-web/utils/strong-type';
-import { NzTableModule } from 'ng-zorro-antd/table';
-import { NzTableSortFn } from 'ng-zorro-antd/table/src/table.types';
+import { typeDefinition } from '@flink-runtime-web/utils';
+import { NzTableModule, NzTableSortFn } from 'ng-zorro-antd/table';
 
 import { JobLocalService } from '../../job-local.service';
 
@@ -57,17 +56,16 @@ function createSortFn(
     HumanizeDatePipe,
     HumanizeDurationPipe,
     DynamicHostComponent
-  ],
-  standalone: true
+  ]
 })
 export class JobOverviewDrawerTaskmanagersComponent implements OnInit, OnDestroy {
-  public readonly trackByHost = (_: number, node: VertexTaskManagerDetail): string => node.host;
+  public readonly trackByEndpoint = (_: number, node: VertexTaskManagerDetail): string => node.endpoint;
 
   public readonly sortReadBytesFn = createSortFn(item => item.metrics?.['read-bytes']);
   public readonly sortReadRecordsFn = createSortFn(item => item.metrics?.['read-records']);
   public readonly sortWriteBytesFn = createSortFn(item => item.metrics?.['write-bytes']);
   public readonly sortWriteRecordsFn = createSortFn(item => item.metrics?.['write-records']);
-  public readonly sortHostFn = createSortFn(item => item.host);
+  public readonly sortEndpointFn = createSortFn(item => item.endpoint);
   public readonly sortStartTimeFn = createSortFn(item => item['start-time']);
   public readonly sortDurationFn = createSortFn(item => item.duration);
   public readonly sortEndTimeFn = createSortFn(item => item['end-time']);

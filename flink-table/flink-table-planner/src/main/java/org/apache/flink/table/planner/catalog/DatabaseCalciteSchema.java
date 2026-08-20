@@ -69,6 +69,13 @@ class DatabaseCalciteSchema extends FlinkSchema {
     }
 
     @Override
+    public CatalogSchemaModel getModel(String modelName) {
+        final ObjectIdentifier identifier =
+                ObjectIdentifier.of(catalogName, databaseName, modelName);
+        return catalogManager.getModel(identifier).map(CatalogSchemaModel::new).orElse(null);
+    }
+
+    @Override
     public Table getTable(String tableName) {
         final ObjectIdentifier identifier =
                 ObjectIdentifier.of(catalogName, databaseName, tableName);
@@ -90,7 +97,7 @@ class DatabaseCalciteSchema extends FlinkSchema {
         return table.map(
                         lookupResult ->
                                 new CatalogSchemaTable(
-                                        lookupResult,
+                                        lookupResult.toCatalogTable(),
                                         getStatistic(lookupResult, identifier),
                                         isStreamingMode))
                 .orElse(null);
@@ -102,6 +109,7 @@ class DatabaseCalciteSchema extends FlinkSchema {
                 contextResolvedTable.getResolvedTable();
         switch (resolvedBaseTable.getTableKind()) {
             case TABLE:
+            case MATERIALIZED_TABLE:
                 return FlinkStatistic.unknown(resolvedBaseTable.getResolvedSchema())
                         .tableStats(extractTableStats(contextResolvedTable, identifier))
                         .build();
@@ -132,6 +140,11 @@ class DatabaseCalciteSchema extends FlinkSchema {
                             tablePath.getObjectName()),
                     e);
         }
+    }
+
+    @Override
+    public Set<String> getModelNames() {
+        return catalogManager.listModels(catalogName, databaseName);
     }
 
     @Override

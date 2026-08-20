@@ -18,26 +18,17 @@
 
 package org.apache.flink.table.planner.calcite;
 
-import org.apache.flink.shaded.guava31.com.google.common.collect.ImmutableList;
-
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexCall;
+import org.apache.calcite.rex.RexFieldAccess;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.rex.RexShuttle;
 import org.apache.calcite.rex.RexUtil;
-import org.apache.calcite.runtime.FlatLists;
-import org.apache.calcite.sql.fun.SqlStdOperatorTable;
-import org.apache.calcite.sql.type.SqlTypeUtil;
-import org.apache.calcite.tools.RelBuilder;
-import org.apache.calcite.util.Sarg;
+import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.util.TimestampString;
-import org.apache.calcite.util.Util;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.stream.Collectors;
 
 /** A slim extension over a {@link RexBuilder}. See the overridden methods for more explanation. */
 public final class FlinkRexBuilder extends RexBuilder {
@@ -54,13 +45,8 @@ public final class FlinkRexBuilder extends RexBuilder {
      */
     @Override
     public RexNode makeFieldAccess(RexNode expr, String fieldName, boolean caseSensitive) {
-        RexNode field = super.makeFieldAccess(expr, fieldName, caseSensitive);
-        if (expr.getType().isNullable() && !field.getType().isNullable()) {
-            return makeCast(
-                    typeFactory.createTypeWithNullability(field.getType(), true), field, true);
-        }
-
-        return field;
+        final RexNode field = super.makeFieldAccess(expr, fieldName, caseSensitive);
+        return makeFieldAccess(expr, field);
     }
 
     /**
@@ -72,13 +58,8 @@ public final class FlinkRexBuilder extends RexBuilder {
      */
     @Override
     public RexNode makeFieldAccess(RexNode expr, int i) {
-        RexNode field = super.makeFieldAccess(expr, i);
-        if (expr.getType().isNullable() && !field.getType().isNullable()) {
-            return makeCast(
-                    typeFactory.createTypeWithNullability(field.getType(), true), field, true);
-        }
-
-        return field;
+        final RexNode field = super.makeFieldAccess(expr, i);
+        return makeFieldAccess(expr, field);
     }
 
     /**
@@ -112,118 +93,87 @@ public final class FlinkRexBuilder extends RexBuilder {
     }
 
     /**
-     * Convert the conditions into the {@code IN} and fix [CALCITE-4888]: Unexpected {@link RexNode}
-     * when call {@link RelBuilder#in} to create an {@code IN} predicate with a list of varchar
-     * literals which have different length in {@link RexBuilder#makeIn}.
+     * Adjust the nullability of the nested column based on the nullability of the enclosing type.
+     * However, if there is former nullability {@code CAST} present then it will be dropped and
+     * replaced with a new one (if needed). For instance if there is a table
      *
-     * <p>The bug is because the origin implementation doesn't take {@link
-     * FlinkTypeSystem#shouldConvertRaggedUnionTypesToVarying} into consideration. When this is
-     * true, the behaviour should not padding char. Please see
-     * https://issues.apache.org/jira/browse/CALCITE-4590 and
-     * https://issues.apache.org/jira/browse/CALCITE-2321. Please refer to {@code
-     * org.apache.calcite.rex.RexSimplify.RexSargBuilder#getType} for the correct behaviour.
+     * <pre>{@code
+     * CREATE TABLE MyTable (
+     * `field1` ROW<`data` ROW<`nested` ROW<`trId` STRING>>NOT NULL>
+     * WITH ('connector' = 'datagen')
+     * }</pre>
      *
-     * <p>Once CALCITE-4888 is fixed, this method (and related methods) should be removed.
+     * <p>and then there is a SQL query
+     *
+     * <pre>{@code
+     * SELECT `field1`.`data`.`nested`.`trId` AS transactionId FROM MyTable
+     * }</pre>
+     *
+     * <p>The {@code SELECT} picks a nested field only. In this case it should go step by step
+     * checking each level.
+     *
+     * <ol>
+     *   <li>Looking at {@code `field1`} type it is nullable, then no changes.
+     *   <li>{@code `field1`.`data`} is {@code NOT NULL}, however keeping in mind that enclosing
+     *       type @{code `field1`} is nullable then need to change nullability with {@code CAST}
+     *   <li>{@code `field1`.`data`.`nested`} is nullable that means that in this case no need for
+     *       extra {@code CAST} inserted in previous step, so it will be dropped.
+     *   <li>{@code `field1`.`data`.`nested`.`trId`} is also nullable, so no changes.
+     * </ol>
      */
-    @Override
-    @SuppressWarnings("unchecked")
-    public RexNode makeIn(RexNode arg, List<? extends RexNode> ranges) {
-        if (areAssignable(arg, ranges)) {
-            // Fix calcite doesn't check literal whether is NULL here
-            List<RexNode> rangeWithoutNull = new ArrayList<>();
-            boolean containsNull = false;
-            for (RexNode node : ranges) {
-                if (isNull(node)) {
-                    containsNull = true;
-                } else {
-                    rangeWithoutNull.add(node);
-                }
-            }
-            final Sarg sarg = toSarg(Comparable.class, rangeWithoutNull, containsNull);
-            if (sarg != null) {
-                List<RelDataType> distinctTypes =
-                        Util.distinctList(
-                                ranges.stream().map(RexNode::getType).collect(Collectors.toList()));
-                RelDataType commonType = getTypeFactory().leastRestrictive(distinctTypes);
-                return makeCall(
-                        SqlStdOperatorTable.SEARCH,
-                        arg,
-                        makeSearchArgumentLiteral(sarg, commonType));
-            }
-        }
-        return RexUtil.composeDisjunction(
-                this,
-                ranges.stream()
-                        .map(r -> makeCall(SqlStdOperatorTable.EQUALS, arg, r))
-                        .collect(Util.toImmutableList()));
-    }
+    private RexNode makeFieldAccess(RexNode expr, RexNode field) {
+        final RexNode fieldWithRemovedCast = removeCastNullableFromFieldAccess(field);
+        final boolean nullabilityShouldChange =
+                field.getType().isNullable() != fieldWithRemovedCast.getType().isNullable()
+                        || expr.getType().isNullable() && !field.getType().isNullable();
 
-    private boolean isNull(RexNode node) {
-        if (node instanceof RexLiteral) {
-            return ((RexLiteral) node).isNull();
+        if (nullabilityShouldChange) {
+            return makeCast(
+                    typeFactory.createTypeWithNullability(field.getType(), true),
+                    fieldWithRemovedCast,
+                    true,
+                    false);
         }
-        return false;
-    }
 
-    /** Copied from the {@link RexBuilder} to fix the {@link RexBuilder#makeIn}. */
-    private boolean areAssignable(RexNode arg, List<? extends RexNode> bounds) {
-        for (RexNode bound : bounds) {
-            if (!SqlTypeUtil.inSameFamily(arg.getType(), bound.getType())
-                    && !(arg.getType().isStruct() && bound.getType().isStruct())) {
-                return false;
-            }
-        }
-        return true;
+        return expr.getType().isNullable() && fieldWithRemovedCast.getType().isNullable()
+                ? fieldWithRemovedCast
+                : field;
     }
 
     /**
-     * Converts a list of expressions to a search argument, or returns null if not possible.
-     *
-     * <p>Copied from the {@link RexBuilder} to fix the {@link RexBuilder#makeIn}.
+     * {@link FlinkRexBuilder#makeFieldAccess} will adjust nullability based on nullability of the
+     * enclosing type. However, it might be a deeply nested column and for every step {@link
+     * FlinkRexBuilder#makeFieldAccess} will try to insert a cast. This method will remove previous
+     * cast in order to keep only one.
      */
-    @SuppressWarnings("UnstableApiUsage")
-    private static <C extends Comparable<C>> Sarg<C> toSarg(
-            Class<C> clazz, List<? extends RexNode> ranges, boolean containsNull) {
-        if (ranges.isEmpty()) {
-            // Cannot convert an empty list to a Sarg (by this interface, at least)
-            // because we use the type of the first element.
-            return null;
+    private RexNode removeCastNullableFromFieldAccess(RexNode rexFieldAccess) {
+        if (!(rexFieldAccess instanceof RexFieldAccess)) {
+            return rexFieldAccess;
         }
-        final com.google.common.collect.RangeSet<C> rangeSet =
-                com.google.common.collect.TreeRangeSet.create();
-        for (RexNode range : ranges) {
-            final C value = toComparable(clazz, range);
-            if (value == null) {
-                return null;
-            }
-            rangeSet.add(com.google.common.collect.Range.singleton(value));
+        RexNode rexNode = rexFieldAccess;
+        while (rexNode instanceof RexFieldAccess) {
+            rexNode = ((RexFieldAccess) rexNode).getReferenceExpr();
         }
-        return Sarg.of(containsNull, rangeSet);
-    }
-
-    /** Copied from the {@link RexBuilder} to fix the {@link RexBuilder#makeIn}. */
-    @SuppressWarnings("rawtypes")
-    private static <C extends Comparable<C>> C toComparable(Class<C> clazz, RexNode point) {
-        switch (point.getKind()) {
-            case LITERAL:
-                final RexLiteral literal = (RexLiteral) point;
-                return literal.getValueAs(clazz);
-
-            case ROW:
-                final RexCall call = (RexCall) point;
-                final ImmutableList.Builder<Comparable> b = ImmutableList.builder();
-                for (RexNode operand : call.operands) {
-                    //noinspection unchecked
-                    final Comparable value = toComparable(Comparable.class, operand);
-                    if (value == null) {
-                        return null; // not a constant value
+        if (rexNode.getKind() != SqlKind.CAST) {
+            return rexFieldAccess;
+        }
+        RexShuttle visitor =
+                new RexShuttle() {
+                    @Override
+                    public RexNode visitCall(final RexCall call) {
+                        if (call.getKind() == SqlKind.CAST
+                                && !call.operands.get(0).getType().isNullable()
+                                && call.getType().isNullable()
+                                && call.getOperands()
+                                        .get(0)
+                                        .getType()
+                                        .getFieldList()
+                                        .equals(call.getType().getFieldList())) {
+                            return RexUtil.removeCast(call);
+                        }
+                        return call;
                     }
-                    b.add(value);
-                }
-                return clazz.cast(FlatLists.ofComparable(b.build()));
-
-            default:
-                return null; // not a constant value
-        }
+                };
+        return RexUtil.apply(visitor, new RexNode[] {rexFieldAccess})[0];
     }
 }

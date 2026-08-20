@@ -56,13 +56,13 @@ public abstract class MaxAggFunction extends DeclarativeAggregateFunction {
 
     @Override
     public Expression[] initialValuesExpressions() {
-        return new Expression[] {/* max = */ nullOf(getResultType())};
+        return new Expression[] {/* max= */ nullOf(getResultType())};
     }
 
     @Override
     public Expression[] accumulateExpressions() {
         return new Expression[] {
-            /* max = */ ifThenElse(
+            /* max= */ ifThenElse(
                     isNull(operand(0)),
                     max,
                     ifThenElse(
@@ -86,7 +86,7 @@ public abstract class MaxAggFunction extends DeclarativeAggregateFunction {
     @Override
     public Expression[] mergeExpressions() {
         return new Expression[] {
-            /* max = */ ifThenElse(
+            /* max= */ ifThenElse(
                     isNull(mergeOperand(max)),
                     max,
                     ifThenElse(
@@ -191,9 +191,15 @@ public abstract class MaxAggFunction extends DeclarativeAggregateFunction {
 
     /** Built-in Time Max aggregate function. */
     public static class TimeMaxAggFunction extends MaxAggFunction {
+        private final TimeType type;
+
+        public TimeMaxAggFunction(TimeType type) {
+            this.type = type;
+        }
+
         @Override
         public DataType getResultType() {
-            return DataTypes.TIME(TimeType.DEFAULT_PRECISION);
+            return DataTypes.TIME(type.getPrecision());
         }
     }
 

@@ -18,7 +18,7 @@
 package org.apache.flink.table.planner.plan.nodes.physical.stream
 
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory
-import org.apache.flink.table.planner.plan.nodes.calcite.WatermarkAssigner
+import org.apache.flink.table.planner.plan.nodes.calcite.{WatermarkAssigner, WatermarkUtils}
 import org.apache.flink.table.planner.plan.nodes.exec.{ExecNode, InputProperty}
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWatermarkAssigner
 import org.apache.flink.table.planner.plan.utils.RelExplainUtil.preferExpressionFormat
@@ -26,7 +26,10 @@ import org.apache.flink.table.planner.utils.ShortcutUtils.unwrapTableConfig
 
 import org.apache.calcite.plan.{RelOptCluster, RelTraitSet}
 import org.apache.calcite.rel.{RelNode, RelWriter}
+import org.apache.calcite.rel.hint.RelHint
 import org.apache.calcite.rex.RexNode
+
+import java.util
 
 import scala.collection.JavaConversions._
 
@@ -35,9 +38,10 @@ class StreamPhysicalWatermarkAssigner(
     cluster: RelOptCluster,
     traits: RelTraitSet,
     inputRel: RelNode,
+    hints: util.List[RelHint],
     rowtimeFieldIndex: Int,
     watermarkExpr: RexNode)
-  extends WatermarkAssigner(cluster, traits, inputRel, rowtimeFieldIndex, watermarkExpr)
+  extends WatermarkAssigner(cluster, traits, inputRel, hints, rowtimeFieldIndex, watermarkExpr)
   with StreamPhysicalRel {
 
   override def requireWatermark: Boolean = false
@@ -45,9 +49,10 @@ class StreamPhysicalWatermarkAssigner(
   override def copy(
       traitSet: RelTraitSet,
       input: RelNode,
+      hints: util.List[RelHint],
       rowtime: Int,
       watermark: RexNode): RelNode = {
-    new StreamPhysicalWatermarkAssigner(cluster, traitSet, input, rowtime, watermark)
+    new StreamPhysicalWatermarkAssigner(cluster, traitSet, input, hints, rowtime, watermark)
   }
 
   /** Fully override this method to have a better display name of this RelNode. */
@@ -69,10 +74,20 @@ class StreamPhysicalWatermarkAssigner(
   override def translateToExecNode(): ExecNode[_] = {
     new StreamExecWatermarkAssigner(
       unwrapTableConfig(this),
-      watermarkExpr,
+      WatermarkUtils.simplify(cluster, watermarkExpr),
       rowtimeFieldIndex,
       InputProperty.DEFAULT,
       FlinkTypeFactory.toLogicalRowType(getRowType),
       getRelDetailedDescription)
+  }
+
+  override def withHints(hintList: util.List[RelHint]): RelNode = {
+    new StreamPhysicalWatermarkAssigner(
+      cluster,
+      traitSet,
+      input,
+      hints,
+      rowtimeFieldIndex,
+      WatermarkUtils.simplify(cluster, watermarkExpr))
   }
 }

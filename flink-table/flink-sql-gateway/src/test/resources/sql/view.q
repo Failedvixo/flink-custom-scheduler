@@ -84,17 +84,29 @@ create temporary view if not exists v2 as select * from v1;
 # test show create a temporary view
 show create view v1;
 !output
-CREATE TEMPORARY VIEW `default_catalog`.`default_database`.`v1`(`user`, `product`, `amount`, `ts`, `ptime`) as
-SELECT *
-FROM `default_catalog`.`default_database`.`orders`
+CREATE TEMPORARY VIEW `default_catalog`.`default_database`.`v1` (
+  `user`,
+  `product`,
+  `amount`,
+  `ts`,
+  `ptime`
+)
+AS SELECT `orders`.`user`, `orders`.`product`, `orders`.`amount`, `orders`.`ts`, `orders`.`ptime`
+FROM `default_catalog`.`default_database`.`orders` AS `orders`
 !ok
 
 # test show create a temporary view reference another view
 show create view v2;
 !output
-CREATE TEMPORARY VIEW `default_catalog`.`default_database`.`v2`(`user`, `product`, `amount`, `ts`, `ptime`) as
-SELECT *
-FROM `default_catalog`.`default_database`.`v1`
+CREATE TEMPORARY VIEW `default_catalog`.`default_database`.`v2` (
+  `user`,
+  `product`,
+  `amount`,
+  `ts`,
+  `ptime`
+)
+AS SELECT `v1`.`user`, `v1`.`product`, `v1`.`amount`, `v1`.`ts`, `v1`.`ptime`
+FROM `default_catalog`.`default_database`.`v1` AS `v1`
 !ok
 
 show tables;
@@ -159,9 +171,15 @@ create view permanent_v1 as select * from orders;
 # test show create a permanent view
 show create view permanent_v1;
 !output
-CREATE VIEW `default_catalog`.`default_database`.`permanent_v1`(`user`, `product`, `amount`, `ts`, `ptime`) as
-SELECT *
-FROM `default_catalog`.`default_database`.`orders`
+CREATE VIEW `default_catalog`.`default_database`.`permanent_v1` (
+  `user`,
+  `product`,
+  `amount`,
+  `ts`,
+  `ptime`
+)
+AS SELECT `orders`.`user`, `orders`.`product`, `orders`.`amount`, `orders`.`ts`, `orders`.`ptime`
+FROM `default_catalog`.`default_database`.`orders` AS `orders`
 !ok
 
 # remove permanent_v1 view

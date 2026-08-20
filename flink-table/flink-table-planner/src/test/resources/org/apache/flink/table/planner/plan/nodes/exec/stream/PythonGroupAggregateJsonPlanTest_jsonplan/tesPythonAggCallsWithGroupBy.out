@@ -2,7 +2,7 @@
   "flinkVersion" : "",
   "nodes" : [ {
     "id" : 1,
-    "type" : "stream-exec-table-source-scan_1",
+    "type" : "stream-exec-table-source-scan_2",
     "scanTableSource" : {
       "table" : {
         "identifier" : "`default_catalog`.`default_database`.`MyTable`",
@@ -20,13 +20,11 @@
             }, {
               "name" : "d",
               "dataType" : "BIGINT"
-            } ],
-            "watermarkSpecs" : [ ]
+            } ]
           },
-          "partitionKeys" : [ ],
           "options" : {
-            "connector" : "values",
-            "bounded" : "false"
+            "bounded" : "false",
+            "connector" : "values"
           }
         }
       },
@@ -41,8 +39,7 @@
       } ]
     },
     "outputType" : "ROW<`b` INT NOT NULL, `a` INT NOT NULL, `c` INT NOT NULL>",
-    "description" : "TableSourceScan(table=[[default_catalog, default_database, MyTable, project=[b, a, c], metadata=[]]], fields=[b, a, c])",
-    "inputProperties" : [ ]
+    "description" : "TableSourceScan(table=[[default_catalog, default_database, MyTable, project=[b, a, c], metadata=[]]], fields=[b, a, c])"
   }, {
     "id" : 2,
     "type" : "stream-exec-calc_1",
@@ -152,7 +149,7 @@
     "description" : "Calc(select=[CAST(b AS BIGINT) AS a, EXPR$1 AS b])"
   }, {
     "id" : 6,
-    "type" : "stream-exec-sink_1",
+    "type" : "stream-exec-sink_2",
     "configuration" : {
       "table.exec.sink.keyed-shuffle" : "AUTO",
       "table.exec.sink.not-null-enforcer" : "ERROR",
@@ -171,14 +168,12 @@
             }, {
               "name" : "b",
               "dataType" : "BIGINT"
-            } ],
-            "watermarkSpecs" : [ ]
+            } ]
           },
-          "partitionKeys" : [ ],
           "options" : {
+            "connector" : "values",
             "sink-insert-only" : "false",
-            "table-sink-class" : "DEFAULT",
-            "connector" : "values"
+            "table-sink-class" : "DEFAULT"
           }
         }
       }

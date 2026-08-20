@@ -49,11 +49,6 @@ dataStream.map(new MapFunction<Integer, Integer>() {
 });
 ```
 {{< /tab >}}
-{{< tab "Scala">}}
-```scala
-dataStream.map { x => x * 2 }
-```
-{{< /tab >}}
 {{< tab "Python" >}}
 ```python
 data_stream = env.from_collection(collection=[1, 2, 3, 4, 5])
@@ -81,11 +76,6 @@ dataStream.flatMap(new FlatMapFunction<String, String>() {
 });
 ```
 {{< /tab >}}
-{{< tab "Scala">}}
-```scala
-dataStream.flatMap { str => str.split(" ") }
-```
-{{< /tab >}}
 {{< tab "Python" >}}
 ```python
 data_stream = env.from_collection(collection=['hello apache flink', 'streaming compute'])
@@ -110,11 +100,6 @@ dataStream.filter(new FilterFunction<Integer>() {
 });
 ```
 {{< /tab >}}
-{{< tab "Scala">}}
-```scala
-dataStream.filter { _ != 0 }
-```
-{{< /tab >}}
 {{< tab "Python" >}}
 ```python
 data_stream = env.from_collection(collection=[0, 1, 2, 3, 4, 5])
@@ -133,12 +118,6 @@ data_stream.filter(lambda x: x != 0)
 ```java
 dataStream.keyBy(value -> value.getSomeKey());
 dataStream.keyBy(value -> value.f0);
-```
-{{< /tab >}}
-{{< tab "Scala">}}
-```scala
-dataStream.keyBy(_.someKey)
-dataStream.keyBy(_._1)
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
@@ -175,11 +154,6 @@ keyedStream.reduce(new ReduceFunction<Integer>() {
 });
 ```
 {{< /tab >}}
-{{< tab "Scala">}}
-```scala
-keyedStream.reduce { _ + _ }
-```
-{{< /tab >}}
 {{< tab "Python" >}}
 ```python
 data_stream = env.from_collection(collection=[(1, 'a'), (2, 'a'), (3, 'a'), (4, 'b')], type_info=Types.TUPLE([Types.INT(), Types.STRING()]))
@@ -198,19 +172,12 @@ data_stream.key_by(lambda x: x[1]).reduce(lambda a, b: (a[0] + b[0], b[1]))
 ```java
 dataStream
   .keyBy(value -> value.f0)
-  .window(TumblingEventTimeWindows.of(Time.seconds(5))); 
-```
-{{< /tab >}}
-{{< tab "Scala">}}
-```scala
-dataStream
-  .keyBy(_._1)
-  .window(TumblingEventTimeWindows.of(Time.seconds(5))) 
+  .window(TumblingEventTimeWindows.of(Duration.ofSeconds(5))); 
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
 ```python
-data_stream.key_by(lambda x: x[1]).window(TumblingEventTimeWindows.of(Time.seconds(5)))
+data_stream.key_by(lambda x: x[1]).window(TumblingEventTimeWindows.of(Duration.ofSeconds(5)))
 ```
 {{< /tab >}}
 {{< /tabs>}}
@@ -228,18 +195,12 @@ data_stream.key_by(lambda x: x[1]).window(TumblingEventTimeWindows.of(Time.secon
 {{< tab "Java">}}
 ```java
 dataStream
-  .windowAll(TumblingEventTimeWindows.of(Time.seconds(5)));
-```
-{{< /tab >}}
-{{< tab "Scala">}}
-```scala
-dataStream
-  .windowAll(TumblingEventTimeWindows.of(Time.seconds(5)))
+  .windowAll(TumblingEventTimeWindows.of(Duration.ofSeconds(5)));
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
 ```python
-data_stream.window_all(TumblingEventTimeWindows.of(Time.seconds(5)))
+data_stream.window_all(TumblingEventTimeWindows.of(Duration.ofSeconds(5)))
 ```
 {{< /tab >}}
 {{< /tabs>}}
@@ -282,14 +243,6 @@ allWindowedStream.apply (new AllWindowFunction<Tuple2<String,Integer>, Integer, 
         out.collect (new Integer(sum));
     }
 });
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-windowedStream.apply { WindowFunction }
-
-// 在 non-keyed 窗口流上应用 AllWindowFunction
-allWindowedStream.apply { AllWindowFunction }
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
@@ -335,11 +288,6 @@ windowedStream.reduce (new ReduceFunction<Tuple2<String,Integer>>() {
 });
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-windowedStream.reduce { _ + _ }
-```
-{{< /tab >}}
 {{< tab "Python" >}}
 ```python
 class MyReduceFunction(ReduceFunction):
@@ -364,11 +312,6 @@ windowed_stream.reduce(MyReduceFunction())
 dataStream.union(otherStream1, otherStream2, ...);
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-dataStream.union(otherStream1, otherStream2, ...)
-```
-{{< /tab >}}
 {{< tab "Python" >}}
 ```python
 data_stream.union(otherStream1, otherStream2, ...)
@@ -386,16 +329,8 @@ data_stream.union(otherStream1, otherStream2, ...)
 ```java
 dataStream.join(otherStream)
     .where(<key selector>).equalTo(<key selector>)
-    .window(TumblingEventTimeWindows.of(Time.seconds(3)))
+    .window(TumblingEventTimeWindows.of(Duration.ofSeconds(3)))
     .apply (new JoinFunction () {...});
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-dataStream.join(otherStream)
-    .where(<key selector>).equalTo(<key selector>)
-    .window(TumblingEventTimeWindows.of(Time.seconds(3)))
-    .apply { ... }
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
@@ -414,22 +349,10 @@ Python 中尚不支持此特性。
 // this will join the two streams so that
 // key1 == key2 && leftTs - 2 < rightTs < leftTs + 2
 keyedStream.intervalJoin(otherKeyedStream)
-    .between(Time.milliseconds(-2), Time.milliseconds(2)) // lower and upper bound
+    .between(Duration.ofMillis(-2), Duration.ofMillis(2)) // lower and upper bound
     .upperBoundExclusive(true) // optional
     .lowerBoundExclusive(true) // optional
     .process(new IntervalJoinFunction() {...});
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-// this will join the two streams so that
-// key1 == key2 && leftTs - 2 < rightTs < leftTs + 2
-keyedStream.intervalJoin(otherKeyedStream)
-    .between(Time.milliseconds(-2), Time.milliseconds(2)) 
-    // lower and upper bound
-    .upperBoundExclusive(true) // optional
-    .lowerBoundExclusive(true) // optional
-    .process(new IntervalJoinFunction() {...})
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
@@ -447,16 +370,8 @@ Python 中尚不支持此特性。
 ```java
 dataStream.coGroup(otherStream)
     .where(0).equalTo(1)
-    .window(TumblingEventTimeWindows.of(Time.seconds(3)))
+    .window(TumblingEventTimeWindows.of(Duration.ofSeconds(3)))
     .apply (new CoGroupFunction () {...});
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-dataStream.coGroup(otherStream)
-    .where(0).equalTo(1)
-    .window(TumblingEventTimeWindows.of(Time.seconds(3)))
-    .apply {}
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
@@ -476,14 +391,6 @@ DataStream<Integer> someStream = //...
 DataStream<String> otherStream = //...
 
 ConnectedStreams<Integer, String> connectedStreams = someStream.connect(otherStream);
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-someStream : DataStream[Int] = ...
-otherStream : DataStream[String] = ...
-
-val connectedStreams = someStream.connect(otherStream)
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
@@ -530,18 +437,6 @@ connectedStreams.flatMap(new CoFlatMapFunction<Integer, String, String>() {
 });
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-connectedStreams.map(
-    (_ : Int) => true,
-    (_ : String) => false
-)
-connectedStreams.flatMap(
-    (_ : Int) => true,
-    (_ : String) => false
-)
-```
-{{< /tab >}}
 {{< tab "Python" >}}
 ```python
 class MyCoMapFunction(CoMapFunction):
@@ -567,46 +462,6 @@ connectedStreams.flat_map(MyCoFlatMapFunction())
 {{< /tab >}}
 {{< /tabs>}}
 
-### Iterate
-#### DataStream &rarr; IterativeStream &rarr; ConnectedStream
-
-通过将一个算子的输出重定向到某个之前的算子来在流中创建“反馈”循环。这对于定义持续更新模型的算法特别有用。下面的代码从一个流开始，并不断地应用迭代自身。大于 0 的元素被发送回反馈通道，其余元素被转发到下游。
-
-{{< tabs iterate >}}
-{{< tab "Java" >}}
-```java
-IterativeStream<Long> iteration = initialStream.iterate();
-DataStream<Long> iterationBody = iteration.map (/*do something*/);
-DataStream<Long> feedback = iterationBody.filter(new FilterFunction<Long>(){
-    @Override
-    public boolean filter(Long value) throws Exception {
-        return value > 0;
-    }
-});
-iteration.closeWith(feedback);
-DataStream<Long> output = iterationBody.filter(new FilterFunction<Long>(){
-    @Override
-    public boolean filter(Long value) throws Exception {
-        return value <= 0;
-    }
-});
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-initialStream.iterate {
-  iteration => {
-    val iterationBody = iteration.map {/*do something*/}
-    (iterationBody.filter(_ > 0), iterationBody.filter(_ <= 0))
-  }
-}
-```
-{{< /tab >}}
-{{< tab "Python" >}}
-Python 中尚不支持此特性。
-{{< /tab >}}
-{{< /tabs>}}
-
 ### Cache
 #### DataStream &rarr; CachedDataStream
 
@@ -626,18 +481,6 @@ cachedDataStream.print(); // Consume cached result.
 env.execute();
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-val dataStream : DataStream[Int] = //...
-val cachedDataStream = dataStream.cache()
-cachedDataStream.print() // Do anything with the cachedDataStream
-...
-env.execute() // Execute and create cache.
-
-cachedDataStream.print() // Consume cached result.
-env.execute()
-```
-{{< /tab >}}
 {{< tab "Python" >}}
 ```python
 data_stream = ... # DataStream
@@ -651,6 +494,32 @@ env.execute()
 ```
 {{< /tab >}}
 {{< /tabs>}}
+
+### Full Window Partition
+#### DataStream &rarr; PartitionWindowedStream
+
+将所有的数据记录收集到一个Window中，然后在输入数据流结束时按 partition 进行处理。本方法特别适用于批处理场景。
+对于非 Keyed DataStream，一个 partition 包含一个并行子任务的所有数据记录。
+对于 Keyed DataStream，一个 partition 包含所有具有相同 key 的数据记录。
+
+```java
+DataStream<Integer> dataStream = //...
+PartitionWindowedStream<Integer> partitionWindowedDataStream = dataStream.fullWindowPartition();
+// do full window partition processing with PartitionWindowedStream
+DataStream<Integer> resultStream = partitionWindowedDataStream.mapPartition(
+    new MapPartitionFunction<Integer, Integer>() {
+        @Override
+        public void mapPartition(
+                Iterable<Integer> values, Collector<Integer> out) {
+            int result = 0;
+            for (Integer value : values) {
+                result += value;
+            }
+            out.collect(result);
+        }
+    }
+);
+```
 
 ## 物理分区
 
@@ -666,12 +535,6 @@ Flink 也提供以下方法让用户根据需要在数据转换完成后对数�
 ```java
 dataStream.partitionCustom(partitioner, "someKey");
 dataStream.partitionCustom(partitioner, 0);
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-dataStream.partitionCustom(partitioner, "someKey")
-dataStream.partitionCustom(partitioner, 0)
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
@@ -691,11 +554,6 @@ data_stream.partition_custom(lambda key, num_partition: key % partition, lambda 
 {{< tab "Java" >}}
 ```java
 dataStream.shuffle();
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-dataStream.shuffle()
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
@@ -725,11 +583,6 @@ data_stream.shuffle()
 dataStream.rescale();
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-dataStream.rescale()
-```
-{{< /tab >}}
 {{< tab "Python" >}}
 ```python
 data_stream.rescale()
@@ -746,11 +599,6 @@ data_stream.rescale()
 {{< tab "Java" >}}
 ```java
 dataStream.broadcast();
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-dataStream.broadcast()
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
@@ -782,11 +630,6 @@ data_stream.broadcast()
 someStream.filter(...).map(...).startNewChain().map(...);
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-someStream.filter(...).map(...).startNewChain().map(...)
-```
-{{< /tab >}}
 {{< tab "Python" >}}
 ```python
 some_stream.filter(...).map(...).start_new_chain().map(...)
@@ -804,11 +647,6 @@ some_stream.filter(...).map(...).start_new_chain().map(...)
 someStream.map(...).disableChaining();
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-someStream.map(...).disableChaining()
-```
-{{< /tab >}}
 {{< tab "Python" >}}
 ```python
 some_stream.map(...).disable_chaining()
@@ -824,11 +662,6 @@ some_stream.map(...).disable_chaining()
 {{< tab "Java" >}}
 ```java
 someStream.filter(...).slotSharingGroup("name");
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-someStream.filter(...).slotSharingGroup("name")
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
@@ -852,11 +685,6 @@ Flink里的算子和作业节点会有一个名字和一个描述。名字和描
 {{< tab "Java" >}}
 ```java
 someStream.filter(...).name("filter").setDescription("x in (1, 2, 3, 4) and y > 1");
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-someStream.filter(...).name("filter").setDescription("x in (1, 2, 3, 4) and y > 1")
 ```
 {{< /tab >}}
 {{< tab "Python" >}}

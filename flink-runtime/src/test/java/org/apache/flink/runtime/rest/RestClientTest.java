@@ -20,24 +20,29 @@ package org.apache.flink.runtime.rest;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.RestOptions;
+import org.apache.flink.core.testutils.CommonTestUtils;
 import org.apache.flink.core.testutils.FlinkAssertions;
 import org.apache.flink.core.testutils.OneShotLatch;
 import org.apache.flink.runtime.rest.messages.EmptyMessageParameters;
 import org.apache.flink.runtime.rest.messages.EmptyRequestBody;
 import org.apache.flink.runtime.rest.messages.EmptyResponseBody;
+import org.apache.flink.runtime.rest.messages.ErrorResponseBody;
 import org.apache.flink.runtime.rest.messages.RuntimeMessageHeaders;
 import org.apache.flink.runtime.rest.versioning.RuntimeRestAPIVersion;
 import org.apache.flink.testutils.TestingUtils;
 import org.apache.flink.testutils.executor.TestExecutorExtension;
 import org.apache.flink.util.NetUtils;
+import org.apache.flink.util.concurrent.ExecutorThreadFactory;
 import org.apache.flink.util.concurrent.Executors;
 import org.apache.flink.util.function.CheckedSupplier;
 
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonProperty;
 import org.apache.flink.shaded.netty4.io.netty.channel.Channel;
-import org.apache.flink.shaded.netty4.io.netty.channel.ConnectTimeoutException;
 import org.apache.flink.shaded.netty4.io.netty.channel.DefaultSelectStrategyFactory;
+import org.apache.flink.shaded.netty4.io.netty.channel.MultiThreadIoEventLoopGroup;
 import org.apache.flink.shaded.netty4.io.netty.channel.SelectStrategy;
 import org.apache.flink.shaded.netty4.io.netty.channel.SelectStrategyFactory;
+import org.apache.flink.shaded.netty4.io.netty.channel.nio.NioIoHandler;
 import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus;
 
 import org.assertj.core.api.InstanceOfAssertFactories;
@@ -45,14 +50,24 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.io.IOException;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
+import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.as;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -63,17 +78,34 @@ import static org.assertj.core.api.InstanceOfAssertFactories.THROWABLE;
 class RestClientTest {
 
     @RegisterExtension
-    static final TestExecutorExtension<ScheduledExecutorService> EXECUTOR_EXTENSION =
+    private static final TestExecutorExtension<ScheduledExecutorService> EXECUTOR_EXTENSION =
             TestingUtils.defaultExecutorExtension();
 
-    private static final String unroutableIp = "240.0.0.0";
+    // Part of TEST-NET-1 block described in RFC 5737 that should never be routed.
+    private static final String unroutableIp = "192.0.2.1";
 
     private static final long TIMEOUT = 10L;
 
     @Test
+    void testErrorResponseBodyHasSpecificStrictureForErrorHandling() {
+        List<Field> annotatedFields =
+                Arrays.stream(ErrorResponseBody.class.getDeclaredFields())
+                        .filter(
+                                field ->
+                                        Arrays.stream(field.getDeclaredAnnotations())
+                                                .map(Annotation::annotationType)
+                                                .anyMatch(c -> c.equals(JsonProperty.class)))
+                        .collect(Collectors.toList());
+        assertThat(annotatedFields).hasSize(1);
+
+        Field field = annotatedFields.get(0);
+        assertThat(field.getName().equals("errors") && field.getType().equals(List.class)).isTrue();
+    }
+
+    @Test
     void testConnectionTimeout() throws Exception {
         final Configuration config = new Configuration();
-        config.setLong(RestOptions.CONNECTION_TIMEOUT, 1);
+        config.set(RestOptions.CONNECTION_TIMEOUT, Duration.ofMillis(1L));
         try (final RestClient restClient = new RestClient(config, Executors.directExecutor())) {
             CompletableFuture<?> future =
                     restClient.sendRequest(
@@ -83,16 +115,36 @@ class RestClientTest {
                             EmptyMessageParameters.getInstance(),
                             EmptyRequestBody.getInstance());
 
+            // Depending on the environment, connecting to a non-routable address may fail with
+            // either a ConnectTimeoutException (timeout fires before the OS responds) or a
+            // SocketException such as "Network is unreachable" (OS rejects immediately).
+            // Both are SocketException subtypes.
             FlinkAssertions.assertThatFuture(future)
                     .eventuallyFailsWith(ExecutionException.class)
-                    .withCauseInstanceOf(ConnectTimeoutException.class)
+                    .withCauseInstanceOf(SocketException.class)
                     .extracting(Throwable::getCause, as(InstanceOfAssertFactories.THROWABLE))
                     .hasMessageContaining(unroutableIp);
         }
     }
 
     @Test
-    public void testInvalidVersionRejection() throws Exception {
+    void testExternalEventGroup() throws Exception {
+        MultiThreadIoEventLoopGroup externalGroup =
+                new MultiThreadIoEventLoopGroup(
+                        1,
+                        new ExecutorThreadFactory("flink-rest-client-netty-external"),
+                        NioIoHandler.newFactory());
+
+        final RestClient restClient =
+                new RestClient(
+                        new Configuration(), Executors.directExecutor(), null, -1, externalGroup);
+        restClient.closeAsync();
+
+        assertThat(externalGroup.isShuttingDown() || externalGroup.isShutdown()).isFalse();
+    }
+
+    @Test
+    void testInvalidVersionRejection() throws Exception {
         try (final RestClient restClient =
                 new RestClient(new Configuration(), Executors.directExecutor())) {
             assertThatThrownBy(
@@ -112,9 +164,9 @@ class RestClientTest {
 
     /** Tests that we fail the operation if the remote connection closes. */
     @Test
-    public void testConnectionClosedHandling() throws Exception {
+    void testConnectionClosedHandling() throws Exception {
         final Configuration config = new Configuration();
-        config.setLong(RestOptions.IDLENESS_TIMEOUT, 5000L);
+        config.set(RestOptions.IDLENESS_TIMEOUT, Duration.ofMillis(5000L));
         try (final ServerSocket serverSocket = new ServerSocket(0);
                 final RestClient restClient =
                         new RestClient(config, EXECUTOR_EXTENSION.getExecutor())) {
@@ -157,11 +209,19 @@ class RestClientTest {
         }
     }
 
-    /** Tests that we fail the operation if the client closes. */
+    /**
+     * Tests that we fail the operation if the client closes.
+     *
+     * <p>The exact exception depends on timing.
+     *
+     * <p>Both are valid outcomes when the client is closed with a request in-flight.
+     *
+     * <p>See FLINK-39180
+     */
     @Test
-    public void testRestClientClosedHandling() throws Exception {
+    void testRestClientClosedHandling() throws Exception {
         final Configuration config = new Configuration();
-        config.setLong(RestOptions.IDLENESS_TIMEOUT, 5000L);
+        config.set(RestOptions.IDLENESS_TIMEOUT, Duration.ofMillis(5000L));
 
         Socket connectionSocket = null;
 
@@ -196,9 +256,24 @@ class RestClientTest {
 
             restClient.close();
 
+            // Both exceptions are valid depending on timing (see javadoc)
             FlinkAssertions.assertThatFuture(responseFuture)
                     .eventuallyFailsWith(ExecutionException.class)
-                    .withCauseInstanceOf(IOException.class);
+                    .satisfies(
+                            e ->
+                                    assertThat(e.getCause())
+                                            .satisfiesAnyOf(
+                                                    c ->
+                                                            assertThat(c)
+                                                                    .isInstanceOf(
+                                                                            IllegalStateException
+                                                                                    .class)
+                                                                    .hasMessage(
+                                                                            "RestClient closed before request completed"),
+                                                    c ->
+                                                            assertThat(c)
+                                                                    .isInstanceOf(
+                                                                            IOException.class)));
         } finally {
             if (connectionSocket != null) {
                 connectionSocket.close();
@@ -213,7 +288,7 @@ class RestClientTest {
      * <p>See FLINK-32583
      */
     @Test
-    public void testCloseClientBeforeRequest() throws Exception {
+    void testCloseClientBeforeRequest() throws Exception {
         try (final RestClient restClient =
                 new RestClient(new Configuration(), Executors.directExecutor())) {
             restClient.close(); // Intentionally close the client prior to the request
@@ -235,7 +310,7 @@ class RestClientTest {
     }
 
     @Test
-    public void testCloseClientWhileProcessingRequest() throws Exception {
+    void testCloseClientWhileProcessingRequest() throws Exception {
         // Set up a Netty SelectStrategy with latches that allow us to step forward through Netty's
         // request state machine, closing the client at a particular moment
         final OneShotLatch connectTriggered = new OneShotLatch();
@@ -289,8 +364,183 @@ class RestClientTest {
         }
     }
 
+    /**
+     * Verifies that {@code close()} fails a request that is in-flight past the connect phase, and
+     * that it does so specifically through the {@code pendingRequestFutures} mechanism rather than
+     * through {@code ClientHandler#channelInactive}.
+     *
+     * <p>The terminal response future is only wired to the {@code ClientHandler}'s {@code
+     * jsonFuture} once the first response-composition stage runs on the client's executor. This
+     * test installs a <em>deferring</em> executor that captures those stages without ever running
+     * them, so:
+     *
+     * <ul>
+     *   <li>the connect phase still completes (the connect listener runs on the Netty event loop
+     *       and drains {@code responseChannelFutures}), leaving the request in-flight; but
+     *   <li>the {@code channelInactive} completion of {@code jsonFuture} triggered by {@code
+     *       close()} can never reach the terminal future, because the stage that would subscribe to
+     *       {@code jsonFuture} never runs.
+     * </ul>
+     *
+     * <p>The only mechanism left that can complete the terminal future is {@code
+     * pendingRequestFutures}. The test therefore asserts the <em>identity</em> of the failure
+     * ({@link IllegalStateException} with {@code CLOSED_BEFORE_REQUEST_COMPLETED_MESSAGE}), not
+     * merely that the future failed: a {@code ConnectionClosedException} here would indicate the
+     * {@code channelInactive} path completed it instead. Without the {@code pendingRequestFutures}
+     * tracking the terminal future would never complete and {@code failsWithin} would elapse.
+     */
     @Test
-    public void testResponseChannelFuturesResolvedExceptionallyOnClose() throws Exception {
+    void testCloseFailsInFlightRequestFutureViaPendingRequestFutures() throws Exception {
+        final Configuration config = new Configuration();
+
+        // Captures the response-composition stages without ever executing them, so the terminal
+        // future is never subscribed to the handler's jsonFuture.
+        final Queue<Runnable> deferredStages = new ConcurrentLinkedQueue<>();
+        final Executor deferringExecutor = deferredStages::add;
+
+        Socket connectionSocket = null;
+        try (final ServerSocket serverSocket = new ServerSocket(0);
+                final RestClient restClient = new RestClient(config, deferringExecutor)) {
+
+            final String targetAddress = "localhost";
+            final int targetPort = serverSocket.getLocalPort();
+
+            // A server that accepts the connection but never sends a response, so the request stays
+            // in its in-flight (response) phase until the client is closed.
+            final CompletableFuture<Socket> acceptedSocket =
+                    CompletableFuture.supplyAsync(
+                            CheckedSupplier.unchecked(
+                                    () -> NetUtils.acceptWithoutTimeout(serverSocket)));
+
+            assertThat(restClient.getResponseChannelFutures()).isEmpty();
+            assertThat(restClient.getPendingRequestFutures()).isEmpty();
+
+            final CompletableFuture<EmptyResponseBody> responseFuture =
+                    restClient.sendRequest(
+                            targetAddress,
+                            targetPort,
+                            new TestMessageHeaders(),
+                            EmptyMessageParameters.getInstance(),
+                            EmptyRequestBody.getInstance(),
+                            Collections.emptyList());
+
+            // Once the server accepts, the connect listener has run and removed the connect-phase
+            // future from responseChannelFutures: the request is now in-flight. The first
+            // composition stage has been submitted to the deferring executor (captured, not run).
+            connectionSocket = acceptedSocket.get(TIMEOUT, TimeUnit.SECONDS);
+
+            CommonTestUtils.waitUtil(
+                    () -> restClient.getResponseChannelFutures().isEmpty(),
+                    Duration.ofSeconds(TIMEOUT),
+                    "responseChannelFutures was not drained after the connect phase completed");
+
+            restClient.close();
+
+            // The terminal future can only have been completed by the pendingRequestFutures path:
+            // its composition stages never ran, so the channelInactive completion of jsonFuture
+            // could not reach it. Asserting the failure identity proves the change is exercised.
+            assertThat(responseFuture)
+                    .as("close() must fail the in-flight future via pendingRequestFutures")
+                    .failsWithin(Duration.ofSeconds(TIMEOUT))
+                    .withThrowableOfType(ExecutionException.class)
+                    .withCauseInstanceOf(IllegalStateException.class)
+                    .withMessageContaining(RestClient.CLOSED_BEFORE_REQUEST_COMPLETED_MESSAGE);
+
+            // After close, the tracking collection must be drained.
+            CommonTestUtils.waitUtil(
+                    () -> restClient.getPendingRequestFutures().isEmpty(),
+                    Duration.ofSeconds(TIMEOUT),
+                    "pendingRequestFutures was not drained after close");
+
+            // Sanity check: exactly the first composition stage was deferred (never executed),
+            // which is what isolates the pendingRequestFutures path from channelInactive. The
+            // second stage cannot be submitted until the first runs, which it never does.
+            assertThat(deferredStages).hasSize(1);
+        } finally {
+            if (connectionSocket != null) {
+                connectionSocket.close();
+            }
+        }
+    }
+
+    /**
+     * End-to-end companion to {@link #testCloseFailsInFlightRequestFutureViaPendingRequestFutures}:
+     * with the real executor running the response-composition stages, verifies that {@code close()}
+     * fails an in-flight request future. This exercises the normal production path (including the
+     * handler's {@code channelInactive} completion) rather than isolating a single mechanism. The
+     * request is driven against a local server that accepts the connection but never replies; all
+     * waits are bounded so a regression fails rather than hangs.
+     */
+    @Test
+    void testCloseFailsInFlightRequestFutureAfterConnectPhase() throws Exception {
+        final Configuration config = new Configuration();
+
+        Socket connectionSocket = null;
+        try (final ServerSocket serverSocket = new ServerSocket(0);
+                final RestClient restClient =
+                        new RestClient(config, EXECUTOR_EXTENSION.getExecutor())) {
+
+            final String targetAddress = "localhost";
+            final int targetPort = serverSocket.getLocalPort();
+
+            // A server that accepts the connection but never sends a response, so the request stays
+            // in its in-flight (response) phase until the client is closed.
+            final CompletableFuture<Socket> acceptedSocket =
+                    CompletableFuture.supplyAsync(
+                            CheckedSupplier.unchecked(
+                                    () -> NetUtils.acceptWithoutTimeout(serverSocket)));
+
+            assertThat(restClient.getResponseChannelFutures()).isEmpty();
+            assertThat(restClient.getPendingRequestFutures()).isEmpty();
+
+            final CompletableFuture<EmptyResponseBody> responseFuture =
+                    restClient.sendRequest(
+                            targetAddress,
+                            targetPort,
+                            new TestMessageHeaders(),
+                            EmptyMessageParameters.getInstance(),
+                            EmptyRequestBody.getInstance(),
+                            Collections.emptyList());
+
+            // Once the server accepts, the connect listener has run and removed the connect-phase
+            // future from responseChannelFutures: the request is now in-flight.
+            connectionSocket = acceptedSocket.get(TIMEOUT, TimeUnit.SECONDS);
+
+            CommonTestUtils.waitUtil(
+                    () -> restClient.getResponseChannelFutures().isEmpty(),
+                    Duration.ofSeconds(TIMEOUT),
+                    "responseChannelFutures was not drained after the connect phase completed");
+
+            // Without the fix the in-flight future is tracked by nothing, so this bounded wait
+            // elapses and the assertion fails (it does not hang).
+            CommonTestUtils.waitUtil(
+                    () -> restClient.getPendingRequestFutures().size() == 1,
+                    Duration.ofSeconds(TIMEOUT),
+                    "Terminal response future must remain tracked by pendingRequestFutures while "
+                            + "the request is in-flight so that close can fail it");
+
+            restClient.close();
+
+            // The terminal future must be failed by close (bounded await, never hangs).
+            assertThat(responseFuture)
+                    .as("Closing the client must fail the in-flight request future")
+                    .failsWithin(Duration.ofSeconds(TIMEOUT))
+                    .withThrowableOfType(ExecutionException.class);
+
+            // After close, the tracking collection must be drained.
+            CommonTestUtils.waitUtil(
+                    () -> restClient.getPendingRequestFutures().isEmpty(),
+                    Duration.ofSeconds(TIMEOUT),
+                    "pendingRequestFutures was not drained after close");
+        } finally {
+            if (connectionSocket != null) {
+                connectionSocket.close();
+            }
+        }
+    }
+
+    @Test
+    void testResponseChannelFuturesResolvedExceptionallyOnClose() throws Exception {
         try (final RestClient restClient =
                 new RestClient(new Configuration(), Executors.directExecutor())) {
             CompletableFuture<Channel> responseChannelFuture = new CompletableFuture<>();

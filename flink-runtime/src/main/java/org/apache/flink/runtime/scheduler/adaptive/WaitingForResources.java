@@ -20,83 +20,71 @@ package org.apache.flink.runtime.scheduler.adaptive;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobStatus;
-import org.apache.flink.api.common.time.Deadline;
-import org.apache.flink.runtime.executiongraph.ArchivedExecutionGraph;
 import org.apache.flink.runtime.executiongraph.ExecutionGraph;
+import org.apache.flink.runtime.scheduler.adaptive.timeline.RescaleTimeline;
 import org.apache.flink.util.Preconditions;
-import org.apache.flink.util.clock.Clock;
-import org.apache.flink.util.clock.SystemClock;
 
 import org.slf4j.Logger;
 
 import javax.annotation.Nullable;
 
 import java.time.Duration;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
+import java.util.function.Function;
 
 /**
  * State which describes that the scheduler is waiting for resources in order to execute the job.
  */
-class WaitingForResources implements State, ResourceListener {
+class WaitingForResources extends StateWithoutExecutionGraph
+        implements ResourceListener, StateTransitionManager.Context {
 
     private final Context context;
-
-    private final Logger log;
-
-    private final Clock clock;
-
-    /** If set, there's an ongoing deadline waiting for a resource stabilization. */
-    @Nullable private Deadline resourceStabilizationDeadline;
-
-    private final Duration resourceStabilizationTimeout;
 
     @Nullable private ScheduledFuture<?> resourceTimeoutFuture;
 
     @Nullable private final ExecutionGraph previousExecutionGraph;
 
+    private final StateTransitionManager stateTransitionManager;
+
     @VisibleForTesting
     WaitingForResources(
             Context context,
             Logger log,
-            Duration initialResourceAllocationTimeout,
-            Duration resourceStabilizationTimeout) {
-        this(
-                context,
-                log,
-                initialResourceAllocationTimeout,
-                resourceStabilizationTimeout,
-                SystemClock.getInstance(),
-                null);
+            Duration submissionResourceWaitTimeout,
+            Function<StateTransitionManager.Context, StateTransitionManager>
+                    stateTransitionManagerFactory) {
+        this(context, log, submissionResourceWaitTimeout, null, stateTransitionManagerFactory);
     }
 
     WaitingForResources(
             Context context,
             Logger log,
-            Duration initialResourceAllocationTimeout,
-            Duration resourceStabilizationTimeout,
-            Clock clock,
-            @Nullable ExecutionGraph previousExecutionGraph) {
+            Duration submissionResourceWaitTimeout,
+            @Nullable ExecutionGraph previousExecutionGraph,
+            Function<StateTransitionManager.Context, StateTransitionManager>
+                    stateTransitionManagerFactory) {
+        super(context, log);
         this.context = Preconditions.checkNotNull(context);
-        this.log = Preconditions.checkNotNull(log);
-        this.resourceStabilizationTimeout =
-                Preconditions.checkNotNull(resourceStabilizationTimeout);
-        this.clock = clock;
-        Preconditions.checkNotNull(initialResourceAllocationTimeout);
-
-        Preconditions.checkArgument(
-                !resourceStabilizationTimeout.isNegative(),
-                "Resource stabilization timeout must not be negative");
+        Preconditions.checkNotNull(submissionResourceWaitTimeout);
+        this.stateTransitionManager = stateTransitionManagerFactory.apply(this);
 
         // since state transitions are not allowed in state constructors, schedule calls for later.
-        if (!initialResourceAllocationTimeout.isNegative()) {
+        if (!submissionResourceWaitTimeout.isNegative()) {
             resourceTimeoutFuture =
-                    context.runIfState(
-                            this, this::resourceTimeout, initialResourceAllocationTimeout);
+                    context.runIfState(this, this::resourceTimeout, submissionResourceWaitTimeout);
         }
         this.previousExecutionGraph = previousExecutionGraph;
-        context.runIfState(this, this::checkDesiredOrSufficientResourcesAvailable, Duration.ZERO);
+        context.runIfState(this, this::checkPotentialStateTransition, Duration.ZERO);
+    }
+
+    @Override
+    public State schedulerState() {
+        return this;
+    }
+
+    @Override
+    public RescaleTimeline getRescaleTimeline() {
+        return context.getRescaleTimeline();
     }
 
     @Override
@@ -104,16 +92,8 @@ class WaitingForResources implements State, ResourceListener {
         if (resourceTimeoutFuture != null) {
             resourceTimeoutFuture.cancel(false);
         }
-    }
-
-    @Override
-    public void cancel() {
-        context.goToFinished(context.getArchivedExecutionGraph(JobStatus.CANCELED, null));
-    }
-
-    @Override
-    public void suspend(Throwable cause) {
-        context.goToFinished(context.getArchivedExecutionGraph(JobStatus.SUSPENDED, cause));
+        stateTransitionManager.close();
+        super.onLeave(newState);
     }
 
     @Override
@@ -122,81 +102,50 @@ class WaitingForResources implements State, ResourceListener {
     }
 
     @Override
-    public ArchivedExecutionGraph getJob() {
-        return context.getArchivedExecutionGraph(getJobStatus(), null);
-    }
-
-    @Override
-    public void handleGlobalFailure(
-            Throwable cause, CompletableFuture<Map<String, String>> failureLabels) {
-        context.goToFinished(context.getArchivedExecutionGraph(JobStatus.FAILED, cause));
-    }
-
-    @Override
-    public Logger getLogger() {
-        return log;
-    }
-
-    @Override
     public void onNewResourcesAvailable() {
-        checkDesiredOrSufficientResourcesAvailable();
+        checkPotentialStateTransition();
     }
 
     @Override
     public void onNewResourceRequirements() {
-        checkDesiredOrSufficientResourcesAvailable();
+        checkPotentialStateTransition();
     }
 
-    private void checkDesiredOrSufficientResourcesAvailable() {
-        if (context.hasDesiredResources()) {
-            createExecutionGraphWithAvailableResources();
-            return;
-        }
-
-        if (context.hasSufficientResources()) {
-            if (resourceStabilizationDeadline == null) {
-                resourceStabilizationDeadline =
-                        Deadline.fromNowWithClock(resourceStabilizationTimeout, clock);
-            }
-            if (resourceStabilizationDeadline.isOverdue()) {
-                createExecutionGraphWithAvailableResources();
-            } else {
-                // schedule next resource check
-                context.runIfState(
-                        this,
-                        this::checkDesiredOrSufficientResourcesAvailable,
-                        resourceStabilizationDeadline.timeLeft());
-            }
-        } else {
-            // clear deadline due to insufficient resources
-            resourceStabilizationDeadline = null;
-        }
+    private void checkPotentialStateTransition() {
+        stateTransitionManager.onChange();
+        stateTransitionManager.onTrigger();
     }
 
     private void resourceTimeout() {
-        log.debug(
-                "Initial resource allocation timeout triggered: Creating ExecutionGraph with available resources.");
-        createExecutionGraphWithAvailableResources();
+        getLogger()
+                .debug(
+                        "Initial resource allocation timeout triggered: Creating ExecutionGraph with available resources.");
+        transitionToSubsequentState();
     }
 
-    private void createExecutionGraphWithAvailableResources() {
+    @Override
+    public boolean hasSufficientResources() {
+        return context.hasSufficientResources();
+    }
+
+    @Override
+    public boolean hasDesiredResources() {
+        return context.hasDesiredResources();
+    }
+
+    @Override
+    public void transitionToSubsequentState() {
         context.goToCreatingExecutionGraph(previousExecutionGraph);
+    }
+
+    @Override
+    public ScheduledFuture<?> scheduleOperation(Runnable callback, Duration delay) {
+        return context.runIfState(this, callback, delay);
     }
 
     /** Context of the {@link WaitingForResources} state. */
     interface Context
-            extends StateTransitions.ToCreatingExecutionGraph, StateTransitions.ToFinished {
-
-        /**
-         * Creates the {@link ArchivedExecutionGraph} for the given job status and cause. Cause can
-         * be null if there is no failure.
-         *
-         * @param jobStatus jobStatus to initialize the {@link ArchivedExecutionGraph} with
-         * @param cause cause describing a failure cause; {@code null} if there is none
-         * @return the created {@link ArchivedExecutionGraph}
-         */
-        ArchivedExecutionGraph getArchivedExecutionGraph(
-                JobStatus jobStatus, @Nullable Throwable cause);
+            extends StateWithoutExecutionGraph.Context, StateTransitions.ToCreatingExecutionGraph {
 
         /**
          * Checks whether we have the desired resources.
@@ -228,21 +177,23 @@ class WaitingForResources implements State, ResourceListener {
 
         private final Context context;
         private final Logger log;
-        private final Duration initialResourceAllocationTimeout;
-        private final Duration resourceStabilizationTimeout;
+        private final Duration submissionResourceWaitTimeout;
         @Nullable private final ExecutionGraph previousExecutionGraph;
+        private final Function<StateTransitionManager.Context, StateTransitionManager>
+                stateTransitionManagerFactory;
 
         public Factory(
                 Context context,
                 Logger log,
-                Duration initialResourceAllocationTimeout,
-                Duration resourceStabilizationTimeout,
-                ExecutionGraph previousExecutionGraph) {
+                Duration submissionResourceWaitTimeout,
+                Function<StateTransitionManager.Context, StateTransitionManager>
+                        stateTransitionManagerFactory,
+                @Nullable ExecutionGraph previousExecutionGraph) {
             this.context = context;
             this.log = log;
-            this.initialResourceAllocationTimeout = initialResourceAllocationTimeout;
-            this.resourceStabilizationTimeout = resourceStabilizationTimeout;
+            this.submissionResourceWaitTimeout = submissionResourceWaitTimeout;
             this.previousExecutionGraph = previousExecutionGraph;
+            this.stateTransitionManagerFactory = stateTransitionManagerFactory;
         }
 
         public Class<WaitingForResources> getStateClass() {
@@ -253,15 +204,9 @@ class WaitingForResources implements State, ResourceListener {
             return new WaitingForResources(
                     context,
                     log,
-                    initialResourceAllocationTimeout,
-                    resourceStabilizationTimeout,
-                    SystemClock.getInstance(),
-                    previousExecutionGraph);
+                    submissionResourceWaitTimeout,
+                    previousExecutionGraph,
+                    stateTransitionManagerFactory);
         }
-    }
-
-    @Nullable
-    public ExecutionGraph getPreviousExecutionGraph() {
-        return previousExecutionGraph;
     }
 }

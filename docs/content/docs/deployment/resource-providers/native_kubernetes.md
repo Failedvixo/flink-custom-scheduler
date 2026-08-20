@@ -93,6 +93,9 @@ For high-level intuition behind the application mode, please refer to the [deplo
 
 The [Application Mode]({{< ref "docs/deployment/overview" >}}#application-mode) requires that the user code is bundled together with the Flink image because it runs the user code's `main()` method on the cluster.
 The Application Mode makes sure that all Flink components are properly cleaned up after the termination of the application.
+Bundling can be done by modifying the base Flink Docker image, or via the User Artifact Management, which makes it possible to upload and download artifacts that are not available locally.  
+
+#### Modify the Docker image
 
 The Flink community provides a [base Docker image]({{< ref "docs/deployment/resource-providers/standalone/docker" >}}#docker-hub-flink-images) which can be used to bundle the user code:
 
@@ -105,14 +108,68 @@ COPY /path/of/my-flink-job.jar $FLINK_HOME/usrlib/my-flink-job.jar
 After creating and publishing the Docker image under `custom-image-name`, you can start an Application cluster with the following command:
 
 ```bash
-$ ./bin/flink run-application \
+$ ./bin/flink run \
     --target kubernetes-application \
     -Dkubernetes.cluster-id=my-first-application-cluster \
     -Dkubernetes.container.image.ref=custom-image-name \
     local:///opt/flink/usrlib/my-flink-job.jar
 ```
 
-<span class="label label-info">Note</span> `local` is the only supported scheme in Application Mode.
+#### Configure User Artifact Management
+
+In case you have a locally available Flink job JAR, artifact upload can be used so Flink will upload the local artifact to DFS during deployment and fetch it on the deployed JobManager pod:
+
+```bash
+$ ./bin/flink run \
+    --target kubernetes-application \
+    -Dkubernetes.cluster-id=my-first-application-cluster \
+    -Dkubernetes.container.image=custom-image-name \
+    -Dkubernetes.artifacts.local-upload-enabled=true \
+    -Dkubernetes.artifacts.local-upload-target=s3://my-bucket/ \
+    local:///tmp/my-flink-job.jar
+```
+
+The `kubernetes.artifacts.local-upload-enabled` enables this feature, and `kubernetes.artifacts.local-upload-target` has to point to a valid remote target that exists and has the permissions configured properly.
+You can add additional artifacts via the `user.artifacts.artifact-list` config option, which can contain a mix of local and remote artifacts:
+
+```bash
+$ ./bin/flink run \
+    --target kubernetes-application \
+    -Dkubernetes.cluster-id=my-first-application-cluster \
+    -Dkubernetes.container.image=custom-image-name \
+    -Dkubernetes.artifacts.local-upload-enabled=true \
+    -Dkubernetes.artifacts.local-upload-target=s3://my-bucket/ \
+    -Duser.artifacts.artifact-list=local:///tmp/my-flink-udf1.jar\;s3://my-bucket/my-flink-udf2.jar \
+    local:///tmp/my-flink-job.jar
+```
+
+In case the job JAR or any additional artifact is already available remotely via DFS or HTTP(S), Flink will simply fetch it on the deployed JobManager pod:
+
+```bash
+# FileSystem
+$ ./bin/flink run \
+    --target kubernetes-application \
+    -Dkubernetes.cluster-id=my-first-application-cluster \
+    -Dkubernetes.container.image=custom-image-name \
+    s3://my-bucket/my-flink-job.jar
+
+# HTTP(S)
+$ ./bin/flink run \
+    --target kubernetes-application \
+    -Dkubernetes.cluster-id=my-first-application-cluster \
+    -Dkubernetes.container.image=custom-image-name \
+    https://ip:port/my-flink-job.jar
+```
+
+{{< hint warning >}}
+Please be aware that already existing artifacts will not be overwritten during a local upload!
+{{< /hint >}}
+
+{{< hint info >}}
+JAR fetching supports downloading from [filesystems]({{< ref "docs/deployment/filesystems/overview" >}}) or HTTP(S) in Application Mode.  
+The JAR will be downloaded to
+[user.artifacts.base-dir]({{< ref "docs/deployment/config" >}}#user-artifacts-base-dir)/[kubernetes.namespace]({{< ref "docs/deployment/config" >}}#kubernetes-namespace)/[kubernetes.cluster-id]({{< ref "docs/deployment/config" >}}#kubernetes-cluster-id) path in image.
+{{< /hint >}}
 
 The `kubernetes.cluster-id` option specifies the cluster name and must be unique.
 If you do not specify this option, then Flink will generate a random name.
@@ -128,7 +185,7 @@ $ ./bin/flink list --target kubernetes-application -Dkubernetes.cluster-id=my-fi
 $ ./bin/flink cancel --target kubernetes-application -Dkubernetes.cluster-id=my-first-application-cluster <jobId>
 ```
 
-You can override configurations set in `conf/flink-conf.yaml` by passing key-value pairs `-Dkey=value` to `bin/flink`.
+You can override configurations set in [Flink configuration file]({{< ref "docs/deployment/config#flink-configuration-file" >}}) by passing key-value pairs `-Dkey=value` to `bin/flink`.
 
 ### Session Mode
 
@@ -154,7 +211,7 @@ $ ./bin/kubernetes-session.sh \
     -Dexecution.attached=true
 ```
 
-You can override configurations set in `conf/flink-conf.yaml` by passing key-value pairs `-Dkey=value` to `bin/kubernetes-session.sh`.
+You can override configurations set in [Flink configuration file]({{< ref "docs/deployment/config#flink-configuration-file" >}}) by passing key-value pairs `-Dkey=value` to `bin/kubernetes-session.sh`.
 
 #### Stop a Running Session Cluster
 
@@ -293,6 +350,116 @@ $ ./bin/kubernetes-session.sh -Dkubernetes.env.secretKeyRef=\
 The env variable `SECRET_USERNAME` contains the username and the env variable `SECRET_PASSWORD` contains the password of the secret `mysecret`.
 For more details see the [official Kubernetes documentation](https://kubernetes.io/docs/concepts/configuration/secret/#using-secrets-as-environment-variables).
 
+### Mounting Persistent Volume Claims
+
+[Kubernetes PersistentVolumeClaims (PVCs)](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) provide a way to request and use persistent storage in Kubernetes.
+Flink on Kubernetes supports mounting PVCs directly to JobManager and TaskManager pods via configuration options.
+
+#### Configuration Options
+
+Flink provides two configuration options for mounting PVCs:
+
+<table class="table table-bordered">
+    <thead>
+        <tr>
+            <th class="text-left" style="width: 30%">Configuration Option</th>
+            <th class="text-left" style="width: 15%">Type</th>
+            <th class="text-left" style="width: 15%">Default</th>
+            <th class="text-left" style="width: 40%">Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>kubernetes.persistent-volume-claims</code></td>
+            <td>Map&lt;String, String&gt;</td>
+            <td>(none)</td>
+            <td>The user-specified PersistentVolumeClaims that will be mounted into Flink containers.
+                The value should be in the form of <code>pvc-name:/mount/path</code>.
+                Multiple PVCs can be specified by separating them with commas.</td>
+        </tr>
+        <tr>
+            <td><code>kubernetes.persistent-volume-claim-read-only</code></td>
+            <td>Boolean</td>
+            <td>false</td>
+            <td>Whether to mount PersistentVolumeClaims as read-only.
+                When set to true, all PVCs will be mounted as read-only.</td>
+        </tr>
+    </tbody>
+</table>
+
+#### Usage Examples
+
+The following command will mount the PVC `checkpoint-pvc` to the path `/opt/flink/checkpoints` in the started pods:
+
+```bash
+$ ./bin/kubernetes-session.sh \
+    -Dkubernetes.cluster-id=my-session-cluster \
+    -Dkubernetes.persistent-volume-claims=checkpoint-pvc:/opt/flink/checkpoints
+```
+
+You can mount multiple PVCs by separating them with commas:
+
+```bash
+$ ./bin/kubernetes-session.sh \
+    -Dkubernetes.cluster-id=my-session-cluster \
+    -Dkubernetes.persistent-volume-claims=checkpoint-pvc:/opt/flink/checkpoints,data-pvc:/opt/flink/data
+```
+
+To mount PVCs as read-only (useful for shared reference data):
+
+```bash
+$ ./bin/kubernetes-session.sh \
+    -Dkubernetes.cluster-id=my-session-cluster \
+    -Dkubernetes.persistent-volume-claims=shared-data:/opt/flink/shared \
+    -Dkubernetes.persistent-volume-claim-read-only=true
+```
+
+#### Example: Using PVC for Checkpoint Storage
+
+A common use case is to use PVC for storing checkpoints. First, create a PVC in your Kubernetes cluster:
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: flink-checkpoints-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+```
+
+Then start a Flink cluster with the PVC mounted for checkpoint storage:
+
+```bash
+$ ./bin/flink run \
+    --target kubernetes-application \
+    -Dkubernetes.cluster-id=my-checkpoint-cluster \
+    -Dkubernetes.container.image=flink:latest \
+    -Dkubernetes.persistent-volume-claims=flink-checkpoints-pvc:/opt/flink/checkpoints \
+    -Dstate.checkpoints.dir=file:///opt/flink/checkpoints \
+    local:///opt/flink/usrlib/my-flink-job.jar
+```
+
+#### Prerequisites
+
+- The PVCs must exist in the same namespace as the Flink cluster before deployment.
+- The PVCs must have appropriate access modes:
+  - **ReadWriteOnce (RWO)**: For single pod access. Suitable for standalone JobManager deployments.
+  - **ReadWriteMany (RWX)**: For multiple pods accessing the same storage. Recommended for HA setups or when both JobManager and TaskManagers need to write to the same storage.
+  - **ReadOnlyMany (ROX)**: For read-only access from multiple pods. Suitable for shared reference data.
+
+{{< hint warning >}}
+For high availability (HA) setups with multiple JobManagers or when both JobManager and TaskManagers need write access to the same storage, ensure your PVC supports ReadWriteMany (RWX) access mode. Using ReadWriteOnce (RWO) in such scenarios may cause mount failures or I/O errors.
+{{< /hint >}}
+
+{{< hint info >}}
+The `kubernetes.persistent-volume-claim-read-only` option applies globally to all configured PVCs. If you need different access modes for different PVCs (e.g., read-write for checkpoints but read-only for reference data), use [Pod Templates]({{< ref "docs/deployment/resource-providers/native_kubernetes" >}}#pod-template) instead to define fine-grained volume configurations.
+{{< /hint >}}
+
 ### High-Availability on Kubernetes
 
 For high availability on Kubernetes, you can use the [existing high availability services]({{< ref "docs/deployment/ha/overview" >}}).
@@ -334,7 +501,7 @@ $ kubectl create clusterrolebinding flink-role-binding-default --clusterrole=edi
 ```
 
 If you do not want to use the `default` service account, use the following command to create a new `flink-service-account` service account and set the role binding.
-Then use the config option `-Dkubernetes.service-account=flink-service-account` to make the JobManager pod use the `flink-service-account` service account to create/delete TaskManager pods and leader ConfigMaps. 
+Then use the config option `-Dkubernetes.service-account=flink-service-account` to configure the JobManager pod's service account used to create and delete TaskManager pods and leader ConfigMaps.
 Also this will allow the TaskManager to watch leader ConfigMaps to retrieve the address of JobManager and ResourceManager.
 
 ```bash

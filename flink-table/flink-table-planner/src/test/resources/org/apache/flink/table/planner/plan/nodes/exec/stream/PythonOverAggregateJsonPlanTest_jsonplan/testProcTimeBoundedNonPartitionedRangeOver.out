@@ -2,7 +2,7 @@
   "flinkVersion" : "",
   "nodes" : [ {
     "id" : 1,
-    "type" : "stream-exec-table-source-scan_1",
+    "type" : "stream-exec-table-source-scan_2",
     "scanTableSource" : {
       "table" : {
         "identifier" : "`default_catalog`.`default_database`.`MyTable`",
@@ -31,7 +31,6 @@
                 "rexNode" : {
                   "kind" : "CALL",
                   "internalName" : "$PROCTIME$1",
-                  "operands" : [ ],
                   "type" : {
                     "type" : "TIMESTAMP_WITH_LOCAL_TIME_ZONE",
                     "nullable" : false,
@@ -54,10 +53,9 @@
               }
             } ]
           },
-          "partitionKeys" : [ ],
           "options" : {
-            "connector" : "values",
-            "bounded" : "false"
+            "bounded" : "false",
+            "connector" : "values"
           }
         }
       },
@@ -72,8 +70,7 @@
       } ]
     },
     "outputType" : "ROW<`c` INT NOT NULL, `a` INT, `rowtime` TIMESTAMP(3)>",
-    "description" : "TableSourceScan(table=[[default_catalog, default_database, MyTable, project=[c, a, rowtime], metadata=[]]], fields=[c, a, rowtime])",
-    "inputProperties" : [ ]
+    "description" : "TableSourceScan(table=[[default_catalog, default_database, MyTable, project=[c, a, rowtime], metadata=[]]], fields=[c, a, rowtime])"
   }, {
     "id" : 2,
     "type" : "stream-exec-calc_1",
@@ -84,7 +81,6 @@
     }, {
       "kind" : "CALL",
       "internalName" : "$PROCTIME$1",
-      "operands" : [ ],
       "type" : {
         "type" : "TIMESTAMP_WITH_LOCAL_TIME_ZONE",
         "nullable" : false,
@@ -329,7 +325,7 @@
         "fieldType" : "BIGINT"
       } ]
     },
-    "description" : "PythonOverAggregate(orderBy=[proctime ASC], window=[ RANG BETWEEN 10000 PRECEDING AND CURRENT ROW], select=[c, proctime, $2, pyFunc(c, c) AS w0$o0])"
+    "description" : "PythonOverAggregate(orderBy=[proctime ASC], window=[ RANGE BETWEEN 10000 PRECEDING AND CURRENT ROW], select=[c, proctime, $2, pyFunc(c, c) AS w0$o0])"
   }, {
     "id" : 7,
     "type" : "stream-exec-calc_1",
@@ -354,7 +350,7 @@
     "description" : "Calc(select=[$2 AS $0, w0$o0 AS $1])"
   }, {
     "id" : 8,
-    "type" : "stream-exec-sink_1",
+    "type" : "stream-exec-sink_2",
     "configuration" : {
       "table.exec.sink.keyed-shuffle" : "AUTO",
       "table.exec.sink.not-null-enforcer" : "ERROR",
@@ -373,14 +369,12 @@
             }, {
               "name" : "b",
               "dataType" : "BIGINT"
-            } ],
-            "watermarkSpecs" : [ ]
+            } ]
           },
-          "partitionKeys" : [ ],
           "options" : {
+            "connector" : "values",
             "sink-insert-only" : "false",
-            "table-sink-class" : "DEFAULT",
-            "connector" : "values"
+            "table-sink-class" : "DEFAULT"
           }
         }
       }

@@ -60,7 +60,6 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -260,10 +259,12 @@ public class PekkoRpcService implements RpcService {
     }
 
     @Override
-    public <C extends RpcEndpoint & RpcGateway> RpcServer startServer(C rpcEndpoint) {
+    public <C extends RpcEndpoint & RpcGateway> RpcServer startServer(
+            C rpcEndpoint, Map<String, String> loggingContext) {
         checkNotNull(rpcEndpoint, "rpc endpoint");
 
-        final SupervisorActor.ActorRegistration actorRegistration = registerRpcActor(rpcEndpoint);
+        final SupervisorActor.ActorRegistration actorRegistration =
+                registerRpcActor(rpcEndpoint, loggingContext);
         final ActorRef actorRef = actorRegistration.getActorRef();
         final CompletableFuture<Void> actorTerminationFuture =
                 actorRegistration.getTerminationFuture();
@@ -282,8 +283,8 @@ public class PekkoRpcService implements RpcService {
             hostname = host.get();
         }
 
-        Set<Class<?>> implementedRpcGateways =
-                new HashSet<>(RpcUtils.extractImplementedRpcGateways(rpcEndpoint.getClass()));
+        Set<Class<? extends RpcGateway>> implementedRpcGateways =
+                RpcUtils.extractImplementedRpcGateways(rpcEndpoint.getClass());
 
         implementedRpcGateways.add(RpcServer.class);
         implementedRpcGateways.add(PekkoBasedEndpoint.class);
@@ -336,7 +337,7 @@ public class PekkoRpcService implements RpcService {
     }
 
     private <C extends RpcEndpoint & RpcGateway> SupervisorActor.ActorRegistration registerRpcActor(
-            C rpcEndpoint) {
+            C rpcEndpoint, Map<String, String> loggingContext) {
         final Class<? extends AbstractActor> rpcActorType;
 
         if (rpcEndpoint instanceof FencedRpcEndpoint) {
@@ -359,7 +360,8 @@ public class PekkoRpcService implements RpcService {
                                             getVersion(),
                                             configuration.getMaximumFramesize(),
                                             configuration.isForceRpcInvocationSerialization(),
-                                            flinkClassLoader),
+                                            flinkClassLoader,
+                                            loggingContext),
                             rpcEndpoint.getEndpointId());
 
             final SupervisorActor.ActorRegistration actorRegistration =

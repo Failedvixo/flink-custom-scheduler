@@ -68,7 +68,7 @@ Flink 利用 **[ZooKeeper](http://zookeeper.apache.org)** 在所有运行的 Job
 
 ### 配置示例
 
-在 `conf/flink-conf.yaml` 中配置高可用模式和 ZooKeeper 复制组（quorum）:
+在 [Flink 配置文件]({{< ref "docs/deployment/config#flink-配置文件" >}}) 中配置高可用模式和 ZooKeeper 复制组（quorum）:
 
 ```bash
 high-availability.type: zookeeper
@@ -82,7 +82,7 @@ high-availability.storageDir: hdfs:///flink/recovery
 
 ## ZooKeeper 安全配置
 
-如果 ZooKeeper 使用 Kerberos 以安全模式运行，必要时可以在 `flink-conf.yaml` 中覆盖以下配置:
+如果 ZooKeeper 使用 Kerberos 以安全模式运行，必要时可以在 [Flink 配置文件]({{< ref "docs/deployment/config#flink-配置文件" >}}) 中覆盖以下配置:
 
 ```bash
 # 默认配置为 "zookeeper". 如果 ZooKeeper quorum 配置了不同的服务名称，
@@ -98,7 +98,20 @@ zookeeper.sasl.login-context-name: Client
 
 {{< top >}}
 
-## Advanced Configuration
+## 高级配置
+
+### ZooKeeper 客户端重试配置
+
+当 ZooKeeper 连接失败或中断时，Flink 会使用有界指数退避策略自动重试连接。该策略会逐步增加重试之间的等待时间（每次加倍），以避免对 ZooKeeper 集群造成过大压力，同时限制最大等待时间以确保能够相对快速地恢复。
+
+- **[high-availability.zookeeper.client.retry-wait]({{< ref "docs/deployment/config" >}}#high-availability-zookeeper-client-retry-wait)** (默认值: `5s`):
+  连续重试之间的初始等待时间。该值会随着每次重试而加倍（指数退避）。
+
+- **[high-availability.zookeeper.client.max-retry-wait]({{< ref "docs/deployment/config" >}}#high-availability-zookeeper-client-max-retry-wait)** (默认值: `60s`):
+  重试之间的最大等待时间。这限制了指数退避，以确保在 ZooKeeper 长时间故障期间恢复不会变得过慢。
+
+- **[high-availability.zookeeper.client.max-retry-attempts]({{< ref "docs/deployment/config" >}}#high-availability-zookeeper-client-max-retry-attempts)** (默认值: `3`):
+  放弃之前的最大连接重试次数。在这么多次失败尝试后，操作将失败。
 
 ### Tolerating Suspended ZooKeeper Connections
 

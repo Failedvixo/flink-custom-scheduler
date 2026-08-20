@@ -33,6 +33,7 @@ import org.apache.flink.table.planner.plan.nodes.logical.FlinkLogicalJoin;
 import org.apache.flink.table.planner.plan.nodes.logical.FlinkLogicalLegacySink;
 import org.apache.flink.table.planner.plan.nodes.logical.FlinkLogicalMatch;
 import org.apache.flink.table.planner.plan.nodes.logical.FlinkLogicalMinus;
+import org.apache.flink.table.planner.plan.nodes.logical.FlinkLogicalMultiJoin;
 import org.apache.flink.table.planner.plan.nodes.logical.FlinkLogicalOverAggregate;
 import org.apache.flink.table.planner.plan.nodes.logical.FlinkLogicalRank;
 import org.apache.flink.table.planner.plan.nodes.logical.FlinkLogicalScriptTransform;
@@ -64,6 +65,7 @@ import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.core.SetOp;
 import org.apache.calcite.rel.core.TableScan;
+import org.apache.calcite.rel.core.Window;
 import org.apache.calcite.rel.logical.LogicalCalc;
 import org.apache.calcite.rel.logical.LogicalTableModify;
 import org.apache.calcite.rel.type.RelDataType;
@@ -77,6 +79,7 @@ import org.apache.calcite.rex.RexPatternFieldRef;
 import org.apache.calcite.rex.RexProgram;
 import org.apache.calcite.rex.RexProgramBuilder;
 import org.apache.calcite.rex.RexShuttle;
+import org.apache.calcite.sql.SqlAggFunction;
 import org.apache.calcite.sql.SqlOperator;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.type.SqlTypeName;
@@ -142,10 +145,11 @@ public final class RelTimeIndicatorConverter extends RelHomogeneousShuttle {
                 || node instanceof FlinkLogicalDistribution
                 || node instanceof FlinkLogicalWatermarkAssigner
                 || node instanceof FlinkLogicalSort
-                || node instanceof FlinkLogicalOverAggregate
                 || node instanceof FlinkLogicalExpand
                 || node instanceof FlinkLogicalScriptTransform) {
             return visitSimpleRel(node);
+        } else if (node instanceof FlinkLogicalOverAggregate) {
+            return visitLogicalOverAggregate((FlinkLogicalOverAggregate) node);
         } else if (node instanceof FlinkLogicalWindowAggregate) {
             return visitWindowAggregate((FlinkLogicalWindowAggregate) node);
         } else if (node instanceof FlinkLogicalWindowTableAggregate) {
@@ -162,6 +166,8 @@ public final class RelTimeIndicatorConverter extends RelHomogeneousShuttle {
             return visitCorrelate((FlinkLogicalCorrelate) node);
         } else if (node instanceof FlinkLogicalJoin) {
             return visitJoin((FlinkLogicalJoin) node);
+        } else if (node instanceof FlinkLogicalMultiJoin) {
+            return visitMultiJoin((FlinkLogicalMultiJoin) node);
         } else if (node instanceof FlinkLogicalSink) {
             return visitSink((FlinkLogicalSink) node);
         } else if (node instanceof FlinkLogicalLegacySink) {
@@ -231,6 +237,54 @@ public final class RelTimeIndicatorConverter extends RelHomogeneousShuttle {
                 match.getPartitionKeys(),
                 match.getOrderKeys(),
                 newInterval);
+    }
+
+    private RelNode visitLogicalOverAggregate(FlinkLogicalOverAggregate logical) {
+        final RelNode newInput = logical.getInput().accept(this);
+        final List<RelDataType> newDataTypeList =
+                new ArrayList<>(
+                        newInput.getRowType().getFieldList().stream()
+                                .map(RelDataTypeField::getType)
+                                .collect(Collectors.toList()));
+
+        final List<Window.Group> windowGroups = new ArrayList<>();
+        for (Window.Group group : logical.groups) {
+            final List<Window.RexWinAggCall> winCalls = new ArrayList<>();
+            for (Window.RexWinAggCall call : group.aggCalls) {
+                RelDataType callType;
+                if (isTimeIndicatorType(call.getType())) {
+                    callType =
+                            timestamp(
+                                    call.getType().isNullable(),
+                                    isTimestampLtzType(call.getType()));
+                } else {
+                    callType = call.getType();
+                }
+                winCalls.add(
+                        new Window.RexWinAggCall(
+                                (SqlAggFunction) call.op,
+                                callType,
+                                call.getOperands(),
+                                call.ordinal,
+                                call.distinct,
+                                call.ignoreNulls));
+                newDataTypeList.add(callType);
+            }
+            windowGroups.add(
+                    new Window.Group(
+                            group.keys,
+                            group.isRows,
+                            group.lowerBound,
+                            group.upperBound,
+                            group.orderKeys,
+                            winCalls));
+        }
+
+        final RelDataType newType =
+                logical.getCluster()
+                        .getTypeFactory()
+                        .createStructType(newDataTypeList, logical.getRowType().getFieldNames());
+        return logical.copy(logical.getTraitSet(), List.of(newInput), newType, windowGroups);
     }
 
     private RelNode visitCalc(FlinkLogicalCalc calc) {
@@ -451,6 +505,7 @@ public final class RelTimeIndicatorConverter extends RelHomogeneousShuttle {
                                         call.isDistinct(),
                                         false,
                                         false,
+                                        call.rexList,
                                         call.getArgList(),
                                         call.filterArg,
                                         null,
@@ -470,7 +525,8 @@ public final class RelTimeIndicatorConverter extends RelHomogeneousShuttle {
                         tableAgg.getInput(),
                         tableAgg.getGroupSet(),
                         tableAgg.getGroupSets(),
-                        tableAgg.getAggCallList());
+                        tableAgg.getAggCallList(),
+                        Collections.emptyList());
         FlinkLogicalAggregate convertedAgg = visitAggregate(correspondingAgg);
         return new FlinkLogicalTableAggregate(
                 tableAgg.getCluster(),
@@ -514,6 +570,47 @@ public final class RelTimeIndicatorConverter extends RelHomogeneousShuttle {
                 convertedWindowAgg.getAggCallList(),
                 tableAgg.getWindow(),
                 tableAgg.getNamedProperties());
+    }
+
+    private RelNode visitMultiJoin(FlinkLogicalMultiJoin multiJoin) {
+        // visit and materialize children
+        final List<RelNode> newInputs =
+                multiJoin.getInputs().stream()
+                        .map(input -> input.accept(this))
+                        .map(this::materializeTimeIndicators)
+                        .collect(Collectors.toList());
+
+        final List<RelDataType> allFields =
+                newInputs.stream()
+                        .flatMap(input -> RelOptUtil.getFieldTypeList(input.getRowType()).stream())
+                        .collect(Collectors.toList());
+
+        RexTimeIndicatorMaterializer materializer = new RexTimeIndicatorMaterializer(allFields);
+
+        final RexNode newJoinFilter = multiJoin.getJoinFilter().accept(materializer);
+
+        final List<RexNode> newJoinConditions =
+                multiJoin.getJoinConditions().stream()
+                        .map(cond -> cond == null ? null : cond.accept(materializer))
+                        .collect(Collectors.toList());
+
+        final RexNode newPostJoinFilter =
+                multiJoin.getPostJoinFilter() == null
+                        ? null
+                        : multiJoin.getPostJoinFilter().accept(materializer);
+
+        // materialize all output types and remove special time indicator types
+        RelDataType newOutputType = getRowTypeWithoutTimeIndicator(multiJoin.getRowType());
+
+        return FlinkLogicalMultiJoin.create(
+                multiJoin.getCluster(),
+                newInputs,
+                newJoinFilter,
+                newOutputType,
+                newJoinConditions,
+                multiJoin.getJoinTypes(),
+                newPostJoinFilter,
+                multiJoin.getHints());
     }
 
     private RelNode visitInvalidRel(RelNode node) {
@@ -608,7 +705,8 @@ public final class RelTimeIndicatorConverter extends RelHomogeneousShuttle {
             // cast rowTime indicator to regular timestamp
             return rexBuilder.makeAbstractCast(
                     timestamp(expr.getType().isNullable(), isTimestampLtzType(expr.getType())),
-                    expr);
+                    expr,
+                    false);
         } else if (isProctimeIndicatorType(expr.getType())) {
             // generate procTime access
             return rexBuilder.makeCall(FlinkSqlOperatorTable.PROCTIME_MATERIALIZE, expr);
@@ -633,6 +731,10 @@ public final class RelTimeIndicatorConverter extends RelHomogeneousShuttle {
                             "Union fields with time attributes requires same types, but the types are %s and %s.",
                             l, r));
         }
+    }
+
+    private RelDataType getRowTypeWithoutTimeIndicator(RelDataType relType) {
+        return getRowTypeWithoutTimeIndicator(relType, s -> true);
     }
 
     private RelDataType getRowTypeWithoutTimeIndicator(

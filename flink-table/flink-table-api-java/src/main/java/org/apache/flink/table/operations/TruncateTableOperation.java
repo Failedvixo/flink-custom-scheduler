@@ -18,10 +18,10 @@
 
 package org.apache.flink.table.operations;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.api.internal.TableResultInternal;
-import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogManager;
 import org.apache.flink.table.catalog.ContextResolvedTable;
 import org.apache.flink.table.catalog.ObjectIdentifier;
@@ -35,6 +35,7 @@ import org.apache.flink.table.operations.utils.ExecutableOperationUtils;
 import java.util.Collections;
 
 /** Operation to describe an {@code TRUNCATE TABLE} statement. */
+@Internal
 public class TruncateTableOperation implements ExecutableOperation {
 
     private final ObjectIdentifier tableIdentifier;
@@ -52,10 +53,6 @@ public class TruncateTableOperation implements ExecutableOperation {
 
         CatalogManager catalogManager = ctx.getCatalogManager();
         ContextResolvedTable contextResolvedTable = catalogManager.getTableOrError(tableIdentifier);
-        CatalogBaseTable catalogBaseTable = contextResolvedTable.getTable();
-        if (catalogBaseTable.getTableKind() == CatalogBaseTable.TableKind.VIEW) {
-            throw new TableException("TRUNCATE TABLE statement is not supported for view.");
-        }
 
         ResolvedCatalogTable resolvedTable = contextResolvedTable.getResolvedTable();
         ObjectIdentifier objectIdentifier = contextResolvedTable.getIdentifier();
@@ -65,7 +62,6 @@ public class TruncateTableOperation implements ExecutableOperation {
         }
 
         if (TableFactoryUtil.isLegacyConnectorOptions(
-                catalogManager.getCatalog(objectIdentifier.getCatalogName()).orElse(null),
                 ctx.getTableConfig(),
                 ctx.isStreamingMode(),
                 tableIdentifier,

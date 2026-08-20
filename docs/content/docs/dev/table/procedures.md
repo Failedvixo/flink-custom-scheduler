@@ -32,7 +32,7 @@ Flink Table API & SQL empowers users to perform data manipulation and administra
 ## Implementation Guide
 
 To call a procedure, it must be available in a catalog. To provide procedures in a catalog, you need to implement the procedure and then return it using the `Catalog.getProcedure(ObjectPath procedurePath)` method.
-The following steps will guild you on how to implement and provide a procedure in a catalog.
+The following steps will guide you on how to implement and provide a procedure in a catalog.
 
 ### Procedure Class
 
@@ -125,7 +125,7 @@ class GenerateSequenceProcedure extends Procedure {
 {{< /tabs >}}
 
 ### Type Inference
-The table ecosystem (similar to the SQL standard) is a strongly typed API. Therefore, both procedure parameters and return types must be mapped to a [data type]({{< ref "docs/dev/table/types" >}}).
+The table ecosystem (similar to the SQL standard) is a strongly typed API. Therefore, both procedure parameters and return types must be mapped to a [data type]({{< ref "docs/sql/reference/data-types" >}}).
 
 From a logical perspective, the planner needs information about expected types, precision, and scale. From a JVM perspective, the planner needs information about how internal data structures are represented as JVM objects when calling a procedure.
 
@@ -139,7 +139,7 @@ Note: although the return type in `call` method must be array type `T[]`, if use
 
 The automatic type inference inspects the procedure's class and `call` methods to derive data types for the arguments and result of a procedure. `@DataTypeHint` and `@ProcedureHint` annotations support the automatic extraction.
 
-For a full list of classes that can be implicitly mapped to a data type, please refer to the [data type extraction section]({{< ref "docs/dev/table/types" >}}#data-type-extraction).
+For a full list of classes that can be implicitly mapped to a data type, please refer to the [data type extraction section]({{< ref "docs/sql/reference/data-types" >}}#data-type-extraction).
 
 **`@DataTypeHint`**
 
@@ -339,6 +339,155 @@ class OverloadedProcedure extends Procedure {
 {{< /tab >}}
 {{< /tabs >}}
 
+### Named Parameters
+
+When calling a procedure, you can use parameter names to specify parameter values. Named parameters allow you to pass both the parameter name and value to the procedure at the same time, avoiding confusion caused by the wrong parameter order, and improving the readability and maintainability of the code. In addition, named parameters can also omit non-required parameters, which are filled with `null` by default. We can use the `@ArgumentHint` annotation to specify the name, type, and whether the parameter is required.
+
+The following three examples show how to use `@ArgumentHint` in different scopes. For more information, please refer to the documentation of the annotation class.
+
+1. Using `@ArgumentHint` annotation on the parameters of the `call` method of the procedure.
+
+{{< tabs "5d205654-30da-11ee-be56-0242ac120003" >}}
+{{< tab "Java" >}}
+```java
+import org.apache.flink.table.annotation.DataTypeHint;
+import org.apache.flink.table.annotation.ProcedureHint;
+import org.apache.flink.table.procedure.ProcedureContext;
+import org.apache.flink.table.procedures.Procedure;
+import org.apache.flink.types.Row;
+
+public static class NamedParameterProcedure extends Procedure {
+
+  public @DataTypeHint("INT") Integer[] call(ProcedureContext context, @ArgumentHint(name = "a", isOption = true) Integer a, @ArgumentHint(name = "b") Integer b) {
+    return new Integer[] {a + (b == null ? 0 : b)};
+  }
+}
+```
+{{< /tab >}}
+{{< tab "Scala" >}}
+```scala
+
+import org.apache.flink.table.annotation.DataTypeHint
+import org.apache.flink.table.annotation.ProcedureHint
+import org.apache.flink.table.procedure.ProcedureContext
+import org.apache.flink.table.procedures.Procedure
+import org.apache.flink.types.Row
+import scala.annotation.varargs
+
+class NamedParameterProcedure extends Procedure {
+
+  def call(context: ProcedureContext, @ArgumentHint(name = "param1", isOptional = true) a: Integer, @ArgumentHint(name = "param2") b: Integer): Array[Integer] = {
+    Array(a + (if (b == null) 0 else b))
+  }
+}
+```
+{{< /tab >}}
+{{< /tabs >}}
+
+2. Using `@ArgumentHint` annotation on the `call` method of the procedure.
+{{< tabs "5d205654-30da-11ee-be56-0242ac120004" >}}
+{{< tab "Java" >}}
+```java
+import org.apache.flink.table.annotation.DataTypeHint;
+import org.apache.flink.table.annotation.ProcedureHint;
+import org.apache.flink.table.procedure.ProcedureContext;
+import org.apache.flink.table.procedures.Procedure;
+import org.apache.flink.types.Row;
+
+public static class NamedParameterProcedure extends Procedure {
+
+  @ProcedureHint(
+    arguments = {
+      @ArgumentHint(name = "param1", type = @DataTypeHint("INTEGER"), isOptional = false),
+      @ArgumentHint(name = "param2", type = @DataTypeHint("INTEGER"), isOptional = true)
+    }
+  )
+  public @DataTypeHint("INT") Integer[] call(ProcedureContext context, Integer a, Integer b) {
+    return new Integer[] {a + (b == null ? 0 : b)};
+  }
+}
+```
+{{< /tab >}}
+{{< tab "Scala" >}}
+```scala
+
+import org.apache.flink.table.annotation.DataTypeHint
+import org.apache.flink.table.annotation.ProcedureHint
+import org.apache.flink.table.procedure.ProcedureContext
+import org.apache.flink.table.procedures.Procedure
+import org.apache.flink.types.Row
+import scala.annotation.varargs
+
+class NamedParameterProcedure extends Procedure {
+
+  @ProcedureHint(
+    arguments = Array(
+      new ArgumentHint(name = "param1", `type` = new DataTypeHint("INTEGER"), isOptional = false),
+      new ArgumentHint(name = "param2", `type` = new DataTypeHint("INTEGER"), isOptional = true)
+    )
+  )
+  def call(context: ProcedureContext, a: Integer, b: Integer): Array[Integer] = {
+    Array(a + (if (b == null) 0 else b))
+  }
+}
+```
+{{< /tab >}}
+{{< /tabs >}}
+
+3. Using `@ArgumentHint` annotation on the class of the procedure.
+
+{{< tabs "5d205654-30da-11ee-be56-0242ac120005" >}}
+{{< tab "Java" >}}
+```java
+import org.apache.flink.table.annotation.DataTypeHint;
+import org.apache.flink.table.annotation.ProcedureHint;
+import org.apache.flink.table.procedure.ProcedureContext;
+import org.apache.flink.table.procedures.Procedure;
+import org.apache.flink.types.Row;
+
+@ProcedureHint(
+  arguments = {
+    @ArgumentHint(name = "param1", type = @DataTypeHint("INTEGER"), isOptional = false),
+    @ArgumentHint(name = "param2", type = @DataTypeHint("INTEGER"), isOptional = true)
+  }
+)
+public static class NamedParameterProcedure extends Procedure {
+
+  public @DataTypeHint("INT") Integer[] call(ProcedureContext context, Integer a, Integer b) {
+    return new Integer[] {a + (b == null ? 0 : b)};
+  }
+}
+```
+{{< /tab >}}
+{{< tab "Scala" >}}
+```scala
+
+import org.apache.flink.table.annotation.DataTypeHint
+import org.apache.flink.table.annotation.ProcedureHint
+import org.apache.flink.table.procedure.ProcedureContext
+import org.apache.flink.table.procedures.Procedure
+import org.apache.flink.types.Row
+import scala.annotation.varargs
+
+@ProcedureHint(
+  arguments = Array(
+    new ArgumentHint(name = "param1", `type` = new DataTypeHint("INTEGER"), isOptional = false),
+    new ArgumentHint(name = "param2", `type` = new DataTypeHint("INTEGER"), isOptional = true)
+  )
+)
+class NamedParameterProcedure extends Procedure {
+  def call(context: ProcedureContext, a: Integer, b: Integer): Array[Integer] = {
+    Array(a + (if (b == null) 0 else b))
+  }
+}
+```
+{{< /tab >}}
+{{< /tabs >}}
+
+{{< hint info >}}
+* `@ArgumentHint` annotation already contains `@DataTypeHint` annotation, so it cannot be used together with `@DataTypeHint` in `@ProcedureHint`. When applied to function parameters, `@ArgumentHint` cannot be used with `@DataTypeHint` at the same time, and it is recommended to use `@ArgumentHint`.
+* Named parameters only take effect when the corresponding procedure class does not contain overloaded functions and variable parameter functions, otherwise using named parameters will cause an error.
+{{< /hint >}}
 
 ### Return Procedure in Catalog
 After implementing a procedure, the catalog can then return the procedure in method `Catalog.getProcedure(ObjectPath procedurePath)`. The following example shows how to return it in a catalog.

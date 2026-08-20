@@ -44,7 +44,7 @@ import org.apache.flink.runtime.testutils.WorkingDirectoryExtension;
 import org.apache.flink.testutils.junit.utils.TempDirUtils;
 import org.apache.flink.util.IOUtils;
 
-import org.apache.flink.shaded.guava31.com.google.common.collect.Sets;
+import org.apache.flink.shaded.guava33.com.google.common.collect.Sets;
 
 import org.apache.commons.io.FileUtils;
 import org.junit.jupiter.api.AfterEach;
@@ -86,7 +86,7 @@ class TaskManagerRunnerStartupTest {
     @TempDir public static File workingDirectoryFolder;
 
     @RegisterExtension
-    public static final AllCallbackWrapper<WorkingDirectoryExtension>
+    private static final AllCallbackWrapper<WorkingDirectoryExtension>
             WORKING_DIRECTORY_EXTENSION_WRAPPER =
                     new AllCallbackWrapper<>(
                             new WorkingDirectoryExtension(() -> workingDirectoryFolder));
@@ -105,7 +105,7 @@ class TaskManagerRunnerStartupTest {
 
     @AfterEach
     void tearDownTest() throws Exception {
-        highAvailabilityServices.closeAndCleanupAllData();
+        highAvailabilityServices.closeWithOptionalClean(true);
         highAvailabilityServices = null;
     }
 
@@ -122,7 +122,7 @@ class TaskManagerRunnerStartupTest {
 
         try {
             Configuration cfg = createFlinkConfiguration();
-            cfg.setString(CoreOptions.TMP_DIRS, nonWritable.getAbsolutePath());
+            cfg.set(CoreOptions.TMP_DIRS, nonWritable.getAbsolutePath());
 
             assertThatThrownBy(
                             () ->
@@ -178,8 +178,8 @@ class TaskManagerRunnerStartupTest {
 
         try {
             final Configuration cfg = createFlinkConfiguration();
-            cfg.setInteger(NettyShuffleEnvironmentOptions.DATA_PORT, blocker.getLocalPort());
-            cfg.setString(TaskManagerOptions.BIND_HOST, LOCAL_HOST);
+            cfg.set(NettyShuffleEnvironmentOptions.DATA_PORT, blocker.getLocalPort());
+            cfg.set(TaskManagerOptions.BIND_HOST, LOCAL_HOST);
 
             assertThatThrownBy(
                             () ->
@@ -240,8 +240,6 @@ class TaskManagerRunnerStartupTest {
                         ".taskmanager..Status.JVM.Threads.Count",
                         ".taskmanager..Status.JVM.CPU.Load",
                         ".taskmanager..Status.JVM.CPU.Time",
-                        ".taskmanager..Status.Network.TotalMemorySegments",
-                        ".taskmanager..Status.Network.AvailableMemorySegments",
                         ".taskmanager..Status.Shuffle.Netty.TotalMemorySegments",
                         ".taskmanager..Status.Shuffle.Netty.TotalMemory",
                         ".taskmanager..Status.Shuffle.Netty.AvailableMemorySegments",

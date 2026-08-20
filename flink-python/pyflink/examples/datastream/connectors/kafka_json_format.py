@@ -18,9 +18,10 @@
 import logging
 import sys
 
-from pyflink.common import Types
+from pyflink.common import Types, WatermarkStrategy
 from pyflink.datastream import StreamExecutionEnvironment
-from pyflink.datastream.connectors.kafka import FlinkKafkaProducer, FlinkKafkaConsumer
+from pyflink.datastream.connectors.kafka import (KafkaRecordSerializationSchema, KafkaSink,
+                                                 KafkaSource, KafkaOffsetsInitializer)
 from pyflink.datastream.formats.json import JsonRowSerializationSchema, JsonRowDeserializationSchema
 
 
@@ -35,14 +36,20 @@ def write_to_kafka(env):
     serialization_schema = JsonRowSerializationSchema.Builder() \
         .with_type_info(type_info) \
         .build()
-    kafka_producer = FlinkKafkaProducer(
-        topic='test_json_topic',
-        serialization_schema=serialization_schema,
-        producer_config={'bootstrap.servers': 'localhost:9092', 'group.id': 'test_group'}
+    record_serializer = KafkaRecordSerializationSchema.builder() \
+        .set_topic('test_json_topic') \
+        .set_value_serialization_schema(serialization_schema) \
+        .build()
+    kafka_sink = (
+        KafkaSink.builder()
+        .set_record_serializer(record_serializer)
+        .set_bootstrap_servers('localhost:9092')
+        .set_property("group.id", "test_group")
+        .build()
     )
 
     # note that the output type of ds must be RowTypeInfo
-    ds.add_sink(kafka_producer)
+    ds.sink_to(kafka_sink)
     env.execute()
 
 
@@ -50,14 +57,22 @@ def read_from_kafka(env):
     deserialization_schema = JsonRowDeserializationSchema.Builder() \
         .type_info(Types.ROW([Types.INT(), Types.STRING()])) \
         .build()
-    kafka_consumer = FlinkKafkaConsumer(
-        topics='test_json_topic',
-        deserialization_schema=deserialization_schema,
-        properties={'bootstrap.servers': 'localhost:9092', 'group.id': 'test_group_1'}
+    kafka_source = (
+        KafkaSource.builder()
+        .set_topics('test_json_topic')
+        .set_value_only_deserializer(deserialization_schema)
+        .set_properties({'bootstrap.servers': 'localhost:9092', 'group.id': 'test_group_1'})
+        .set_starting_offsets(KafkaOffsetsInitializer.earliest())
+        .build()
     )
-    kafka_consumer.set_start_from_earliest()
 
-    env.add_source(kafka_consumer).print()
+    ds = env.from_source(
+        kafka_source,
+        watermark_strategy=WatermarkStrategy.no_watermarks(),
+        source_name="kafka source"
+    )
+
+    ds.print()
     env.execute()
 
 

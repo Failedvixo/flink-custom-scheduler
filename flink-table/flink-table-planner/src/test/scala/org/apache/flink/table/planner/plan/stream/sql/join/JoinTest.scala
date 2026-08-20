@@ -17,11 +17,15 @@
  */
 package org.apache.flink.table.planner.plan.stream.sql.join
 
-import org.apache.flink.api.scala._
 import org.apache.flink.table.api._
+import org.apache.flink.table.api.config.ExecutionConfigOptions
 import org.apache.flink.table.planner.utils.{StreamTableTestUtil, TableFunc1, TableTestBase}
+import org.apache.flink.table.planner.utils.ImmutableColConstraintTestUtils.addImmutableColConstraint
 
-import org.junit.Test
+import org.assertj.core.api.Assertions.assertThatThrownBy
+import org.junit.jupiter.api.Test
+
+import java.time.Duration
 
 class JoinTest extends TableTestBase {
 
@@ -396,6 +400,7 @@ class JoinTest extends TableTestBase {
         |select t1.city_id, t2.city_name, t1.customer_cnt
         | from (select city_id, count(*) customer_cnt from source_customer group by city_id) t1
         | join source_city t2 on t1.city_id = t2.id
+        |on conflict do deduplicate
         |""".stripMargin,
       ExplainDetail.CHANGELOG_MODE
     )
@@ -500,6 +505,133 @@ class JoinTest extends TableTestBase {
         |select t2.city_name, t1.customer_cnt
         | from (select city_id, count(*) customer_cnt from source_customer group by city_id) t1
         | join source_city t2 on t1.city_id = t2.id
+        | on conflict do deduplicate
+        |""".stripMargin,
+      ExplainDetail.CHANGELOG_MODE
+    )
+  }
+
+  @Test
+  def testJoinOutputUpsertKeyInSinkPkWhileJoinOnImmutableCols(): Unit = {
+    val catalog = util.tableEnv.getCatalog(util.tableEnv.getCurrentCatalog).get()
+
+    util.tableEnv.executeSql("""
+                               |create table source_city (
+                               | id varchar,
+                               | city_name varchar,
+                               | primary key (id) not enforced
+                               |) with (
+                               | 'connector' = 'values',
+                               | 'changelog-mode' = 'I,UA,UB'
+                               |)
+                               |""".stripMargin)
+    addImmutableColConstraint(catalog, util.tableEnv.getCurrentDatabase, "source_city", "city_name")
+
+    util.tableEnv.executeSql("""
+                               |create table source_city_detail (
+                               | city_id varchar,
+                               | city_name varchar,
+                               | city_detail varchar,
+                               | primary key (city_id) not enforced
+                               |) with (
+                               | 'connector' = 'values',
+                               | 'changelog-mode' = 'I,UA,UB'
+                               |)
+                               |""".stripMargin)
+    addImmutableColConstraint(
+      catalog,
+      util.tableEnv.getCurrentDatabase,
+      "source_city_detail",
+      "city_name")
+
+    util.tableEnv.executeSql("""
+                               |create table sink (
+                               | id varchar,
+                               | city_id varchar,
+                               | city_name varchar,
+                               | city_detail varchar,
+                               | primary key (id, city_id) not enforced
+                               |) with (
+                               | 'connector' = 'values'
+                               | ,'sink-insert-only' = 'false'
+                               |)
+                               |""".stripMargin)
+
+    // verify UB should be dropped and no upsertMaterialize
+    util.verifyExplainInsert(
+      """
+        |insert into sink
+        |select t1.id, t2.city_id, t1.city_name, t2.city_detail
+        | from source_city t1
+        | join source_city_detail t2 on t1.city_name = t2.city_name
+        |on conflict do deduplicate
+        |""".stripMargin,
+      ExplainDetail.CHANGELOG_MODE
+    )
+  }
+
+  @Test
+  def testJoinOutputUpsertKeyInSinkPkWhileJoinOnPartOfImmutableCols(): Unit = {
+    val catalog = util.tableEnv.getCatalog(util.tableEnv.getCurrentCatalog).get()
+
+    util.tableEnv.executeSql("""
+                               |create table source_city (
+                               | id varchar,
+                               | city_name varchar,
+                               | city_no int,
+                               | primary key (id) not enforced
+                               |) with (
+                               | 'connector' = 'values',
+                               | 'changelog-mode' = 'I,UA,UB'
+                               |)
+                               |""".stripMargin)
+    addImmutableColConstraint(
+      catalog,
+      util.tableEnv.getCurrentDatabase,
+      "source_city",
+      "city_name",
+      "city_no")
+
+    util.tableEnv.executeSql("""
+                               |create table source_city_detail (
+                               | city_id varchar,
+                               | city_name varchar,
+                               | city_no int,
+                               | city_detail varchar,
+                               | primary key (city_id) not enforced
+                               |) with (
+                               | 'connector' = 'values',
+                               | 'changelog-mode' = 'I,UA,UB'
+                               |)
+                               |""".stripMargin)
+    addImmutableColConstraint(
+      catalog,
+      util.tableEnv.getCurrentDatabase,
+      "source_city_detail",
+      "city_name",
+      "city_no")
+
+    util.tableEnv.executeSql("""
+                               |create table sink (
+                               | id varchar,
+                               | city_id varchar,
+                               | city_name varchar,
+                               | city_detail varchar,
+                               | primary key (id, city_id) not enforced
+                               |) with (
+                               | 'connector' = 'values'
+                               | ,'sink-insert-only' = 'false'
+                               |)
+                               |""".stripMargin)
+
+    // verify UB should be dropped and no upsertMaterialize on sink
+    util.verifyExplainInsert(
+      """
+        |insert into sink
+        |select t1.id, t2.city_id, t1.city_name, t2.city_detail
+        | from source_city t1
+        | join source_city_detail t2 on t1.city_name = t2.city_name
+        |on conflict do deduplicate
         |""".stripMargin,
       ExplainDetail.CHANGELOG_MODE
     )
@@ -576,9 +708,111 @@ class JoinTest extends TableTestBase {
     // TODO the error message should be improved after we support extracting alias from table func
     util.addTemporarySystemFunction("TableFunc1", new TableFunc1)
     util.verifyExpectdException(
-      "SELECT /*+ LOOKUP('table'='D') */ T.a FROM t AS T CROSS JOIN LATERAL TABLE(TableFunc1(c)) AS D(c1)",
+      "SELECT /*+ LOOKUP('table'='DD') */ T.a FROM t AS T CROSS JOIN LATERAL TABLE(TableFunc1(c)) AS D(c1)",
       "The options of following hints cannot match the name of input tables or views: \n" +
-        "`D` in `LOOKUP`"
+        "`DD` in `LOOKUP`"
     )
+  }
+
+  @Test
+  def testJoinPartitionTableWithNonExistentPartition(): Unit = {
+    util.tableEnv.executeSql("""
+                               |create table leftPartitionTable (
+                               | a1 varchar,
+                               | b1 int)
+                               | partitioned by (b1) 
+                               | with (
+                               | 'connector' = 'values',
+                               | 'bounded' = 'false',
+                               | 'partition-list' = 'b1:1'
+                               |)
+                               |""".stripMargin)
+    util.tableEnv.executeSql("""
+                               |create table rightPartitionTable (
+                               | a2 varchar,
+                               | b2 int)
+                               | partitioned by (b2) 
+                               | with (
+                               | 'connector' = 'values',
+                               | 'bounded' = 'false',
+                               | 'partition-list' = 'b2:2'
+                               |)
+                               |""".stripMargin)
+    // partition 'b2 = 3' not exists.
+    util.verifyExecPlan(
+      """
+        |SELECT * FROM leftPartitionTable, rightPartitionTable WHERE b1 = 1 AND b2 = 3 AND a1 = a2
+        |""".stripMargin)
+  }
+
+  @Test
+  def testJoinAccessSourcePkWithMiniBatchAssigner(): Unit = {
+    util.tableEnv.executeSql("""
+                               |create table left_table (
+                               | a varchar primary key not enforced,
+                               | b int
+                               |) with (
+                               | 'connector' = 'values'
+                               |)
+                               |""".stripMargin)
+
+    util.tableEnv.executeSql("""
+                               |create table right_table (
+                               | c varchar primary key not enforced,
+                               | d int
+                               |) with (
+                               | 'connector' = 'values'
+                               |)
+                               |""".stripMargin)
+
+    util.tableEnv.executeSql("""
+                               |create table sink (
+                               | e varchar primary key not enforced,
+                               | f int,
+                               | g int
+                               |) with (
+                               | 'connector' = 'values'
+                               |)
+                               |""".stripMargin)
+
+    util.tableEnv.getConfig.getConfiguration
+      .set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, Boolean.box(true))
+    util.tableEnv.getConfig.getConfiguration
+      .set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ALLOW_LATENCY, Duration.ofSeconds(10))
+    util.tableEnv.getConfig.getConfiguration
+      .set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE, Long.box(5000L))
+
+    util.verifyExplainInsert(
+      """
+        |insert into sink
+        |select left_table.a, left_table.b, right_table.d
+        | from left_table
+        | join right_table on left_table.a = right_table.c
+        |""".stripMargin
+    )
+  }
+
+  @Test
+  def testMiniBatchJoinWithNegativeMiniBatchSize(): Unit = {
+    util.tableEnv.getConfig.getConfiguration
+      .set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, Boolean.box(true))
+    util.tableEnv.getConfig.getConfiguration
+      .set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ALLOW_LATENCY, Duration.ofSeconds(10))
+
+    val sql = "SELECT * FROM A JOIN B ON a1 = b1"
+
+    // without setting mini-batch size
+    assertThatThrownBy(() => util.verifyExplain(sql))
+      .hasMessage(
+        "Key: 'table.exec.mini-batch.size' , default: -1 (fallback keys: []) must be > 0.")
+      .isInstanceOf[IllegalArgumentException]
+
+    // set negative mini-batch size
+    util.tableEnv.getConfig.getConfiguration
+      .set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE, Long.box(-500L))
+    assertThatThrownBy(() => util.verifyExplain(sql))
+      .hasMessage(
+        "Key: 'table.exec.mini-batch.size' , default: -1 (fallback keys: []) must be > 0.")
+      .isInstanceOf[IllegalArgumentException]
   }
 }

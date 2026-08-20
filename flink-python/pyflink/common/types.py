@@ -108,6 +108,7 @@ class Row(object):
             self._from_dict = True
         else:
             self._values = list(args)
+            self._from_dict = False
         self._row_kind = RowKind.INSERT
 
     def as_dict(self, recursive=False):
@@ -177,7 +178,10 @@ class Row(object):
         return row
 
     def __contains__(self, item):
-        return item in self._values
+        if hasattr(self, "_fields") and self._fields is not None:
+            return item in self._fields
+        else:
+            return item in self._values
 
     # let object acts like class
     def __call__(self, *args):

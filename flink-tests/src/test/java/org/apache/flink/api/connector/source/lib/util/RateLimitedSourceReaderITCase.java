@@ -20,6 +20,7 @@ package org.apache.flink.api.connector.source.lib.util;
 
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.api.connector.source.lib.NumberSequenceSource;
 import org.apache.flink.api.connector.source.util.ratelimit.RateLimiter;
 import org.apache.flink.api.connector.source.util.ratelimit.RateLimiterStrategy;
 import org.apache.flink.connector.datagen.source.DataGeneratorSource;
@@ -27,10 +28,11 @@ import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.test.junit5.MiniClusterExtension;
-import org.apache.flink.util.TestLogger;
+import org.apache.flink.util.TestLoggerExtension;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.util.ArrayList;
@@ -43,12 +45,13 @@ import java.util.stream.LongStream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** An integration test for rate limiting built into the DataGeneratorSource. */
-public class RateLimitedSourceReaderITCase extends TestLogger {
+@ExtendWith(TestLoggerExtension.class)
+class RateLimitedSourceReaderITCase {
 
     private static final int PARALLELISM = 4;
 
     @RegisterExtension
-    private static final MiniClusterExtension miniClusterExtension =
+    private static final MiniClusterExtension MINI_CLUSTER_EXTENSION =
             new MiniClusterExtension(
                     new MiniClusterResourceConfiguration.Builder()
                             .setNumberTaskManagers(1)
@@ -59,7 +62,7 @@ public class RateLimitedSourceReaderITCase extends TestLogger {
 
     @Test
     @DisplayName("Rate limiter is used correctly.")
-    public void testRateLimitingParallelExecution() throws Exception {
+    void testRateLimitingParallelExecution() throws Exception {
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(PARALLELISM);
 
@@ -87,12 +90,13 @@ public class RateLimitedSourceReaderITCase extends TestLogger {
                 .collect(Collectors.toList());
     }
 
-    private static final class MockRateLimiter implements RateLimiter {
+    private static final class MockRateLimiter
+            implements RateLimiter<NumberSequenceSource.NumberSequenceSplit> {
 
         int callCount;
 
         @Override
-        public CompletableFuture<Void> acquire() {
+        public CompletableFuture<Void> acquire(int numberOfEvents) {
             callCount++;
             return CompletableFuture.completedFuture(null);
         }
@@ -102,13 +106,15 @@ public class RateLimitedSourceReaderITCase extends TestLogger {
         }
     }
 
-    private static class MockRateLimiterStrategy implements RateLimiterStrategy {
+    private static class MockRateLimiterStrategy
+            implements RateLimiterStrategy<NumberSequenceSource.NumberSequenceSplit> {
 
         private static final List<MockRateLimiter> rateLimiters =
                 Collections.synchronizedList(new ArrayList<>());
 
         @Override
-        public RateLimiter createRateLimiter(int parallelism) {
+        public RateLimiter<NumberSequenceSource.NumberSequenceSplit> createRateLimiter(
+                int parallelism) {
             MockRateLimiter mockRateLimiter = new MockRateLimiter();
             rateLimiters.add(mockRateLimiter);
             return mockRateLimiter;

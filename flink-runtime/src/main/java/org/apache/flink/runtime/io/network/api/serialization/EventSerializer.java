@@ -28,6 +28,7 @@ import org.apache.flink.runtime.checkpoint.CheckpointType;
 import org.apache.flink.runtime.checkpoint.SavepointType;
 import org.apache.flink.runtime.checkpoint.SnapshotType;
 import org.apache.flink.runtime.event.AbstractEvent;
+import org.apache.flink.runtime.event.WatermarkEvent;
 import org.apache.flink.runtime.io.network.api.CancelCheckpointMarker;
 import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
 import org.apache.flink.runtime.io.network.api.EndOfData;
@@ -35,13 +36,15 @@ import org.apache.flink.runtime.io.network.api.EndOfPartitionEvent;
 import org.apache.flink.runtime.io.network.api.EndOfSegmentEvent;
 import org.apache.flink.runtime.io.network.api.EndOfSuperstepEvent;
 import org.apache.flink.runtime.io.network.api.EventAnnouncement;
+import org.apache.flink.runtime.io.network.api.RecoveryMetadata;
 import org.apache.flink.runtime.io.network.api.StopMode;
 import org.apache.flink.runtime.io.network.api.SubtaskConnectionDescriptor;
 import org.apache.flink.runtime.io.network.buffer.Buffer;
 import org.apache.flink.runtime.io.network.buffer.BufferConsumer;
 import org.apache.flink.runtime.io.network.buffer.FreeingBufferRecycler;
 import org.apache.flink.runtime.io.network.buffer.NetworkBuffer;
-import org.apache.flink.runtime.io.network.partition.consumer.EndOfChannelStateEvent;
+import org.apache.flink.runtime.io.network.partition.consumer.EndOfInputChannelStateEvent;
+import org.apache.flink.runtime.io.network.partition.consumer.EndOfOutputChannelStateEvent;
 import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
 import org.apache.flink.util.InstantiationUtil;
 
@@ -68,7 +71,7 @@ public class EventSerializer {
 
     private static final int CANCEL_CHECKPOINT_MARKER_EVENT = 4;
 
-    private static final int END_OF_CHANNEL_STATE_EVENT = 5;
+    private static final int END_OF_OUTPUT_CHANNEL_STATE_EVENT = 5;
 
     private static final int ANNOUNCEMENT_EVENT = 6;
 
@@ -77,6 +80,12 @@ public class EventSerializer {
     private static final int END_OF_USER_RECORDS_EVENT = 8;
 
     private static final int END_OF_SEGMENT = 9;
+
+    private static final int RECOVERY_METADATA = 10;
+
+    private static final int GENERALIZED_WATERMARK_EVENT = 11;
+
+    private static final int END_OF_INPUT_CHANNEL_STATE_EVENT = 12;
 
     private static final byte CHECKPOINT_TYPE_CHECKPOINT = 0;
 
@@ -103,8 +112,10 @@ public class EventSerializer {
             return serializeCheckpointBarrier((CheckpointBarrier) event);
         } else if (eventClass == EndOfSuperstepEvent.class) {
             return ByteBuffer.wrap(new byte[] {0, 0, 0, END_OF_SUPERSTEP_EVENT});
-        } else if (eventClass == EndOfChannelStateEvent.class) {
-            return ByteBuffer.wrap(new byte[] {0, 0, 0, END_OF_CHANNEL_STATE_EVENT});
+        } else if (eventClass == EndOfOutputChannelStateEvent.class) {
+            return ByteBuffer.wrap(new byte[] {0, 0, 0, END_OF_OUTPUT_CHANNEL_STATE_EVENT});
+        } else if (eventClass == EndOfInputChannelStateEvent.class) {
+            return ByteBuffer.wrap(new byte[] {0, 0, 0, END_OF_INPUT_CHANNEL_STATE_EVENT});
         } else if (eventClass == EndOfData.class) {
             return ByteBuffer.wrap(
                     new byte[] {
@@ -144,6 +155,22 @@ public class EventSerializer {
             return buf;
         } else if (eventClass == EndOfSegmentEvent.class) {
             return ByteBuffer.wrap(new byte[] {0, 0, 0, END_OF_SEGMENT});
+        } else if (eventClass == RecoveryMetadata.class) {
+            RecoveryMetadata recoveryMetadata = (RecoveryMetadata) event;
+
+            ByteBuffer buf = ByteBuffer.allocate(8);
+            buf.putInt(0, RECOVERY_METADATA);
+            buf.putInt(4, recoveryMetadata.getFinalBufferSubpartitionId());
+            return buf;
+        } else if (eventClass == WatermarkEvent.class) {
+            try {
+                final DataOutputSerializer serializer = new DataOutputSerializer(128);
+                serializer.writeInt(GENERALIZED_WATERMARK_EVENT);
+                event.write(serializer);
+                return serializer.wrapAsByteBuffer();
+            } catch (IOException e) {
+                throw new IOException("Error while serializing event.", e);
+            }
         } else {
             try {
                 final DataOutputSerializer serializer = new DataOutputSerializer(128);
@@ -175,8 +202,10 @@ public class EventSerializer {
                 return deserializeCheckpointBarrier(buffer);
             } else if (type == END_OF_SUPERSTEP_EVENT) {
                 return EndOfSuperstepEvent.INSTANCE;
-            } else if (type == END_OF_CHANNEL_STATE_EVENT) {
-                return EndOfChannelStateEvent.INSTANCE;
+            } else if (type == END_OF_OUTPUT_CHANNEL_STATE_EVENT) {
+                return EndOfOutputChannelStateEvent.INSTANCE;
+            } else if (type == END_OF_INPUT_CHANNEL_STATE_EVENT) {
+                return EndOfInputChannelStateEvent.INSTANCE;
             } else if (type == END_OF_USER_RECORDS_EVENT) {
                 return new EndOfData(StopMode.values()[buffer.get()]);
             } else if (type == CANCEL_CHECKPOINT_MARKER_EVENT) {
@@ -190,6 +219,14 @@ public class EventSerializer {
                 return new SubtaskConnectionDescriptor(buffer.getInt(), buffer.getInt());
             } else if (type == END_OF_SEGMENT) {
                 return EndOfSegmentEvent.INSTANCE;
+            } else if (type == RECOVERY_METADATA) {
+                int subpartitionId = buffer.getInt();
+                return new RecoveryMetadata(subpartitionId);
+            } else if (type == GENERALIZED_WATERMARK_EVENT) {
+                final DataInputDeserializer deserializer = new DataInputDeserializer(buffer);
+                WatermarkEvent watermarkEvent = new WatermarkEvent();
+                watermarkEvent.read(deserializer);
+                return watermarkEvent;
             } else if (type == OTHER_EVENT) {
                 try {
                     final DataInputDeserializer deserializer = new DataInputDeserializer(buffer);

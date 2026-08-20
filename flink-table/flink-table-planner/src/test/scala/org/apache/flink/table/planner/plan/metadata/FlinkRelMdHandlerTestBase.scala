@@ -24,7 +24,7 @@ import org.apache.flink.table.expressions._
 import org.apache.flink.table.expressions.ApiExpressionUtils.intervalOfMillis
 import org.apache.flink.table.functions.{FunctionIdentifier, UserDefinedFunctionHelper}
 import org.apache.flink.table.operations.TableSourceQueryOperation
-import org.apache.flink.table.planner.calcite.{FlinkRelBuilder, FlinkTypeFactory}
+import org.apache.flink.table.planner.calcite.{FlinkRelBuilder, FlinkTypeFactory, RexTableArgCall}
 import org.apache.flink.table.planner.delegation.PlannerContext
 import org.apache.flink.table.planner.functions.bridging.BridgingSqlFunction
 import org.apache.flink.table.planner.functions.sql.FlinkSqlOperatorTable
@@ -70,7 +70,7 @@ import org.apache.calcite.sql.fun.{SqlCountAggFunction, SqlStdOperatorTable}
 import org.apache.calcite.sql.fun.SqlStdOperatorTable._
 import org.apache.calcite.sql.parser.SqlParserPos
 import org.apache.calcite.util._
-import org.junit.{Before, BeforeClass}
+import org.junit.jupiter.api.{BeforeAll, BeforeEach}
 
 import java.math.BigDecimal
 import java.time.Duration
@@ -108,7 +108,7 @@ class FlinkRelMdHandlerTestBase {
   var batchPhysicalTraits: RelTraitSet = _
   var streamPhysicalTraits: RelTraitSet = _
 
-  @Before
+  @BeforeEach
   def setUp(): Unit = {
     relBuilder = plannerContext.createRelBuilder()
 
@@ -216,6 +216,15 @@ class FlinkRelMdHandlerTestBase {
   protected lazy val temporalTableStreamScan: StreamPhysicalDataStreamScan =
     createDataStreamScan(ImmutableList.of("TemporalTable4"), streamPhysicalTraits)
 
+  protected lazy val tableWithImmutableColsLogicalScan: LogicalTableScan =
+    createTableSourceTable(
+      ImmutableList.of("projected_table_source_table_with_immutable_cols"),
+      logicalTraits)
+  protected lazy val tableWithImmutableColsStreamScan: StreamPhysicalDataStreamScan =
+    createTableSourceTable(
+      ImmutableList.of("projected_table_source_table_with_immutable_cols"),
+      streamPhysicalTraits)
+
   private lazy val valuesType = relBuilder.getTypeFactory
     .builder()
     .add("a", SqlTypeName.BIGINT)
@@ -309,6 +318,9 @@ class FlinkRelMdHandlerTestBase {
     relBuilder.push(scan)
     relBuilder.watermark(4, watermarkRexNode).build()
   }
+
+  protected lazy val streamMiniBatchAssigner: RelNode =
+    new StreamPhysicalMiniBatchAssigner(cluster, streamPhysicalTraits, studentStreamScan)
 
   // id, name, score, age, height, sex, class, 1
   // id, null, score, age, height, sex, class, 4
@@ -662,7 +674,8 @@ class FlinkRelMdHandlerTestBase {
       new ConstantRankRange(1, 5),
       new RelDataTypeFieldImpl("rk", 7, longType),
       outputRankNumber = true,
-      RankProcessStrategy.UNDEFINED_STRATEGY
+      RankProcessStrategy.UNDEFINED_STRATEGY,
+      sortOnRowTime = false
     )
 
     (logicalRank, flinkLogicalRank, batchLocalRank, batchGlobalRank, streamRank)
@@ -750,7 +763,8 @@ class FlinkRelMdHandlerTestBase {
       new ConstantRankRange(3, 5),
       new RelDataTypeFieldImpl("rk", 7, longType),
       outputRankNumber = true,
-      RankProcessStrategy.UNDEFINED_STRATEGY
+      RankProcessStrategy.UNDEFINED_STRATEGY,
+      sortOnRowTime = false
     )
 
     (logicalRank, flinkLogicalRank, batchLocalRank, batchGlobalRank, streamRank)
@@ -802,7 +816,8 @@ class FlinkRelMdHandlerTestBase {
       new ConstantRankRange(3, 6),
       new RelDataTypeFieldImpl("rn", 7, longType),
       outputRankNumber = true,
-      RankProcessStrategy.UNDEFINED_STRATEGY
+      RankProcessStrategy.UNDEFINED_STRATEGY,
+      sortOnRowTime = false
     )
 
     (logicalRowNumber, flinkLogicalRowNumber, streamRowNumber)
@@ -832,6 +847,7 @@ class FlinkRelMdHandlerTestBase {
   //  select a, b, c, rowtime
   //  ROW_NUMBER() over (partition by b, c order by rowtime desc) rn from TemporalTable3
   // ) t where rn <= 1
+  // canbe merged into rank
   protected lazy val (streamRowTimeDeduplicateFirstRow, streamRowTimeDeduplicateLastRow) = {
     buildFirstRowAndLastRowDeduplicateNode(true)
   }
@@ -842,13 +858,18 @@ class FlinkRelMdHandlerTestBase {
     val hash1 = FlinkRelDistribution.hash(Array(1), requireStrict = true)
     val streamExchange1 =
       new StreamPhysicalExchange(cluster, scan.getTraitSet.replace(hash1), scan, hash1)
-    val firstRow = new StreamPhysicalDeduplicate(
+    val firstRow = new StreamPhysicalRank(
       cluster,
       streamPhysicalTraits,
       streamExchange1,
-      Array(1),
-      isRowtime,
-      keepLastRow = false
+      ImmutableBitSet.of(1),
+      RelCollations.of(3),
+      RankType.ROW_NUMBER,
+      new ConstantRankRange(1, 1),
+      new RelDataTypeFieldImpl("rn", 7, longType),
+      outputRankNumber = false,
+      RankProcessStrategy.UNDEFINED_STRATEGY,
+      sortOnRowTime = isRowtime
     )
 
     val builder = typeFactory.builder()
@@ -871,13 +892,22 @@ class FlinkRelMdHandlerTestBase {
     val hash12 = FlinkRelDistribution.hash(Array(1, 2), requireStrict = true)
     val streamExchange2 =
       new BatchPhysicalExchange(cluster, scan.getTraitSet.replace(hash12), scan, hash12)
-    val lastRow = new StreamPhysicalDeduplicate(
+    val lastRow = new StreamPhysicalRank(
       cluster,
       streamPhysicalTraits,
       streamExchange2,
-      Array(1, 2),
-      isRowtime,
-      keepLastRow = true
+      ImmutableBitSet.of(1, 2),
+      RelCollations.of(
+        new RelFieldCollation(
+          3,
+          RelFieldCollation.Direction.DESCENDING,
+          RelFieldCollation.NullDirection.FIRST)),
+      RankType.ROW_NUMBER,
+      new ConstantRankRange(1, 1),
+      new RelDataTypeFieldImpl("rn", 7, longType),
+      outputRankNumber = false,
+      RankProcessStrategy.UNDEFINED_STRATEGY,
+      sortOnRowTime = false
     )
     val calcOfLastRow = new StreamPhysicalCalc(
       cluster,
@@ -900,12 +930,7 @@ class FlinkRelMdHandlerTestBase {
       streamTableScan,
       hash1)
     val table = streamTableScan.getTable.asInstanceOf[TableSourceTable]
-    new StreamPhysicalChangelogNormalize(
-      cluster,
-      streamPhysicalTraits,
-      streamExchange,
-      key,
-      table.contextResolvedTable)
+    new StreamPhysicalChangelogNormalize(cluster, streamPhysicalTraits, streamExchange, key)
   }
 
   protected lazy val streamDropUpdateBefore = {
@@ -959,7 +984,8 @@ class FlinkRelMdHandlerTestBase {
       new VariableRankRange(3),
       new RelDataTypeFieldImpl("rk", 7, longType),
       outputRankNumber = true,
-      RankProcessStrategy.UNDEFINED_STRATEGY
+      RankProcessStrategy.UNDEFINED_STRATEGY,
+      sortOnRowTime = false
     )
 
     (logicalRankWithVariableRange, flinkLogicalRankWithVariableRange, streamRankWithVariableRange)
@@ -990,6 +1016,7 @@ class FlinkRelMdHandlerTestBase {
       false,
       false,
       false,
+      Seq().toList,
       Seq(Integer.valueOf(3)).toList,
       -1,
       null,
@@ -2676,6 +2703,25 @@ class FlinkRelMdHandlerTestBase {
     (batchLookupJoin, streamLookupJoin)
   }
 
+  protected def getStreamLookupJoinsWithImmutableCols(
+      leftInput: RelNode,
+      temporalTable: RelOptTable,
+      joinInfo: JoinInfo,
+      joinType: JoinRelType,
+      calcOnTemporalTable: Option[RexProgram]): StreamPhysicalLookupJoin = {
+    new StreamPhysicalLookupJoin(
+      cluster,
+      streamPhysicalTraits,
+      leftInput,
+      temporalTable,
+      calcOnTemporalTable,
+      joinInfo,
+      joinType,
+      Option.empty[RelHint],
+      false
+    )
+  }
+
   // select * from MyTable1 join MyTable4 on MyTable1.b = MyTable4.a
   protected lazy val logicalInnerJoinOnUniqueKeys: RelNode = relBuilder
     .scan("MyTable1")
@@ -3259,8 +3305,8 @@ class FlinkRelMdHandlerTestBase {
         ImmutableList.of(calcOnStudentScan),
         relBuilder.call(
           FlinkSqlOperatorTable.TUMBLE,
-          relBuilder.field(2),
-          relBuilder.call(FlinkSqlOperatorTable.DESCRIPTOR, relBuilder.field(2)),
+          new RexTableArgCall(outputRowType, 0, Array(), Array(), Array()),
+          relBuilder.call(FlinkSqlOperatorTable.DESCRIPTOR, relBuilder.literal("ptime")),
           rexBuilder.makeIntervalLiteral(
             bd(600000L),
             new SqlIntervalQualifier(TimeUnit.MILLISECOND, null, SqlParserPos.ZERO))
@@ -3731,7 +3777,7 @@ class TestRel(cluster: RelOptCluster, traits: RelTraitSet, input: RelNode)
 }
 
 object FlinkRelMdHandlerTestBase {
-  @BeforeClass
+  @BeforeAll
   def beforeAll(): Unit = {
     RelMetadataQueryBase.THREAD_PROVIDERS
       .set(JaninoRelMetadataProvider.of(FlinkDefaultRelMetadataProvider.INSTANCE))

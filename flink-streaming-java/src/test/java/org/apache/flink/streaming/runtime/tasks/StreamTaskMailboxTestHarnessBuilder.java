@@ -23,6 +23,7 @@ import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.functions.KeySelector;
+import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.execution.Environment;
@@ -39,12 +40,12 @@ import org.apache.flink.runtime.state.LocalRecoveryConfig;
 import org.apache.flink.runtime.state.TestLocalRecoveryConfig;
 import org.apache.flink.runtime.state.TestTaskStateManager;
 import org.apache.flink.runtime.state.TestTaskStateManagerBuilder;
+import org.apache.flink.runtime.state.storage.JobManagerCheckpointStorage;
 import org.apache.flink.runtime.taskmanager.CheckpointResponder;
 import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
 import org.apache.flink.runtime.taskmanager.TestCheckpointResponder;
 import org.apache.flink.runtime.throughput.BufferDebloatConfiguration;
 import org.apache.flink.runtime.util.TestingTaskManagerRuntimeInfo;
-import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.graph.NonChainedOutput;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.graph.StreamConfig.InputConfig;
@@ -115,8 +116,7 @@ public class StreamTaskMailboxTestHarnessBuilder<OUT> {
             FunctionWithException<Environment, ? extends StreamTask<OUT, ?>, Exception> taskFactory,
             TypeInformation<OUT> outputType) {
         this.taskFactory = checkNotNull(taskFactory);
-        outputSerializer = outputType.createSerializer(executionConfig);
-        streamConfig.setTimeCharacteristic(TimeCharacteristic.EventTime);
+        outputSerializer = outputType.createSerializer(executionConfig.getSerializerConfig());
     }
 
     public <T> StreamTaskMailboxTestHarnessBuilder<OUT> modifyExecutionConfig(
@@ -128,6 +128,12 @@ public class StreamTaskMailboxTestHarnessBuilder<OUT> {
     public <T> StreamTaskMailboxTestHarnessBuilder<OUT> modifyStreamConfig(
             Consumer<StreamConfig> action) {
         action.accept(streamConfig);
+        return this;
+    }
+
+    public <T> StreamTaskMailboxTestHarnessBuilder<OUT> addJobConfig(
+            ConfigOption<T> option, T value) {
+        jobConfig.set(option, value);
         return this;
     }
 
@@ -170,7 +176,8 @@ public class StreamTaskMailboxTestHarnessBuilder<OUT> {
         streamConfig.setStatePartitioner(inputs.size(), keySelector);
         inputs.add(
                 new NetworkInputConfig(
-                        inputType.createSerializer(executionConfig), inputChannelsPerGate.size()));
+                        inputType.createSerializer(executionConfig.getSerializerConfig()),
+                        inputChannelsPerGate.size()));
         inputChannelsPerGate.add(inputChannels);
         return this;
     }
@@ -186,7 +193,9 @@ public class StreamTaskMailboxTestHarnessBuilder<OUT> {
             SourceOperatorFactory<SourceType> sourceOperatorFactory,
             TypeInformation<SourceType> sourceType) {
         return addSourceInput(
-                operatorId, sourceOperatorFactory, sourceType.createSerializer(executionConfig));
+                operatorId,
+                sourceOperatorFactory,
+                sourceType.createSerializer(executionConfig.getSerializerConfig()));
     }
 
     public <SourceType> StreamTaskMailboxTestHarnessBuilder<OUT> addSourceInput(
@@ -249,6 +258,9 @@ public class StreamTaskMailboxTestHarnessBuilder<OUT> {
         Queue<Object> outputList = new ArrayDeque<>();
         streamMockEnvironment.addOutput(outputList, outputStreamRecordSerializer);
         streamMockEnvironment.setTaskMetricGroup(taskMetricGroup);
+        streamMockEnvironment.setCheckpointStorageAccess(
+                new JobManagerCheckpointStorage()
+                        .createCheckpointStorage(streamMockEnvironment.getJobID()));
 
         for (ResultPartitionWriter writer : additionalOutputs) {
             streamMockEnvironment.addOutput(writer);
@@ -374,7 +386,6 @@ public class StreamTaskMailboxTestHarnessBuilder<OUT> {
                         ResultPartitionType.PIPELINED_BOUNDED));
 
         StreamConfig sourceConfig = new StreamConfig(new Configuration());
-        sourceConfig.setTimeCharacteristic(streamConfig.getTimeCharacteristic());
         sourceConfig.setVertexNonChainedOutputs(streamOutputsInOrder);
         sourceConfig.setChainedOutputs(chainedOutputs);
         sourceConfig.setTypeSerializerOut(sourceInput.getSourceSerializer());
@@ -451,7 +462,8 @@ public class StreamTaskMailboxTestHarnessBuilder<OUT> {
     }
 
     public StreamTaskMailboxTestHarnessBuilder<OUT> setKeyType(TypeInformation<?> keyType) {
-        streamConfig.setStateKeySerializer(keyType.createSerializer(executionConfig));
+        streamConfig.setStateKeySerializer(
+                keyType.createSerializer(executionConfig.getSerializerConfig()));
         return this;
     }
 

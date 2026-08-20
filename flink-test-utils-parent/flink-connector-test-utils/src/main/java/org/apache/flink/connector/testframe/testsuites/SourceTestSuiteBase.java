@@ -22,11 +22,11 @@ import org.apache.flink.annotation.Experimental;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.api.connector.source.Source;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.RpcOptions;
 import org.apache.flink.connector.testframe.environment.ClusterControllable;
 import org.apache.flink.connector.testframe.environment.TestEnvironment;
 import org.apache.flink.connector.testframe.environment.TestEnvironmentSettings;
@@ -37,20 +37,20 @@ import org.apache.flink.connector.testframe.junit.extensions.ConnectorTestingExt
 import org.apache.flink.connector.testframe.junit.extensions.TestCaseInvocationContextProvider;
 import org.apache.flink.connector.testframe.utils.CollectIteratorAssertions;
 import org.apache.flink.connector.testframe.utils.MetricQuerier;
+import org.apache.flink.core.execution.CheckpointingMode;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.rest.RestClient;
-import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
+import org.apache.flink.streaming.api.functions.sink.v2.DiscardingSink;
 import org.apache.flink.streaming.api.operators.collect.CollectResultIterator;
-import org.apache.flink.streaming.api.operators.collect.CollectSinkOperator;
 import org.apache.flink.streaming.api.operators.collect.CollectSinkOperatorFactory;
 import org.apache.flink.streaming.api.operators.collect.CollectStreamSink;
+import org.apache.flink.streaming.util.RestartStrategyUtils;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.TestLoggerExtension;
 
@@ -308,9 +308,10 @@ public abstract class SourceTestSuiteBase<T> {
 
         // Step 3: Build and execute Flink job
         final StreamExecutionEnvironment execEnv = testEnv.createExecutionEnvironment(envOptions);
-        execEnv.getCheckpointConfig().setCheckpointingMode(CheckpointingMode.EXACTLY_ONCE);
+        execEnv.getCheckpointConfig()
+                .setCheckpointingConsistencyMode(CheckpointingMode.EXACTLY_ONCE);
         execEnv.enableCheckpointing(50);
-        execEnv.setRestartStrategy(RestartStrategies.noRestart());
+        RestartStrategyUtils.configureNoRestartStrategy(execEnv);
         DataStreamSource<T> source =
                 execEnv.fromSource(
                                 tryCreateSource(externalContext, sourceSettings),
@@ -337,7 +338,7 @@ public abstract class SourceTestSuiteBase<T> {
         String savepointPath =
                 jobClient
                         .stopWithSavepoint(
-                                true, testEnv.getCheckpointUri(), SavepointFormatType.CANONICAL)
+                                false, testEnv.getCheckpointUri(), SavepointFormatType.CANONICAL)
                         .get(30, TimeUnit.SECONDS);
         waitForJobStatus(jobClient, singletonList(JobStatus.FINISHED));
 
@@ -357,7 +358,9 @@ public abstract class SourceTestSuiteBase<T> {
         final StreamExecutionEnvironment restartEnv =
                 testEnv.createExecutionEnvironment(restartEnvOptions);
         restartEnv.enableCheckpointing(500);
-        restartEnv.getCheckpointConfig().setCheckpointingMode(CheckpointingMode.EXACTLY_ONCE);
+        restartEnv
+                .getCheckpointConfig()
+                .setCheckpointingConsistencyMode(CheckpointingMode.EXACTLY_ONCE);
 
         DataStreamSource<T> restartSource =
                 restartEnv
@@ -434,7 +437,7 @@ public abstract class SourceTestSuiteBase<T> {
                                 WatermarkStrategy.noWatermarks(),
                                 sourceName)
                         .setParallelism(splitNumber);
-        dataStreamSource.addSink(new DiscardingSink<>());
+        dataStreamSource.sinkTo(new DiscardingSink<>());
         final JobClient jobClient = env.executeAsync("Metrics Test");
 
         final MetricQuerier queryRestClient = new MetricQuerier(new Configuration());
@@ -658,23 +661,26 @@ public abstract class SourceTestSuiteBase<T> {
     }
 
     protected JobClient submitJob(StreamExecutionEnvironment env, String jobName) throws Exception {
-        LOG.info("Submitting Flink job to test environment");
+        LOG.info("Submitting Flink job {} to test environment", jobName);
         return env.executeAsync(jobName);
     }
 
     /** Add a collect sink in the job. */
     protected CollectIteratorBuilder<T> addCollectSink(DataStream<T> stream) {
         TypeSerializer<T> serializer =
-                stream.getType().createSerializer(stream.getExecutionConfig());
+                stream.getType()
+                        .createSerializer(stream.getExecutionConfig().getSerializerConfig());
         String accumulatorName = "dataStreamCollect_" + UUID.randomUUID();
         CollectSinkOperatorFactory<T> factory =
                 new CollectSinkOperatorFactory<>(serializer, accumulatorName);
-        CollectSinkOperator<T> operator = (CollectSinkOperator<T>) factory.getOperator();
+
         CollectStreamSink<T> sink = new CollectStreamSink<>(stream, factory);
+        String operatorUid = "dataStreamCollect";
         sink.name("Data stream collect sink");
+        sink.uid(operatorUid);
         stream.getExecutionEnvironment().addOperator(sink.getTransformation());
         return new CollectIteratorBuilder<>(
-                operator,
+                operatorUid,
                 serializer,
                 accumulatorName,
                 stream.getExecutionEnvironment().getCheckpointConfig());
@@ -770,17 +776,17 @@ public abstract class SourceTestSuiteBase<T> {
     /** Builder class for constructing {@link CollectResultIterator} of collect sink. */
     protected static class CollectIteratorBuilder<T> {
 
-        private final CollectSinkOperator<T> operator;
+        private final String operatorUid;
         private final TypeSerializer<T> serializer;
         private final String accumulatorName;
         private final CheckpointConfig checkpointConfig;
 
         protected CollectIteratorBuilder(
-                CollectSinkOperator<T> operator,
+                String operatorUid,
                 TypeSerializer<T> serializer,
                 String accumulatorName,
                 CheckpointConfig checkpointConfig) {
-            this.operator = operator;
+            this.operatorUid = operatorUid;
             this.serializer = serializer;
             this.accumulatorName = accumulatorName;
             this.checkpointConfig = checkpointConfig;
@@ -789,10 +795,11 @@ public abstract class SourceTestSuiteBase<T> {
         protected CollectResultIterator<T> build(JobClient jobClient) {
             CollectResultIterator<T> iterator =
                     new CollectResultIterator<>(
-                            operator.getOperatorIdFuture(),
+                            operatorUid,
                             serializer,
                             accumulatorName,
-                            checkpointConfig);
+                            checkpointConfig,
+                            RpcOptions.ASK_TIMEOUT_DURATION.defaultValue().toMillis());
             iterator.setJobClient(jobClient);
             return iterator;
         }

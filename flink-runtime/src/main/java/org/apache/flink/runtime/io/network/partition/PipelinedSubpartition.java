@@ -30,7 +30,7 @@ import org.apache.flink.runtime.io.network.buffer.BufferConsumer;
 import org.apache.flink.runtime.io.network.buffer.BufferConsumerWithPartialRecordLength;
 import org.apache.flink.runtime.io.network.logger.NetworkActionsLogger;
 
-import org.apache.flink.shaded.guava31.com.google.common.collect.Iterators;
+import org.apache.flink.shaded.guava33.com.google.common.collect.Iterators;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,10 +75,7 @@ public class PipelinedSubpartition extends ResultSubpartition implements Channel
 
     // ------------------------------------------------------------------------
 
-    /**
-     * Number of exclusive credits per input channel at the downstream tasks configured by {@link
-     * org.apache.flink.configuration.NettyShuffleEnvironmentOptions#NETWORK_BUFFERS_PER_CHANNEL}.
-     */
+    /** Number of exclusive credits per input channel at the downstream tasks. */
     private final int receiverExclusiveBuffersPerChannel;
 
     /** All buffers of this subpartition. Access to the buffers is synchronized on this object. */
@@ -110,7 +107,7 @@ public class PipelinedSubpartition extends ResultSubpartition implements Channel
     /** Writes in-flight data. */
     private ChannelStateWriter channelStateWriter;
 
-    private int bufferSize = Integer.MAX_VALUE;
+    private int bufferSize;
 
     /** The channelState Future of unaligned checkpoint. */
     @GuardedBy("buffers")
@@ -135,13 +132,17 @@ public class PipelinedSubpartition extends ResultSubpartition implements Channel
     // ------------------------------------------------------------------------
 
     PipelinedSubpartition(
-            int index, int receiverExclusiveBuffersPerChannel, ResultPartition parent) {
+            int index,
+            int receiverExclusiveBuffersPerChannel,
+            int startingBufferSize,
+            ResultPartition parent) {
         super(index, parent);
 
         checkArgument(
                 receiverExclusiveBuffersPerChannel >= 0,
                 "Buffers per channel must be non-negative.");
         this.receiverExclusiveBuffersPerChannel = receiverExclusiveBuffersPerChannel;
+        this.bufferSize = startingBufferSize;
     }
 
     @Override
@@ -251,8 +252,21 @@ public class PipelinedSubpartition extends ResultSubpartition implements Channel
     @GuardedBy("buffers")
     private boolean needNotifyPriorityEvent() {
         assert Thread.holdsLock(buffers);
-        // if subpartition is blocked then downstream doesn't expect any notifications
-        return buffers.getNumPriorityElements() == 1 && !isBlocked;
+        // Priority events (e.g. unaligned checkpoint barriers) must notify downstream even
+        // when the subpartition is blocked.
+        //
+        // During recovery, once the upstream output channel state is fully restored, a
+        // RECOVERY_COMPLETION event (EndOfOutputChannelStateEvent) is emitted. This event
+        // blocks the subpartition to prevent the upstream from sending new data while the
+        // downstream is still consuming recovered buffers. The subpartition remains blocked
+        // until the downstream finishes consuming all recovered buffers from every channel
+        // and calls resumeConsumption() to unblock.
+        //
+        // If a checkpoint is triggered while the downstream is still consuming recovered
+        // buffers, the upstream receives an unaligned checkpoint barrier and adds it to this
+        // blocked subpartition. The barrier must still be delivered to the downstream
+        // immediately, otherwise the checkpoint will hang until it times out.
+        return buffers.getNumPriorityElements() == 1;
     }
 
     @GuardedBy("buffers")
@@ -455,7 +469,10 @@ public class PipelinedSubpartition extends ResultSubpartition implements Channel
     @Nullable
     BufferAndBacklog pollBuffer() {
         synchronized (buffers) {
-            if (isBlocked) {
+            // When blocked (e.g. by RECOVERY_COMPLETION event), only allow priority buffers
+            // (e.g. unaligned checkpoint barriers) to be polled. Regular buffers remain blocked
+            // until resumeConsumption() is called. See needNotifyPriorityEvent() for details.
+            if (isBlocked && buffers.getNumPriorityElements() == 0) {
                 return null;
             }
 
@@ -589,10 +606,10 @@ public class PipelinedSubpartition extends ResultSubpartition implements Channel
     }
 
     public ResultSubpartitionView.AvailabilityWithBacklog getAvailabilityAndBacklog(
-            int numCreditsAvailable) {
+            boolean isCreditAvailable) {
         synchronized (buffers) {
             boolean isAvailable;
-            if (numCreditsAvailable > 0) {
+            if (isCreditAvailable) {
                 isAvailable = isDataAvailableUnsafe();
             } else {
                 isAvailable = getNextBufferTypeUnsafe().isEvent();

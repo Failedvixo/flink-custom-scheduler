@@ -17,6 +17,7 @@
  */
 package org.apache.flink.table.planner.catalog
 
+import org.apache.flink.core.testutils.FlinkAssertions.anyCauseMatches
 import org.apache.flink.table.api._
 import org.apache.flink.table.api.config.ExecutionConfigOptions
 import org.apache.flink.table.api.internal.TableEnvironmentImpl
@@ -26,16 +27,16 @@ import org.apache.flink.table.planner.factories.TestValuesCatalog
 import org.apache.flink.table.planner.factories.utils.TestCollectionTableFactory
 import org.apache.flink.table.planner.runtime.utils.JavaUserDefinedScalarFunctions.JavaFunc0
 import org.apache.flink.table.planner.utils.DateTimeTestUtil.localDateTime
+import org.apache.flink.table.planner.utils.TableITCaseBase
 import org.apache.flink.table.utils.UserDefinedFunctions.{GENERATED_LOWER_UDF_CLASS, GENERATED_LOWER_UDF_CODE}
-import org.apache.flink.test.util.AbstractTestBase
+import org.apache.flink.testutils.junit.extensions.parameterized.{ParameterizedTestExtension, Parameters}
+import org.apache.flink.testutils.junit.utils.TempDirUtils
 import org.apache.flink.types.Row
 import org.apache.flink.util.{FileUtils, UserClassLoaderJarTestUtils}
 
-import org.junit.{Before, Rule, Test}
-import org.junit.Assert.{assertEquals, fail}
-import org.junit.rules.ExpectedException
-import org.junit.runner.RunWith
-import org.junit.runners.Parameterized
+import org.assertj.core.api.Assertions.{assertThat, assertThatExceptionOfType, assertThatList, assertThatThrownBy, fail}
+import org.junit.jupiter.api.{BeforeEach, TestTemplate}
+import org.junit.jupiter.api.extension.ExtendWith
 
 import java.io.File
 import java.math.{BigDecimal => JBigDecimal}
@@ -43,12 +44,12 @@ import java.net.URI
 import java.util
 import java.util.UUID
 
-import scala.collection.JavaConversions._
+import scala.collection.JavaConverters._
 import scala.util.Random
 
 /** Test cases for catalog table. */
-@RunWith(classOf[Parameterized])
-class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
+@ExtendWith(Array(classOf[ParameterizedTestExtension]))
+class CatalogTableITCase(isStreamingMode: Boolean) extends TableITCaseBase {
   // ~ Instance fields --------------------------------------------------------
 
   private val settings = if (isStreamingMode) {
@@ -59,12 +60,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
 
   private val tableEnv: TableEnvironment = TableEnvironmentImpl.create(settings)
 
-  var _expectedEx: ExpectedException = ExpectedException.none
-
-  @Rule
-  def expectedEx: ExpectedException = _expectedEx
-
-  @Before
+  @BeforeEach
   def before(): Unit = {
     tableEnv.getConfig
       .set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, Int.box(1))
@@ -114,35 +110,38 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(sinkDDL)
     tableEnv.executeSql(s"insert into sinkT select ${funcPrefix}myfunc(cast(1 as bigint))").await()
-    assertEquals(Seq(toRow(2L)), TestCollectionTableFactory.RESULT.sorted)
+    assertThatList(TestCollectionTableFactory.RESULT)
+      .containsExactlyInAnyOrderElementsOf(Seq(toRow(2L)).asJava)
   }
 
-  @Test
+  @TestTemplate
   def testUdfWithFullIdentifier(): Unit = {
     testUdf("default_catalog.default_database.")
   }
 
-  @Test
+  @TestTemplate
   def testUdfWithDatabase(): Unit = {
     testUdf("default_database.")
   }
 
-  @Test
+  @TestTemplate
   def testUdfWithNon(): Unit = {
     testUdf("")
   }
 
-  @Test(expected = classOf[ValidationException])
+  @TestTemplate
   def testUdfWithWrongCatalog(): Unit = {
-    testUdf("wrong_catalog.default_database.")
+    assertThatExceptionOfType(classOf[ValidationException])
+      .isThrownBy(() => testUdf("wrong_catalog.default_database."))
   }
 
-  @Test(expected = classOf[ValidationException])
+  @TestTemplate
   def testUdfWithWrongDatabase(): Unit = {
-    testUdf("default_catalog.wrong_database.")
+    assertThatExceptionOfType(classOf[ValidationException])
+      .isThrownBy(() => testUdf("default_catalog.wrong_database."))
   }
 
-  @Test
+  @TestTemplate
   def testInsertInto(): Unit = {
     val sourceData = List(
       toRow(1, "1000", 2, new JBigDecimal("10.001")),
@@ -150,7 +149,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       toRow(3, "2000", 4, new JBigDecimal("10.001")),
       toRow(1, "2", 2, new JBigDecimal("10.001")),
       toRow(2, "3000", 3, new JBigDecimal("10.001"))
-    )
+    ).asJava
     TestCollectionTableFactory.initData(sourceData)
     val sourceDDL =
       """
@@ -182,10 +181,11 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
     tableEnv.executeSql(query).await()
-    assertEquals(sourceData.sorted, TestCollectionTableFactory.RESULT.sorted)
+    assertThatList(sourceData).containsExactlyInAnyOrderElementsOf(
+      TestCollectionTableFactory.RESULT)
   }
 
-  @Test
+  @TestTemplate
   def testReadWriteCsvUsingDDL(): Unit = {
     val csvRecords = Seq(
       "2.02,Euro,2019-12-12 00:00:01.001001",
@@ -246,10 +246,10 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     val expected =
       "2019-12-12 00:00:05.0,2019-12-12 00:00:04.004001,3,50.00\n" +
         "2019-12-12 00:00:10.0,2019-12-12 00:00:06.006001,2,5.33\n"
-    assertEquals(expected, FileUtils.readFileUtf8(new File(new URI(sinkFilePath))))
+    assertThat(expected).isEqualTo(FileUtils.readFileUtf8(new File(new URI(sinkFilePath))))
   }
 
-  @Test
+  @TestTemplate
   def testReadWriteCsvWithDynamicTableOptions(): Unit = {
     val csvRecords = Seq(
       "2.02,Euro,2019-12-12 00:00:01.001001",
@@ -308,10 +308,10 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     val expected =
       "2019-12-12 00:00:05.0|2019-12-12 00:00:04.004001|3|50.00\n" +
         "2019-12-12 00:00:10.0|2019-12-12 00:00:06.006001|2|5.33\n"
-    assertEquals(expected, FileUtils.readFileUtf8(new File(new URI(sinkFilePath))))
+    assertThat(expected).isEqualTo(FileUtils.readFileUtf8(new File(new URI(sinkFilePath))))
   }
 
-  @Test
+  @TestTemplate
   def testInsertSourceTableExpressionFields(): Unit = {
     val sourceData = List(
       toRow(1, "1000"),
@@ -319,14 +319,14 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       toRow(3, "2000"),
       toRow(1, "2"),
       toRow(2, "3000")
-    )
+    ).asJava
     val expected = List(
       toRow(1, "1000", 2),
       toRow(2, "1", 3),
       toRow(3, "2000", 4),
       toRow(1, "2", 2),
       toRow(2, "3000", 3)
-    )
+    ).asJava
     TestCollectionTableFactory.initData(sourceData)
     val sourceDDL =
       """
@@ -356,11 +356,11 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
     tableEnv.executeSql(query).await()
-    assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
+    assertThatList(expected).containsExactlyInAnyOrderElementsOf(TestCollectionTableFactory.RESULT)
   }
 
   // Test the computation expression in front of referenced columns.
-  @Test
+  @TestTemplate
   def testInsertSourceTableExpressionFieldsBeforeReferences(): Unit = {
     val sourceData = List(
       toRow(1, "1000"),
@@ -368,14 +368,14 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       toRow(3, "2000"),
       toRow(2, "2"),
       toRow(2, "3000")
-    )
+    ).asJava
     val expected = List(
       toRow(101, 1, "1000"),
       toRow(102, 2, "1"),
       toRow(103, 3, "2000"),
       toRow(102, 2, "2"),
       toRow(102, 2, "3000")
-    )
+    ).asJava
     TestCollectionTableFactory.initData(sourceData)
     val sourceDDL =
       """
@@ -405,10 +405,10 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
     tableEnv.executeSql(query).await()
-    assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
+    assertThatList(expected).containsExactlyInAnyOrderElementsOf(TestCollectionTableFactory.RESULT)
   }
 
-  @Test
+  @TestTemplate
   def testInsertSourceTableWithFuncField(): Unit = {
     val sourceData = List(
       toRow(1, "1990-02-10 12:34:56"),
@@ -416,14 +416,14 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       toRow(3, "2019-09-10 09:23:42"),
       toRow(1, "2019-09-10 09:23:43"),
       toRow(2, "2019-09-10 09:23:44")
-    )
+    ).asJava
     val expected = List(
       toRow(1, "1990-02-10 12:34:56", localDateTime("1990-02-10 12:34:56")),
       toRow(2, "2019-09-10 09:23:41", localDateTime("2019-09-10 09:23:41")),
       toRow(3, "2019-09-10 09:23:42", localDateTime("2019-09-10 09:23:42")),
       toRow(1, "2019-09-10 09:23:43", localDateTime("2019-09-10 09:23:43")),
       toRow(2, "2019-09-10 09:23:44", localDateTime("2019-09-10 09:23:44"))
-    )
+    ).asJava
     TestCollectionTableFactory.initData(sourceData)
     val sourceDDL =
       """
@@ -453,10 +453,10 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
     tableEnv.executeSql(query).await()
-    assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
+    assertThatList(expected).containsExactlyInAnyOrderElementsOf(TestCollectionTableFactory.RESULT)
   }
 
-  @Test
+  @TestTemplate
   def testInsertSourceTableWithUserDefinedFuncField(): Unit = {
     val sourceData = List(
       toRow(1, "1990-02-10 12:34:56"),
@@ -464,16 +464,16 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       toRow(3, "2019-09-10 9:23:42"),
       toRow(1, "2019-09-10 9:23:43"),
       toRow(2, "2019-09-10 9:23:44")
-    )
+    ).asJava
     val expected = List(
       toRow(1, "1990-02-10 12:34:56", 1, "1990-02-10 12:34:56"),
       toRow(2, "2019-09-10 9:23:41", 2, "2019-09-10 9:23:41"),
       toRow(3, "2019-09-10 9:23:42", 3, "2019-09-10 9:23:42"),
       toRow(1, "2019-09-10 9:23:43", 1, "2019-09-10 9:23:43"),
       toRow(2, "2019-09-10 9:23:44", 2, "2019-09-10 9:23:44")
-    )
+    ).asJava
     TestCollectionTableFactory.initData(sourceData)
-    tableEnv.registerFunction("my_udf", Func0)
+    tableEnv.createTemporarySystemFunction("my_udf", Func0)
     val sourceDDL =
       """
         |create table t1(
@@ -504,10 +504,10 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
     tableEnv.executeSql(query).await()
-    assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
+    assertThatList(expected).containsExactlyInAnyOrderElementsOf(TestCollectionTableFactory.RESULT)
   }
 
-  @Test
+  @TestTemplate
   def testInsertSinkTableExpressionFields(): Unit = {
     val sourceData = List(
       toRow(1, "1000"),
@@ -515,14 +515,14 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       toRow(3, "2000"),
       toRow(1, "2"),
       toRow(2, "3000")
-    )
+    ).asJava
     val expected = List(
       toRow(1, 2),
       toRow(1, 2),
       toRow(2, 3),
       toRow(2, 3),
       toRow(3, 4)
-    )
+    ).asJava
     TestCollectionTableFactory.initData(sourceData)
     val sourceDDL =
       """
@@ -552,10 +552,10 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
     tableEnv.executeSql(query).await()
-    assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
+    assertThatList(expected).containsExactlyInAnyOrderElementsOf(TestCollectionTableFactory.RESULT)
   }
 
-  @Test
+  @TestTemplate
   def testInsertSinkTableWithUnmatchedFields(): Unit = {
     val sourceData = List(
       toRow(1, "1000"),
@@ -563,7 +563,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       toRow(3, "2000"),
       toRow(1, "2"),
       toRow(2, "3000")
-    )
+    ).asJava
     TestCollectionTableFactory.initData(sourceData)
     val sourceDDL =
       """
@@ -592,12 +592,13 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
-    expectedEx.expect(classOf[ValidationException])
-    expectedEx.expectMessage("Incompatible types for sink column 'c' at position 1.")
-    tableEnv.executeSql(query).await()
+
+    assertThatExceptionOfType(classOf[ValidationException])
+      .isThrownBy(() => tableEnv.executeSql(query).await())
+      .withMessageContaining("Incompatible types for sink column 'c' at position 2.")
   }
 
-  @Test
+  @TestTemplate
   def testInsertWithJoinedSource(): Unit = {
     val sourceData = List(
       toRow(1, 1000, 2),
@@ -605,14 +606,14 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       toRow(3, 2000, 4),
       toRow(1, 2, 2),
       toRow(2, 3000, 3)
-    )
+    ).asJava
 
     val expected = List(
       toRow(1, 1000, 2, 1),
       toRow(1, 2, 2, 1),
       toRow(2, 1, 1, 2),
       toRow(2, 3000, 1, 2)
-    )
+    ).asJava
     TestCollectionTableFactory.initData(sourceData)
     val sourceDDL =
       """
@@ -646,10 +647,10 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
     tableEnv.executeSql(query).await()
-    assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
+    assertThatList(expected).containsExactlyInAnyOrderElementsOf(TestCollectionTableFactory.RESULT)
   }
 
-  @Test
+  @TestTemplate
   def testInsertWithAggregateSource(): Unit = {
     if (isStreamingMode) {
       return
@@ -660,13 +661,13 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       toRow(3, 2000, 4),
       toRow(4, 2000, 5),
       toRow(5, 3000, 6)
-    )
+    ).asJava
 
     val expected = List(
       toRow(3, 1000),
       toRow(5, 3000),
       toRow(7, 2000)
-    )
+    ).asJava
     TestCollectionTableFactory.initData(sourceData)
     val sourceDDL =
       """
@@ -695,17 +696,17 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
     tableEnv.executeSql(query).await()
-    assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
+    assertThatList(expected).containsExactlyInAnyOrderElementsOf(TestCollectionTableFactory.RESULT)
   }
 
-  @Test
+  @TestTemplate
   def testTemporaryTableMaskPermanentTableWithSameName(): Unit = {
     val sourceData = List(
       toRow(1, "1000", 2),
       toRow(2, "1", 3),
       toRow(3, "2000", 4),
       toRow(1, "2", 2),
-      toRow(2, "3000", 3))
+      toRow(2, "3000", 3)).asJava
 
     val permanentTable =
       """
@@ -746,14 +747,14 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       toRow(2, "1", 3),
       toRow(3, "2000", 4),
       toRow(1, "2", 2),
-      toRow(2, "3000", 3))
+      toRow(2, "3000", 3)).asJava
 
     val temporaryData = List(
       toRow(1, "1000", 3),
       toRow(2, "1", 4),
       toRow(3, "2000", 5),
       toRow(1, "2", 3),
-      toRow(2, "3000", 4))
+      toRow(2, "3000", 4)).asJava
 
     tableEnv.executeSql(permanentTable)
     tableEnv.executeSql(temporaryTable)
@@ -764,7 +765,8 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     val query = "SELECT a, b, d FROM T1"
     tableEnv.sqlQuery(query).executeInsert("T2").await()
     // temporary table T1 masks permanent table T1
-    assertEquals(temporaryData.sorted, TestCollectionTableFactory.RESULT.sorted)
+    assertThatList(temporaryData).containsExactlyInAnyOrderElementsOf(
+      TestCollectionTableFactory.RESULT)
 
     TestCollectionTableFactory.reset()
     TestCollectionTableFactory.initData(sourceData)
@@ -776,10 +778,11 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(dropTemporaryTable)
     tableEnv.sqlQuery(query).executeInsert("T2").await()
     // now we only have permanent view T1
-    assertEquals(permanentData.sorted, TestCollectionTableFactory.RESULT.sorted)
+    assertThatList(permanentData).containsExactlyInAnyOrderElementsOf(
+      TestCollectionTableFactory.RESULT)
   }
 
-  @Test
+  @TestTemplate
   def testDropTableWithFullPath(): Unit = {
     val ddl1 =
       """
@@ -803,12 +806,13 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
 
     tableEnv.executeSql(ddl1)
     tableEnv.executeSql(ddl2)
-    assert(tableEnv.listTables().sameElements(Array[String]("t1", "t2")))
+    assertThat(tableEnv.listTables())
+      .containsExactlyInAnyOrderElementsOf(Seq[String]("t1", "t2").asJava)
     tableEnv.executeSql("DROP TABLE default_catalog.default_database.t2")
-    assert(tableEnv.listTables().sameElements(Array("t1")))
+    assertThat(tableEnv.listTables()).containsExactly("t1")
   }
 
-  @Test
+  @TestTemplate
   def testDropTableWithPartialPath(): Unit = {
     val ddl1 =
       """
@@ -832,13 +836,14 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
 
     tableEnv.executeSql(ddl1)
     tableEnv.executeSql(ddl2)
-    assert(tableEnv.listTables().sameElements(Array[String]("t1", "t2")))
+    assertThat(tableEnv.listTables())
+      .containsExactlyInAnyOrderElementsOf(Seq[String]("t1", "t2").asJava)
     tableEnv.executeSql("DROP TABLE default_database.t2")
     tableEnv.executeSql("DROP TABLE t1")
-    assert(tableEnv.listTables().isEmpty)
+    assertThat(tableEnv.listTables()).isEmpty()
   }
 
-  @Test(expected = classOf[ValidationException])
+  @TestTemplate
   def testDropTableWithInvalidPath(): Unit = {
     val ddl1 =
       """
@@ -852,11 +857,12 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
 
     tableEnv.executeSql(ddl1)
-    assert(tableEnv.listTables().sameElements(Array[String]("t1")))
-    tableEnv.executeSql("DROP TABLE catalog1.database1.t1")
+    assertThat(tableEnv.listTables()).containsExactly("t1")
+    assertThatExceptionOfType(classOf[ValidationException])
+      .isThrownBy(() => tableEnv.executeSql("DROP TABLE catalog1.database1.t1"))
   }
 
-  @Test
+  @TestTemplate
   def testDropTableWithInvalidPathIfExists(): Unit = {
     val ddl1 =
       """
@@ -870,12 +876,12 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
 
     tableEnv.executeSql(ddl1)
-    assert(tableEnv.listTables().sameElements(Array[String]("t1")))
+    assertThat(tableEnv.listTables()).containsExactly("t1")
     tableEnv.executeSql("DROP TABLE IF EXISTS catalog1.database1.t1")
-    assert(tableEnv.listTables().sameElements(Array[String]("t1")))
+    assertThat(tableEnv.listTables()).containsExactly("t1")
   }
 
-  @Test
+  @TestTemplate
   def testDropTableSameNameWithTemporaryTable(): Unit = {
     val createTable1 =
       """
@@ -900,15 +906,15 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(createTable1)
     tableEnv.executeSql(createTable2)
 
-    expectedEx.expect(classOf[ValidationException])
-    expectedEx.expectMessage(
-      "Temporary table with identifier "
-        + "'`default_catalog`.`default_database`.`t1`' exists. "
-        + "Drop it first before removing the permanent table.")
-    tableEnv.executeSql("drop table t1")
+    assertThatExceptionOfType(classOf[ValidationException])
+      .isThrownBy(() => tableEnv.executeSql("drop table t1"))
+      .withMessageContaining(
+        "Temporary table with identifier "
+          + "'`default_catalog`.`default_database`.`t1`' exists. "
+          + "Drop it first before removing the permanent table.")
   }
 
-  @Test
+  @TestTemplate
   def testDropViewSameNameWithTable(): Unit = {
     val createTable1 =
       """
@@ -922,14 +928,13 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(createTable1)
 
-    expectedEx.expect(classOf[ValidationException])
-    expectedEx.expectMessage(
-      "View with identifier "
+    assertThatExceptionOfType(classOf[ValidationException])
+      .isThrownBy(() => tableEnv.executeSql("drop view t1"))
+      .withMessageContaining("View with identifier "
         + "'default_catalog.default_database.t1' does not exist.")
-    tableEnv.executeSql("drop view t1")
   }
 
-  @Test
+  @TestTemplate
   def testDropViewSameNameWithTableIfNotExists(): Unit = {
     val createTable1 =
       """
@@ -943,10 +948,10 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(createTable1)
     tableEnv.executeSql("drop view if exists t1")
-    assert(tableEnv.listTables().sameElements(Array("t1")))
+    assertThat(tableEnv.listTables()).containsExactly("t1")
   }
 
-  @Test
+  @TestTemplate
   def testAlterTable(): Unit = {
     val ddl1 =
       """
@@ -963,7 +968,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
 
     // alter table rename
     tableEnv.executeSql("alter table t1 rename to t2")
-    assert(tableEnv.listTables().sameElements(Array[String]("t2")))
+    assertThat(tableEnv.listTables()).containsExactly("t2")
 
     // alter table options
     tableEnv.executeSql("alter table t2 set ('k1' = 'a', 'k2' = 'b')")
@@ -971,37 +976,40 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     expectedOptions.put("connector", "COLLECTION")
     expectedOptions.put("k1", "a")
     expectedOptions.put("k2", "b")
-    assertEquals(expectedOptions, getTableOptions("t2"))
+    assertThat(expectedOptions).isEqualTo(getTableOptions("t2"))
 
     tableEnv.executeSql("alter table t2 reset ('k1')")
     expectedOptions.remove("k1")
-    assertEquals(expectedOptions, getTableOptions("t2"))
+    assertThat(expectedOptions).isEqualTo(getTableOptions("t2"))
 
     // alter table add constraint
     val currentCatalog = tableEnv.getCurrentCatalog
     val currentDB = tableEnv.getCurrentDatabase
     tableEnv.executeSql("alter table t2 add constraint ct1 primary key(a) not enforced")
-    val tableSchema1 = tableEnv
+    val primaryKey = tableEnv
       .getCatalog(currentCatalog)
       .get()
       .getTable(ObjectPath.fromString(s"$currentDB.t2"))
-      .getSchema
-    assert(tableSchema1.getPrimaryKey.isPresent)
-    assertEquals(
-      "CONSTRAINT ct1 PRIMARY KEY (a)",
-      tableSchema1.getPrimaryKey.get().asSummaryString())
+      .asInstanceOf[ResolvedCatalogTable]
+      .getResolvedSchema
+      .getPrimaryKey
+    assertThat(primaryKey).isPresent
+    assertThat(primaryKey.get().asSummaryString())
+      .isEqualTo("CONSTRAINT `ct1` PRIMARY KEY (`a`) NOT ENFORCED")
 
     // alter table drop constraint
     tableEnv.executeSql("alter table t2 drop constraint ct1")
-    val tableSchema2 = tableEnv
+    val primaryKey2 = tableEnv
       .getCatalog(currentCatalog)
       .get()
       .getTable(ObjectPath.fromString(s"$currentDB.t2"))
-      .getSchema
-    assertEquals(false, tableSchema2.getPrimaryKey.isPresent)
+      .asInstanceOf[ResolvedCatalogTable]
+      .getResolvedSchema
+      .getPrimaryKey
+    assertThat(primaryKey2).isNotPresent
   }
 
-  @Test
+  @TestTemplate
   def testCreateTableAndShowCreateTable(): Unit = {
     val executedDDL =
       """
@@ -1020,6 +1028,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |  watermark for ts1 as cast(timestampadd(hour, 8, ts1) as timestamp(3)),
         |  constraint test_constraint primary key (a, b) not enforced
         |) comment 'test show create table statement'
+        |distributed by (a)
         |partitioned by (b,h)
         |with (
         |  'connector' = 'kafka',
@@ -1042,7 +1051,9 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |  `proc` AS PROCTIME(),
         |  WATERMARK FOR `ts1` AS CAST(TIMESTAMPADD(HOUR, 8, `ts1`) AS TIMESTAMP(3)),
         |  CONSTRAINT `test_constraint` PRIMARY KEY (`a`, `b`) NOT ENFORCED
-        |) COMMENT 'test show create table statement'
+        |)
+        |COMMENT 'test show create table statement'
+        |DISTRIBUTED BY (`a`)
         |PARTITIONED BY (`b`, `h`)
         |WITH (
         |  'connector' = 'kafka',
@@ -1051,16 +1062,15 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |""".stripMargin
     tableEnv.executeSql(executedDDL)
     val row = tableEnv.executeSql("SHOW CREATE TABLE `TBL1`").collect().next()
-    assertEquals(expectedDDL, row.getField(0))
+    assertThat(row.getField(0)).isEqualTo(expectedDDL)
 
-    expectedEx.expect(classOf[ValidationException])
-    expectedEx.expectMessage(
-      "Could not execute SHOW CREATE TABLE. " +
+    assertThatExceptionOfType(classOf[ValidationException])
+      .isThrownBy(() => tableEnv.executeSql("SHOW CREATE TABLE `tmp`"))
+      .withMessageContaining("Could not execute SHOW CREATE TABLE. " +
         "Table with identifier `default_catalog`.`default_database`.`tmp` does not exist.")
-    tableEnv.executeSql("SHOW CREATE TABLE `tmp`")
   }
 
-  @Test
+  @TestTemplate
   def testCreateTableWithCommentAndShowCreateTable(): Unit = {
     val executedDDL =
       """
@@ -1080,6 +1090,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |  watermark for ts1 as cast(timestampadd(hour, 8, ts1) as timestamp(3)),
         |  constraint test_constraint primary key (pk1, pk2) not enforced
         |) comment 'test show create table statement'
+        |distributed into 5 buckets
         |partitioned by (h)
         |with (
         |  'connector' = 'kafka',
@@ -1103,7 +1114,9 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |  `proc` AS PROCTIME(),
         |  WATERMARK FOR `ts1` AS CAST(TIMESTAMPADD(HOUR, 8, `ts1`) AS TIMESTAMP(3)),
         |  CONSTRAINT `test_constraint` PRIMARY KEY (`pk1`, `pk2`) NOT ENFORCED
-        |) COMMENT 'test show create table statement'
+        |)
+        |COMMENT 'test show create table statement'
+        |DISTRIBUTED INTO 5 BUCKETS
         |PARTITIONED BY (`h`)
         |WITH (
         |  'connector' = 'kafka',
@@ -1112,10 +1125,46 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |""".stripMargin
     tableEnv.executeSql(executedDDL)
     val row = tableEnv.executeSql("SHOW CREATE TABLE `TBL1`").collect().next()
-    assertEquals(expectedDDL, row.getField(0).toString)
+    assertThat(row.getField(0)).hasToString(expectedDDL)
   }
 
-  @Test
+  @TestTemplate
+  def testCreateTableAndShowCreateTableWithDistributionAlgorithm(): Unit = {
+    val executedDDL =
+      """
+        |create temporary table TBL1 (
+        |  a bigint not null,
+        |  h string,
+        |  b string not null
+        |) comment 'test show create table statement'
+        |distributed by range(a) into 7 buckets
+        |partitioned by (b,h)
+        |with (
+        |  'connector' = 'kafka',
+        |  'kafka.topic' = 'log.test'
+        |)
+        |""".stripMargin
+
+    val expectedDDL =
+      """ |CREATE TEMPORARY TABLE `default_catalog`.`default_database`.`TBL1` (
+        |  `a` BIGINT NOT NULL,
+        |  `h` VARCHAR(2147483647),
+        |  `b` VARCHAR(2147483647) NOT NULL
+        |)
+        |COMMENT 'test show create table statement'
+        |DISTRIBUTED BY RANGE(`a`) INTO 7 BUCKETS
+        |PARTITIONED BY (`b`, `h`)
+        |WITH (
+        |  'connector' = 'kafka',
+        |  'kafka.topic' = 'log.test'
+        |)
+        |""".stripMargin
+    tableEnv.executeSql(executedDDL)
+    val row = tableEnv.executeSql("SHOW CREATE TABLE `TBL1`").collect().next()
+    assertThat(row.getField(0)).isEqualTo(expectedDDL)
+  }
+
+  @TestTemplate
   def testCreateViewAndShowCreateTable(): Unit = {
     val createTableDDL =
       """ |create table `source` (
@@ -1134,15 +1183,23 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |""".stripMargin
     tableEnv.executeSql(createTableDDL)
     tableEnv.executeSql(createViewDDL)
-    expectedEx.expect(classOf[TableException])
-    expectedEx.expectMessage(
-      "SHOW CREATE TABLE is only supported for tables, " +
-        "but `default_catalog`.`default_database`.`tmp` is a view. " +
-        "Please use SHOW CREATE VIEW instead.")
-    tableEnv.executeSql("SHOW CREATE TABLE `tmp`")
+
+    assertThatExceptionOfType(classOf[TableException])
+      .isThrownBy(() => tableEnv.executeSql("SHOW CREATE TABLE `tmp`"))
+      .withMessageContaining(
+        "SHOW CREATE TABLE is only supported for tables, " +
+          "but `default_catalog`.`default_database`.`tmp` is a view. " +
+          "Please use SHOW CREATE VIEW instead.")
+
+    assertThatExceptionOfType(classOf[TableException])
+      .isThrownBy(() => tableEnv.executeSql("SHOW CREATE VIEW `source`"))
+      .withMessageContaining(
+        "SHOW CREATE VIEW is only supported for views, " +
+          "but `default_catalog`.`default_database`.`source` is a table. " +
+          "Please use SHOW CREATE TABLE instead.")
   }
 
-  @Test
+  @TestTemplate
   def testAlterViewRename(): Unit = {
     tableEnv.executeSql("""
                           | CREATE TABLE T (
@@ -1154,10 +1211,10 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql("CREATE VIEW V AS SELECT * FROM T")
 
     tableEnv.executeSql("ALTER VIEW V RENAME TO V2")
-    assert(tableEnv.listViews().sameElements(Array[String]("V2")))
+    assertThat(tableEnv.listViews()).containsExactly("V2")
   }
 
-  @Test
+  @TestTemplate
   def testAlterViewAs(): Unit = {
     tableEnv.executeSql("""
                           | CREATE TABLE T (
@@ -1177,21 +1234,21 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       .get()
       .getTable(objectPath)
       .asInstanceOf[CatalogView]
-    assertEquals("SELECT `b`\nFROM `T`", view.getOriginalQuery)
+    assertThat(view.getOriginalQuery).isEqualTo("SELECT `b`\nFROM `T`")
   }
 
-  @Test
+  @TestTemplate
   def testUseCatalogAndShowCurrentCatalog(): Unit = {
     tableEnv.registerCatalog("cat1", new GenericInMemoryCatalog("cat1"))
     tableEnv.registerCatalog("cat2", new GenericInMemoryCatalog("cat2"))
     tableEnv.executeSql("use catalog cat1")
-    assertEquals("cat1", tableEnv.getCurrentCatalog)
+    assertThat(tableEnv.getCurrentCatalog).isEqualTo("cat1")
     tableEnv.executeSql("use catalog cat2")
-    assertEquals("cat2", tableEnv.getCurrentCatalog)
-    assertEquals("+I[cat2]", tableEnv.executeSql("show current catalog").collect().next().toString)
+    assertThat(tableEnv.getCurrentCatalog).isEqualTo("cat2")
+    assertThat(tableEnv.executeSql("show current catalog").collect().next()).hasToString("+I[cat2]")
   }
 
-  @Test
+  @TestTemplate
   def testUseDatabaseAndShowCurrentDatabase(): Unit = {
     val catalog = new GenericInMemoryCatalog("cat1")
     tableEnv.registerCatalog("cat1", catalog)
@@ -1200,16 +1257,16 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     catalog.createDatabase("db1", catalogDB1, true)
     catalog.createDatabase("db2", catalogDB2, true)
     tableEnv.executeSql("use cat1.db1")
-    assertEquals("db1", tableEnv.getCurrentDatabase)
+    assertThat(tableEnv.getCurrentDatabase).isEqualTo("db1")
     var currentDatabase = tableEnv.executeSql("show current database").collect().next().toString
-    assertEquals("+I[db1]", currentDatabase)
+    assertThat(currentDatabase).isEqualTo("+I[db1]")
     tableEnv.executeSql("use db2")
-    assertEquals("db2", tableEnv.getCurrentDatabase)
+    assertThat(tableEnv.getCurrentDatabase).isEqualTo("db2")
     currentDatabase = tableEnv.executeSql("show current database").collect().next().toString
-    assertEquals("+I[db2]", currentDatabase)
+    assertThat(currentDatabase).isEqualTo("+I[db2]")
   }
 
-  @Test
+  @TestTemplate
   def testCreateDatabase(): Unit = {
     tableEnv.registerCatalog("cat1", new GenericInMemoryCatalog("default"))
     tableEnv.registerCatalog("cat2", new GenericInMemoryCatalog("default"))
@@ -1226,15 +1283,15 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       "create database cat2.db1 comment 'test_comment'" +
         " with ('k1' = 'v1', 'k2' = 'v2')")
     val database = tableEnv.getCatalog("cat2").get().getDatabase("db1")
-    assertEquals("test_comment", database.getComment)
-    assertEquals(2, database.getProperties.size())
+    assertThat(database.getComment).isEqualTo("test_comment")
+    assertThat(database.getProperties).hasSize(2)
     val expectedProperty = new util.HashMap[String, String]()
     expectedProperty.put("k1", "v1")
     expectedProperty.put("k2", "v2")
-    assertEquals(expectedProperty, database.getProperties)
+    assertThat(database.getProperties).isEqualTo(expectedProperty)
   }
 
-  @Test
+  @TestTemplate
   def testDropDatabase(): Unit = {
     tableEnv.registerCatalog("cat1", new GenericInMemoryCatalog("default"))
     tableEnv.executeSql("use catalog cat1")
@@ -1271,6 +1328,11 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |)
       """.stripMargin
     tableEnv.executeSql(ddl2)
+    assertThatThrownBy(() => tableEnv.executeSql("drop database db1")).satisfies(
+      anyCauseMatches(
+        classOf[ValidationException],
+        "Cannot drop a database which is currently in use."))
+    tableEnv.executeSql("use `default`")
     try {
       tableEnv.executeSql("drop database db1")
       fail("ValidationException expected")
@@ -1280,31 +1342,31 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql("drop database db1 cascade")
   }
 
-  @Test
+  @TestTemplate
   def testAlterDatabase(): Unit = {
     tableEnv.registerCatalog("cat1", new GenericInMemoryCatalog("default"))
     tableEnv.executeSql("use catalog cat1")
     tableEnv.executeSql("create database db1 comment 'db1_comment' with ('k1' = 'v1')")
     tableEnv.executeSql("alter database db1 set ('k1' = 'a', 'k2' = 'b')")
     val database = tableEnv.getCatalog("cat1").get().getDatabase("db1")
-    assertEquals("db1_comment", database.getComment)
-    assertEquals(2, database.getProperties.size())
+    assertThat(database.getComment).isEqualTo("db1_comment")
+    assertThat(database.getProperties).hasSize(2)
     val expectedProperty = new util.HashMap[String, String]()
     expectedProperty.put("k1", "a")
     expectedProperty.put("k2", "b")
-    assertEquals(expectedProperty, database.getProperties)
+    assertThat(database.getProperties).isEqualTo(expectedProperty)
   }
 
-  @Test
+  @TestTemplate
   def testLoadFunction(): Unit = {
     tableEnv.registerCatalog("cat2", new TestValuesCatalog("cat2", "default", true))
     tableEnv.executeSql("use catalog cat2")
     // test load customer function packaged in a jar
-    val random = new Random();
+    val random = new Random()
     val udfClassName = GENERATED_LOWER_UDF_CLASS + random.nextInt(50)
     val jarPath = UserClassLoaderJarTestUtils
       .createJarFile(
-        AbstractTestBase.TEMPORARY_FOLDER.newFolder(String.format("test-jar-%s", UUID.randomUUID)),
+        TempDirUtils.newFolder(tmpDir, String.format("test-jar-%s", UUID.randomUUID)),
         "test-classloader-udf.jar",
         udfClassName,
         String.format(GENERATED_LOWER_UDF_CODE, udfClassName)
@@ -1314,7 +1376,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(s"""create function lowerUdf as '$udfClassName' using jar '$jarPath'""")
 
     TestCollectionTableFactory.reset()
-    TestCollectionTableFactory.initData(List(Row.of("BoB")))
+    TestCollectionTableFactory.initData(List(Row.of("BoB")).asJava)
     val ddl1 =
       """
         |create table t1(
@@ -1324,14 +1386,74 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |)
       """.stripMargin
     tableEnv.executeSql(ddl1)
-    assertEquals(
-      "+I[bob]",
-      tableEnv.executeSql("select lowerUdf(a) from t1").collect().next().toString)
+    assertThat(tableEnv.executeSql("select lowerUdf(a) from t1").collect().next())
+      .hasToString("+I[bob]")
   }
+
+  @TestTemplate
+  def testSensitiveInfoMasking(): Unit = {
+    // Create a table with sensitive information
+    val tableDDL =
+      """
+        |create table t1(
+        |  a bigint,
+        |  b varchar,
+        |  c int
+        |) with (
+        |  'connector' = 'values',
+        |  'password' = 'Secret1',
+        |  'secret' = 'Secret2',
+        |  'fs.azure.account.key' = 'Secret3',
+        |  'apikey' =  'Secret4',
+        |  'api-key' = 'Secret5',
+        |  'auth-params' = 'Secret6',
+        |  'service-key' = 'Secret7',
+        |  'token' = 'Secret8',
+        |  'basic-auth' = 'Secret9',
+        |  'jaas.config' = 'Secret10',
+        |  'http-headers' = '{"Authorization": "Secret11"}'
+        |)
+    """.stripMargin
+
+    tableEnv.executeSql(tableDDL)
+
+    // Extract a generic validation function
+    def validateSensitiveInfoMasking(sql: String, tableType: String): Unit = {
+      try {
+        tableEnv.executeSql(sql)
+        fail(s"Expected ValidationException for $tableType table")
+      } catch {
+        case e: ValidationException =>
+          val errorMsg = e.getMessage
+          // Verify sensitive information is masked
+          assert(!errorMsg.contains("Secret"))
+
+          // Verify all sensitive fields are replaced with '******'
+          assert(errorMsg.contains("'password'='******'"))
+          assert(errorMsg.contains("'secret'='******'"))
+          assert(errorMsg.contains("'fs.azure.account.key'='******'"))
+          assert(errorMsg.contains("'apikey'='******'"))
+          assert(errorMsg.contains("'api-key'='******'"))
+          assert(errorMsg.contains("'auth-params'='******'"))
+          assert(errorMsg.contains("'service-key'='******'"))
+          assert(errorMsg.contains("'token'='******'"))
+          assert(errorMsg.contains("'basic-auth'='******'"))
+          assert(errorMsg.contains("'jaas.config'='******'"))
+          assert(errorMsg.contains("'http-headers'='******'"))
+      }
+    }
+
+    // Test source table (SELECT)
+    validateSensitiveInfoMasking("select * from t1", "source")
+
+    // Test sink table (INSERT)
+    validateSensitiveInfoMasking("insert into t1 select 1, 'test', 1", "sink")
+  }
+
 }
 
 object CatalogTableITCase {
-  @Parameterized.Parameters(name = "{0}")
+  @Parameters(name = "{0}")
   def parameters(): java.util.Collection[Boolean] = {
     util.Arrays.asList(true, false)
   }

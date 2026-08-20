@@ -18,11 +18,14 @@
 
 package org.apache.flink.table.runtime.operators.join.stream;
 
+import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
+import org.apache.flink.streaming.runtime.operators.asyncprocessing.AsyncKeyOrderedProcessingOperator;
 import org.apache.flink.streaming.util.KeyedTwoInputStreamOperatorTestHarness;
+import org.apache.flink.streaming.util.asyncprocessing.AsyncKeyedTwoInputStreamOperatorTestHarness;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.generated.GeneratedJoinCondition;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
-import org.apache.flink.table.runtime.operators.join.stream.state.JoinInputSideSpec;
+import org.apache.flink.table.runtime.operators.join.stream.utils.JoinInputSideSpec;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.runtime.util.RowDataHarnessAssertor;
 import org.apache.flink.table.types.logical.CharType;
@@ -41,7 +44,7 @@ import java.util.function.Function;
 /** Base test class for {@link AbstractStreamingJoinOperator}. */
 public abstract class StreamingJoinOperatorTestBase {
 
-    protected final InternalTypeInfo<RowData> leftTypeInfo =
+    protected InternalTypeInfo<RowData> leftTypeInfo =
             InternalTypeInfo.of(
                     RowType.of(
                             new LogicalType[] {
@@ -51,17 +54,17 @@ public abstract class StreamingJoinOperatorTestBase {
                             },
                             new String[] {"order_id", "line_order_id", "shipping_address"}));
 
-    protected final InternalTypeInfo<RowData> rightTypeInfo =
+    protected InternalTypeInfo<RowData> rightTypeInfo =
             InternalTypeInfo.of(
                     RowType.of(
                             new LogicalType[] {new CharType(false, 20), new CharType(true, 10)},
                             new String[] {"line_order_id0", "line_order_ship_mode"}));
 
-    protected final RowDataKeySelector leftKeySelector =
+    protected RowDataKeySelector leftKeySelector =
             HandwrittenSelectorUtil.getRowDataSelector(
                     new int[] {1},
                     leftTypeInfo.toRowType().getChildren().toArray(new LogicalType[0]));
-    protected final RowDataKeySelector rightKeySelector =
+    protected RowDataKeySelector rightKeySelector =
             HandwrittenSelectorUtil.getRowDataSelector(
                     new int[] {0},
                     rightTypeInfo.toRowType().getChildren().toArray(new LogicalType[0]));
@@ -94,25 +97,29 @@ public abstract class StreamingJoinOperatorTestBase {
     protected final GeneratedJoinCondition joinCondition =
             new GeneratedJoinCondition("ConditionFunction", funcCode, new Object[0]);
 
-    protected final RowDataHarnessAssertor assertor =
-            new RowDataHarnessAssertor(getOutputType().getChildren().toArray(new LogicalType[0]));
+    protected RowDataHarnessAssertor assertor;
 
     protected KeyedTwoInputStreamOperatorTestHarness<RowData, RowData, RowData, RowData>
             testHarness;
 
     @BeforeEach
-    public void beforeEach(TestInfo testInfo) throws Exception {
+    void beforeEach(TestInfo testInfo) throws Exception {
+        TwoInputStreamOperator<RowData, RowData, RowData> operator = createJoinOperator(testInfo);
         testHarness =
-                new KeyedTwoInputStreamOperatorTestHarness<>(
-                        createJoinOperator(testInfo),
-                        leftKeySelector,
-                        rightKeySelector,
-                        joinKeyTypeInfo);
+                operator instanceof AsyncKeyOrderedProcessingOperator
+                        ? AsyncKeyedTwoInputStreamOperatorTestHarness.create(
+                                operator, leftKeySelector, rightKeySelector, joinKeyTypeInfo)
+                        : new KeyedTwoInputStreamOperatorTestHarness<>(
+                                operator, leftKeySelector, rightKeySelector, joinKeyTypeInfo);
         testHarness.open();
+        // extend for mini-batch join test
+        assertor =
+                new RowDataHarnessAssertor(
+                        getOutputType().getChildren().toArray(new LogicalType[0]));
     }
 
     @AfterEach
-    public void afterEach() throws Exception {
+    void afterEach() throws Exception {
         testHarness.close();
     }
 
@@ -121,7 +128,7 @@ public abstract class StreamingJoinOperatorTestBase {
                 if (tags.isEmpty()) {
                     return new Long[] {0L, 0L};
                 }
-                Long[] ttl = new Long[2];
+                Long[] ttl = new Long[] {0L, 0L};
                 for (String tag : tags) {
                     String[] splits = tag.split("=");
                     long value = Long.parseLong(splits[1].trim());
@@ -135,7 +142,8 @@ public abstract class StreamingJoinOperatorTestBase {
             };
 
     /** Create streaming join operator according to {@link TestInfo}. */
-    protected abstract AbstractStreamingJoinOperator createJoinOperator(TestInfo testInfo);
+    protected abstract TwoInputStreamOperator<RowData, RowData, RowData> createJoinOperator(
+            TestInfo testInfo);
 
     /** Get the output row type of join operator. */
     protected abstract RowType getOutputType();

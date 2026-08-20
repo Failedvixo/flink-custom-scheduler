@@ -162,7 +162,8 @@ class StreamArrowPythonProcTimeBoundedRangeOperatorTest
         @Override
         public PythonFunctionRunner createPythonFunctionRunner() {
             return new PassThroughPythonAggregateFunctionRunner(
-                    getRuntimeContext().getTaskName(),
+                    getContainingTask().getEnvironment(),
+                    getRuntimeContext().getTaskInfo().getTaskName(),
                     PythonTestUtils.createTestProcessEnvironmentManager(),
                     udfInputType,
                     udfOutputType,

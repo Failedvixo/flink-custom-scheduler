@@ -19,35 +19,20 @@
 package org.apache.flink.runtime.scheduler.adaptive;
 
 import org.apache.flink.api.common.JobStatus;
-import org.apache.flink.runtime.executiongraph.ArchivedExecutionGraph;
+import org.apache.flink.runtime.scheduler.adaptive.allocator.JobInformation;
+import org.apache.flink.runtime.scheduler.adaptive.timeline.RescaleTimeline;
+import org.apache.flink.runtime.scheduler.adaptive.timeline.TriggerCause;
 
 import org.slf4j.Logger;
 
-import javax.annotation.Nullable;
-
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-
 /** Initial state of the {@link AdaptiveScheduler}. */
-class Created implements State {
+class Created extends StateWithoutExecutionGraph {
 
     private final Context context;
 
-    private final Logger logger;
-
     Created(Context context, Logger logger) {
+        super(context, logger);
         this.context = context;
-        this.logger = logger;
-    }
-
-    @Override
-    public void cancel() {
-        context.goToFinished(context.getArchivedExecutionGraph(JobStatus.CANCELED, null));
-    }
-
-    @Override
-    public void suspend(Throwable cause) {
-        context.goToFinished(context.getArchivedExecutionGraph(JobStatus.SUSPENDED, cause));
     }
 
     @Override
@@ -55,41 +40,29 @@ class Created implements State {
         return JobStatus.INITIALIZING;
     }
 
-    @Override
-    public ArchivedExecutionGraph getJob() {
-        return context.getArchivedExecutionGraph(getJobStatus(), null);
-    }
-
-    @Override
-    public void handleGlobalFailure(
-            Throwable cause, CompletableFuture<Map<String, String>> failureLabels) {
-        context.goToFinished(context.getArchivedExecutionGraph(JobStatus.FAILED, cause));
-    }
-
-    @Override
-    public Logger getLogger() {
-        return logger;
-    }
-
     /** Starts the scheduling by going into the {@link WaitingForResources} state. */
     void startScheduling() {
+        recordRescaleForInitialScheduling();
         context.goToWaitingForResources(null);
     }
 
-    /** Context of the {@link Created} state. */
-    interface Context extends StateTransitions.ToFinished, StateTransitions.ToWaitingForResources {
-
-        /**
-         * Creates an {@link ArchivedExecutionGraph} for the given jobStatus and failure cause.
-         *
-         * @param jobStatus jobStatus to create the {@link ArchivedExecutionGraph} with
-         * @param cause cause represents the failure cause for the {@link ArchivedExecutionGraph};
-         *     {@code null} if there is no failure cause
-         * @return the created {@link ArchivedExecutionGraph}
-         */
-        ArchivedExecutionGraph getArchivedExecutionGraph(
-                JobStatus jobStatus, @Nullable Throwable cause);
+    private void recordRescaleForInitialScheduling() {
+        RescaleTimeline rescaleTimeline = context.getRescaleTimeline();
+        rescaleTimeline.newRescale(true);
+        JobInformation jobInformation = rescaleTimeline.getJobInformation();
+        rescaleTimeline.updateRescale(
+                rescale ->
+                        rescale.setTriggerCause(TriggerCause.INITIAL_SCHEDULE)
+                                .setStartTimestamp(getDurable().getEnterTimestamp())
+                                .setDesiredVertexParallelism(jobInformation)
+                                .setDesiredSlots(jobInformation)
+                                .setMinimalRequiredSlots(jobInformation)
+                                .log());
     }
+
+    /** Context of the {@link Created} state. */
+    interface Context
+            extends StateWithoutExecutionGraph.Context, StateTransitions.ToWaitingForResources {}
 
     static class Factory implements StateFactory<Created> {
 

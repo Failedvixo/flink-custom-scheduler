@@ -131,6 +131,8 @@ public abstract class InputGate
         return availabilityHelper.getAvailableFuture();
     }
 
+    public abstract void resumeGateConsumption() throws IOException;
+
     public abstract void resumeConsumption(InputChannelInfo channelInfo) throws IOException;
 
     public abstract void acknowledgeAllRecordsProcessed(InputChannelInfo channelInfo)
@@ -189,6 +191,13 @@ public abstract class InputGate
     public abstract void requestPartitions() throws IOException;
 
     public abstract CompletableFuture<Void> getStateConsumedFuture();
+
+    /**
+     * Returns a future that completes when buffer filtering is complete for all channels. This
+     * future completes before {@link #getStateConsumedFuture()}, enabling earlier RUNNING state
+     * transition when unaligned checkpoint during recovery is enabled.
+     */
+    public abstract CompletableFuture<Void> getBufferFilteringCompleteFuture();
 
     public abstract void finishReadRecoveredState() throws IOException;
 }

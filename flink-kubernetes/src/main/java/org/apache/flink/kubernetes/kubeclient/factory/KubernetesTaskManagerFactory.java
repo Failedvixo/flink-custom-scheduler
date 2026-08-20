@@ -28,6 +28,7 @@ import org.apache.flink.kubernetes.kubeclient.decorators.InitTaskManagerDecorato
 import org.apache.flink.kubernetes.kubeclient.decorators.KerberosMountDecorator;
 import org.apache.flink.kubernetes.kubeclient.decorators.KubernetesStepDecorator;
 import org.apache.flink.kubernetes.kubeclient.decorators.MountSecretsDecorator;
+import org.apache.flink.kubernetes.kubeclient.decorators.PersistentVolumeClaimMountDecorator;
 import org.apache.flink.kubernetes.kubeclient.parameters.KubernetesTaskManagerParameters;
 import org.apache.flink.kubernetes.kubeclient.resources.KubernetesPod;
 import org.apache.flink.util.Preconditions;
@@ -55,13 +56,15 @@ public class KubernetesTaskManagerFactory {
                                 new InitTaskManagerDecorator(kubernetesTaskManagerParameters),
                                 new EnvSecretsDecorator(kubernetesTaskManagerParameters),
                                 new MountSecretsDecorator(kubernetesTaskManagerParameters),
+                                new PersistentVolumeClaimMountDecorator(
+                                        kubernetesTaskManagerParameters),
                                 new CmdTaskManagerDecorator(kubernetesTaskManagerParameters)));
 
         Configuration configuration = kubernetesTaskManagerParameters.getFlinkConfiguration();
-        if (configuration.getBoolean(KUBERNETES_HADOOP_CONF_MOUNT_DECORATOR_ENABLED)) {
+        if (configuration.get(KUBERNETES_HADOOP_CONF_MOUNT_DECORATOR_ENABLED)) {
             stepDecorators.add(new HadoopConfMountDecorator(kubernetesTaskManagerParameters));
         }
-        if (configuration.getBoolean(KUBERNETES_KERBEROS_MOUNT_DECORATOR_ENABLED)) {
+        if (configuration.get(KUBERNETES_KERBEROS_MOUNT_DECORATOR_ENABLED)) {
             stepDecorators.add(new KerberosMountDecorator(kubernetesTaskManagerParameters));
         }
 

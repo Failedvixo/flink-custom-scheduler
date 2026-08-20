@@ -19,7 +19,7 @@
 package org.apache.flink.runtime.scheduler;
 
 import org.apache.flink.api.common.JobID;
-import org.apache.flink.api.common.time.Time;
+import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.JobException;
 import org.apache.flink.runtime.blob.BlobWriter;
@@ -28,7 +28,9 @@ import org.apache.flink.runtime.checkpoint.CheckpointException;
 import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
 import org.apache.flink.runtime.checkpoint.CheckpointRetentionPolicy;
 import org.apache.flink.runtime.checkpoint.CompletedCheckpoint;
+import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
 import org.apache.flink.runtime.checkpoint.PendingCheckpoint;
+import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutor;
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.executiongraph.Execution;
@@ -38,7 +40,7 @@ import org.apache.flink.runtime.executiongraph.ExecutionJobVertex;
 import org.apache.flink.runtime.executiongraph.ExecutionVertex;
 import org.apache.flink.runtime.executiongraph.IOMetrics;
 import org.apache.flink.runtime.executiongraph.ResultPartitionBytes;
-import org.apache.flink.runtime.executiongraph.failover.flip1.TestRestartBackoffTimeStrategy;
+import org.apache.flink.runtime.executiongraph.failover.TestRestartBackoffTimeStrategy;
 import org.apache.flink.runtime.io.network.partition.JobMasterPartitionTracker;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
 import org.apache.flink.runtime.jobgraph.DistributionPattern;
@@ -48,23 +50,25 @@ import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobGraphBuilder;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
+import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.jobgraph.tasks.CheckpointCoordinatorConfiguration;
 import org.apache.flink.runtime.jobgraph.tasks.JobCheckpointingSettings;
 import org.apache.flink.runtime.jobmaster.LogicalSlot;
 import org.apache.flink.runtime.jobmaster.TestingLogicalSlotBuilder;
 import org.apache.flink.runtime.jobmaster.slotpool.PhysicalSlotProvider;
 import org.apache.flink.runtime.messages.checkpoint.AcknowledgeCheckpoint;
-import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.apache.flink.runtime.scheduler.strategy.ExecutionVertexID;
 import org.apache.flink.runtime.state.CheckpointStorage;
 import org.apache.flink.runtime.state.StateBackend;
 import org.apache.flink.runtime.taskmanager.TaskExecutionState;
 import org.apache.flink.util.SerializedValue;
 import org.apache.flink.util.TernaryBoolean;
+import org.apache.flink.util.function.RunnableWithException;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -78,17 +82,20 @@ import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
 import static org.apache.flink.runtime.executiongraph.ExecutionGraphTestUtils.finishJobVertex;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.apache.flink.runtime.executiongraph.utils.ExecutionUtils.waitForTaskDeploymentDescriptorsCreation;
+import static org.apache.flink.runtime.testutils.CommonTestUtils.waitUntilCondition;
+import static org.apache.flink.runtime.util.JobVertexConnectionUtils.connectNewDataSetAsInput;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 /** A utility class to create {@link DefaultScheduler} instances for testing. */
 public class SchedulerTestingUtils {
 
     private static final long DEFAULT_CHECKPOINT_TIMEOUT_MS = 10 * 60 * 1000;
+    private static final long RETRY_INTERVAL_MILLIS = 10L;
+    private static final int RETRY_ATTEMPTS = 6000;
 
-    private static final Time DEFAULT_TIMEOUT = Time.seconds(300);
+    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(300);
 
     private SchedulerTestingUtils() {}
 
@@ -166,7 +173,7 @@ public class SchedulerTestingUtils {
     }
 
     public static Collection<ExecutionAttemptID> getAllCurrentExecutionAttempts(
-            DefaultScheduler scheduler) {
+            SchedulerNG scheduler) {
         return StreamSupport.stream(
                         scheduler
                                 .requestJob()
@@ -208,7 +215,7 @@ public class SchedulerTestingUtils {
         scheduler.updateTaskExecutionState(new TaskExecutionState(attemptID, executionState));
     }
 
-    public static void setAllExecutionsToRunning(final DefaultScheduler scheduler) {
+    public static void setAllExecutionsToRunning(final SchedulerNG scheduler) {
         getAllCurrentExecutionAttempts(scheduler)
                 .forEach(
                         (attemptId) -> {
@@ -225,7 +232,7 @@ public class SchedulerTestingUtils {
                     scheduler.updateTaskExecutionState(
                             new TaskExecutionState(attemptId, ExecutionState.CANCELED));
 
-            assertTrue("could not switch task to RUNNING", setToRunning);
+            assertThat(setToRunning).as("could not switch task to RUNNING").isTrue();
         }
     }
 
@@ -242,6 +249,22 @@ public class SchedulerTestingUtils {
         }
     }
 
+    public static void acknowledgePendingCheckpoint(
+            final SchedulerNG scheduler,
+            final int checkpointId,
+            final Map<OperatorID, OperatorSubtaskState> subtaskStateMap) {
+        getAllCurrentExecutionAttempts(scheduler)
+                .forEach(
+                        (executionAttemptID) -> {
+                            scheduler.acknowledgeCheckpoint(
+                                    scheduler.requestJob().getJobId(),
+                                    executionAttemptID,
+                                    checkpointId,
+                                    new CheckpointMetrics(),
+                                    new TaskStateSnapshot(subtaskStateMap));
+                        });
+    }
+
     public static CompletableFuture<CompletedCheckpoint> triggerCheckpoint(
             DefaultScheduler scheduler) throws Exception {
         final CheckpointCoordinator checkpointCoordinator = getCheckpointCoordinator(scheduler);
@@ -250,8 +273,9 @@ public class SchedulerTestingUtils {
 
     public static void acknowledgeCurrentCheckpoint(DefaultScheduler scheduler) {
         final CheckpointCoordinator checkpointCoordinator = getCheckpointCoordinator(scheduler);
-        assertEquals(
-                "Coordinator has not ", 1, checkpointCoordinator.getNumberOfPendingCheckpoints());
+        assertThat(checkpointCoordinator.getNumberOfPendingCheckpoints())
+                .as("Coordinator has not ")
+                .isOne();
 
         final PendingCheckpoint pc =
                 checkpointCoordinator.getPendingCheckpoints().values().iterator().next();
@@ -280,28 +304,62 @@ public class SchedulerTestingUtils {
                                         null));
     }
 
-    public static CompletedCheckpoint takeCheckpoint(DefaultScheduler scheduler) throws Exception {
-        final CheckpointCoordinator checkpointCoordinator = getCheckpointCoordinator(scheduler);
-        checkpointCoordinator.triggerCheckpoint(false);
-
-        assertEquals(
-                "test setup inconsistent",
-                1,
-                checkpointCoordinator.getNumberOfPendingCheckpoints());
-        final PendingCheckpoint checkpoint =
-                checkpointCoordinator.getPendingCheckpoints().values().iterator().next();
-        final CompletableFuture<CompletedCheckpoint> future = checkpoint.getCompletionFuture();
-
-        acknowledgePendingCheckpoint(scheduler, checkpoint.getCheckpointID());
-
-        CompletedCheckpoint completed = future.getNow(null);
-        assertNotNull("checkpoint not complete", completed);
-        return completed;
-    }
-
     @SuppressWarnings("deprecation")
     public static CheckpointCoordinator getCheckpointCoordinator(SchedulerBase scheduler) {
         return scheduler.getCheckpointCoordinator();
+    }
+
+    public static void waitForJobStatusRunning(final SchedulerNG scheduler) throws Exception {
+        waitUntilCondition(
+                () -> scheduler.requestJobStatus() == JobStatus.RUNNING,
+                RETRY_INTERVAL_MILLIS,
+                RETRY_ATTEMPTS);
+    }
+
+    public static void waitForCheckpointInProgress(final SchedulerNG scheduler) throws Exception {
+        waitUntilCondition(
+                () ->
+                        scheduler
+                                        .requestCheckpointStats()
+                                        .getCounts()
+                                        .getNumberOfInProgressCheckpoints()
+                                > 0,
+                RETRY_INTERVAL_MILLIS,
+                RETRY_ATTEMPTS);
+    }
+
+    public static void waitForCompletedCheckpoint(final SchedulerNG scheduler) throws Exception {
+        waitUntilCondition(
+                () ->
+                        scheduler
+                                        .requestCheckpointStats()
+                                        .getCounts()
+                                        .getNumberOfCompletedCheckpoints()
+                                > 0,
+                RETRY_INTERVAL_MILLIS,
+                RETRY_ATTEMPTS);
+    }
+
+    /**
+     * Waits until all task executions in the given ExecutionGraph reach RUNNING state.
+     *
+     * @param executionGraph the ExecutionGraph to check
+     * @throws Exception if the condition is not met within the timeout period
+     */
+    public static void waitForAllTasksRunning(final ExecutionGraph executionGraph)
+            throws Exception {
+        waitUntilCondition(
+                () -> {
+                    for (ExecutionVertex vertex : executionGraph.getAllExecutionVertices()) {
+                        if (vertex.getCurrentExecutionAttempt().getState()
+                                != ExecutionState.RUNNING) {
+                            return false;
+                        }
+                    }
+                    return true;
+                },
+                RETRY_INTERVAL_MILLIS,
+                RETRY_ATTEMPTS);
     }
 
     private static ExecutionJobVertex getJobVertex(
@@ -332,7 +390,7 @@ public class SchedulerTestingUtils {
 
     public static SlotSharingExecutionSlotAllocatorFactory
             newSlotSharingExecutionSlotAllocatorFactory(
-                    PhysicalSlotProvider physicalSlotProvider, Time allocationTimeout) {
+                    PhysicalSlotProvider physicalSlotProvider, Duration allocationTimeout) {
         return new SlotSharingExecutionSlotAllocatorFactory(
                 physicalSlotProvider,
                 true,
@@ -357,8 +415,13 @@ public class SchedulerTestingUtils {
         final List<JobVertex> vertices = new ArrayList<>(Collections.singletonList(producer));
         IntermediateDataSetID dataSetId = new IntermediateDataSetID();
         for (JobVertex consumer : consumers) {
-            consumer.connectNewDataSetAsInput(
-                    producer, distributionPattern, ResultPartitionType.BLOCKING, dataSetId, false);
+            connectNewDataSetAsInput(
+                    consumer,
+                    producer,
+                    distributionPattern,
+                    ResultPartitionType.BLOCKING,
+                    dataSetId,
+                    false);
             vertices.add(consumer);
         }
 
@@ -376,40 +439,47 @@ public class SchedulerTestingUtils {
         final ExecutionGraph executionGraph = scheduler.getExecutionGraph();
         final TestingLogicalSlotBuilder slotBuilder = new TestingLogicalSlotBuilder();
 
-        CompletableFuture.runAsync(
-                        () -> {
-                            try {
-                                if (isAdaptive) {
-                                    initializeExecutionJobVertex(producer.getID(), executionGraph);
-                                }
-                                // Deploy upstream source vertices
-                                deployTasks(executionGraph, producer.getID(), slotBuilder);
-                                // Transition upstream vertices into FINISHED
-                                finishJobVertex(executionGraph, producer.getID());
-                                // Deploy downstream sink vertices
-                                for (JobVertex consumer : consumers) {
-                                    if (isAdaptive) {
-                                        initializeExecutionJobVertex(
-                                                consumer.getID(), executionGraph);
-                                    }
-                                    deployTasks(executionGraph, consumer.getID(), slotBuilder);
-                                }
-                            } catch (Exception e) {
-                                throw new RuntimeException("Exceptions shouldn't happen here.", e);
-                            }
-                        },
-                        mainThreadExecutor)
-                .join();
+        runUnsafe(
+                () -> {
+                    initializeExecutionJobVertex(producer.getID(), executionGraph, isAdaptive);
+                    deployTasks(executionGraph, producer.getID(), slotBuilder);
+                },
+                mainThreadExecutor);
+
+        waitForTaskDeploymentDescriptorsCreation(
+                Objects.requireNonNull(executionGraph.getJobVertex(producer.getID()))
+                        .getTaskVertices());
+
+        // Transition upstream vertices into FINISHED
+        runUnsafe(() -> finishJobVertex(executionGraph, producer.getID()), mainThreadExecutor);
+
+        // Deploy downstream sink vertices
+        for (JobVertex consumer : consumers) {
+            runUnsafe(
+                    () -> {
+                        initializeExecutionJobVertex(consumer.getID(), executionGraph, isAdaptive);
+                        deployTasks(executionGraph, consumer.getID(), slotBuilder);
+                    },
+                    mainThreadExecutor);
+            waitForTaskDeploymentDescriptorsCreation(
+                    Objects.requireNonNull(executionGraph.getJobVertex(consumer.getID()))
+                            .getTaskVertices());
+        }
+
         return scheduler;
     }
 
     private static void initializeExecutionJobVertex(
-            JobVertexID jobVertex, ExecutionGraph executionGraph) {
+            JobVertexID jobVertex,
+            ExecutionGraph executionGraph,
+            final boolean adaptiveSchedulerEnabled) {
+        if (!adaptiveSchedulerEnabled) {
+            // This method call only needed for adaptive scheduler, no-op otherwise.
+            return;
+        }
         try {
             executionGraph.initializeJobVertex(
-                    executionGraph.getJobVertex(jobVertex),
-                    System.currentTimeMillis(),
-                    UnregisteredMetricGroups.createUnregisteredJobManagerJobMetricGroup());
+                    executionGraph.getJobVertex(jobVertex), System.currentTimeMillis());
             executionGraph.notifyNewlyInitializedJobVertices(
                     Collections.singletonList(executionGraph.getJobVertex(jobVertex)));
         } catch (JobException exception) {
@@ -492,5 +562,24 @@ public class SchedulerTestingUtils {
     public static TaskExecutionState createCanceledTaskExecutionState(
             ExecutionAttemptID attemptId) {
         return new TaskExecutionState(attemptId, ExecutionState.CANCELED);
+    }
+
+    private static void runUnsafe(
+            final RunnableWithException callback, final ComponentMainThreadExecutor executor) {
+        try {
+            CompletableFuture.runAsync(
+                            () -> {
+                                try {
+                                    callback.run();
+                                } catch (Throwable e) {
+                                    throw new RuntimeException(
+                                            "Exception shouldn't happen here.", e);
+                                }
+                            },
+                            executor)
+                    .join();
+        } catch (Exception e) {
+            throw new RuntimeException("Exception shouldn't happen here.", e);
+        }
     }
 }

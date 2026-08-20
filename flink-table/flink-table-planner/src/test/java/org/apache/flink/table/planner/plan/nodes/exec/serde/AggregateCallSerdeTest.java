@@ -34,7 +34,7 @@ import org.apache.flink.table.types.logical.DoubleType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.utils.TypeConversions;
 
-import org.apache.flink.shaded.guava31.com.google.common.collect.ImmutableList;
+import org.apache.flink.shaded.guava33.com.google.common.collect.ImmutableList;
 
 import org.apache.calcite.rel.RelCollations;
 import org.apache.calcite.rel.core.AggregateCall;
@@ -88,6 +88,7 @@ public class AggregateCallSerdeTest {
                                 false,
                                 false,
                                 ImmutableList.of(),
+                                ImmutableList.of(),
                                 -1,
                                 null,
                                 RelCollations.EMPTY,
@@ -99,6 +100,7 @@ public class AggregateCallSerdeTest {
                                 false,
                                 false,
                                 false,
+                                ImmutableList.of(),
                                 ImmutableList.of(3),
                                 -1,
                                 null,
@@ -111,6 +113,7 @@ public class AggregateCallSerdeTest {
                                 false,
                                 false,
                                 false,
+                                ImmutableList.of(),
                                 ImmutableList.of(),
                                 -1,
                                 null,
@@ -145,6 +148,7 @@ public class AggregateCallSerdeTest {
                 false,
                 false,
                 false,
+                ImmutableList.of(),
                 ImmutableList.of(3),
                 -1,
                 null,

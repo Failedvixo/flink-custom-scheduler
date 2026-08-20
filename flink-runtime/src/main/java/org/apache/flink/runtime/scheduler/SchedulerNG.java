@@ -21,6 +21,7 @@ package org.apache.flink.runtime.scheduler;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobStatus;
+import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.core.execution.CheckpointType;
 import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.queryablestate.KvStateID;
@@ -28,6 +29,7 @@ import org.apache.flink.runtime.accumulators.AccumulatorSnapshot;
 import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
 import org.apache.flink.runtime.checkpoint.CheckpointStatsSnapshot;
 import org.apache.flink.runtime.checkpoint.CompletedCheckpoint;
+import org.apache.flink.runtime.checkpoint.SubTaskInitializationMetrics;
 import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutor;
 import org.apache.flink.runtime.execution.ExecutionState;
@@ -43,7 +45,6 @@ import org.apache.flink.runtime.jobmanager.PartitionProducerDisposedException;
 import org.apache.flink.runtime.jobmaster.SerializedInputSplit;
 import org.apache.flink.runtime.messages.FlinkJobNotFoundException;
 import org.apache.flink.runtime.messages.checkpoint.DeclineCheckpoint;
-import org.apache.flink.runtime.messages.webmonitor.JobDetails;
 import org.apache.flink.runtime.operators.coordination.CoordinationRequest;
 import org.apache.flink.runtime.operators.coordination.CoordinationResponse;
 import org.apache.flink.runtime.operators.coordination.OperatorCoordinator;
@@ -72,6 +73,12 @@ import java.util.concurrent.CompletableFuture;
  * invocations will originate from a thread in the {@link ComponentMainThreadExecutor}.
  */
 public interface SchedulerNG extends GlobalFailureHandler, AutoCloseableAsync {
+
+    /**
+     * Get the {@link org.apache.flink.configuration.JobManagerOptions.SchedulerType} of the current
+     * job.
+     */
+    JobManagerOptions.SchedulerType getSchedulerType();
 
     void startScheduling();
 
@@ -104,8 +111,6 @@ public interface SchedulerNG extends GlobalFailureHandler, AutoCloseableAsync {
     CheckpointStatsSnapshot requestCheckpointStats();
 
     JobStatus requestJobStatus();
-
-    JobDetails requestJobDetails();
 
     // ------------------------------------------------------------------------------------
     // Methods below do not belong to Scheduler but are included due to historical reasons
@@ -155,6 +160,11 @@ public interface SchedulerNG extends GlobalFailureHandler, AutoCloseableAsync {
             CheckpointMetrics checkpointMetrics);
 
     void declineCheckpoint(DeclineCheckpoint decline);
+
+    void reportInitializationMetrics(
+            JobID jobId,
+            ExecutionAttemptID executionAttemptId,
+            SubTaskInitializationMetrics initializationMetrics);
 
     CompletableFuture<String> stopWithSavepoint(
             String targetDirectory, boolean terminate, SavepointFormatType formatType);

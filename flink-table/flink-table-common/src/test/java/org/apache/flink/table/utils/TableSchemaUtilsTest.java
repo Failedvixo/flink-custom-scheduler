@@ -19,13 +19,15 @@
 package org.apache.flink.table.utils;
 
 import org.apache.flink.table.api.DataTypes;
-import org.apache.flink.table.api.TableSchema;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.Column;
+import org.apache.flink.table.catalog.DefaultIndex;
+import org.apache.flink.table.catalog.ImmutableColumnsConstraint;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.UniqueConstraint;
 import org.apache.flink.table.catalog.WatermarkSpec;
 import org.apache.flink.table.expressions.utils.ResolvedExpressionMock;
+import org.apache.flink.table.legacy.api.TableSchema;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.TimestampKind;
 import org.apache.flink.table.types.logical.TimestampType;
@@ -101,7 +103,11 @@ class TableSchemaUtilsTest {
                                 Column.metadata("metadata-1", DataTypes.INT(), "metadata", false)),
                         Collections.singletonList(
                                 WatermarkSpec.of("t", ResolvedExpressionMock.of(rowTimeType, "t"))),
-                        UniqueConstraint.primaryKey("test-pk", Collections.singletonList("id")));
+                        UniqueConstraint.primaryKey("test-pk", Collections.singletonList("id")),
+                        Collections.singletonList(
+                                DefaultIndex.newIndex("idx", Collections.singletonList("id"))),
+                        ImmutableColumnsConstraint.immutableColumns(
+                                "test-imt", Collections.singletonList("t")));
         assertThat(TableSchemaUtils.removeTimeAttributeFromResolvedSchema(schema))
                 .isEqualTo(
                         new ResolvedSchema(
@@ -118,6 +124,11 @@ class TableSchemaUtilsTest {
                                         WatermarkSpec.of(
                                                 "t", ResolvedExpressionMock.of(rowTimeType, "t"))),
                                 UniqueConstraint.primaryKey(
-                                        "test-pk", Collections.singletonList("id"))));
+                                        "test-pk", Collections.singletonList("id")),
+                                Collections.singletonList(
+                                        DefaultIndex.newIndex(
+                                                "idx", Collections.singletonList("id"))),
+                                ImmutableColumnsConstraint.immutableColumns(
+                                        "test-imt", Collections.singletonList("t"))));
     }
 }

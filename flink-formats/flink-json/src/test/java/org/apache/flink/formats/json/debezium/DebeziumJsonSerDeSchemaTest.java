@@ -27,9 +27,11 @@ import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.utils.DataTypeUtils;
+import org.apache.flink.testutils.logging.LoggerAuditingExtension;
 import org.apache.flink.util.Collector;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.io.File;
 import java.io.IOException;
@@ -45,6 +47,7 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.connector.testutils.formats.SchemaTestUtils.open;
+import static org.apache.flink.core.testutils.FlinkAssertions.anyCauseMatches;
 import static org.apache.flink.table.api.DataTypes.FIELD;
 import static org.apache.flink.table.api.DataTypes.FLOAT;
 import static org.apache.flink.table.api.DataTypes.INT;
@@ -52,11 +55,16 @@ import static org.apache.flink.table.api.DataTypes.ROW;
 import static org.apache.flink.table.api.DataTypes.STRING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.slf4j.event.Level.DEBUG;
 
 /**
  * Tests for {@link DebeziumJsonSerializationSchema} and {@link DebeziumJsonDeserializationSchema}.
  */
 class DebeziumJsonSerDeSchemaTest {
+
+    @RegisterExtension
+    public final LoggerAuditingExtension loggerExtension =
+            new LoggerAuditingExtension(DebeziumJsonDeserializationSchema.class, DEBUG);
 
     private static final DataType PHYSICAL_DATA_TYPE =
             ROW(
@@ -111,6 +119,62 @@ class DebeziumJsonSerDeSchemaTest {
         deserializationSchema.deserialize(null, collector);
         deserializationSchema.deserialize(new byte[] {}, collector);
         assertThat(collector.list).isEmpty();
+    }
+
+    @Test
+    void testIgnoreParseErrors() throws Exception {
+        List<String> lines = readLines("debezium-data-schema-exclude.txt");
+        DebeziumJsonDeserializationSchema deserializationSchema =
+                new DebeziumJsonDeserializationSchema(
+                        PHYSICAL_DATA_TYPE,
+                        Collections.emptyList(),
+                        InternalTypeInfo.of(PHYSICAL_DATA_TYPE.getLogicalType()),
+                        false,
+                        true,
+                        TimestampFormat.ISO_8601);
+        open(deserializationSchema);
+
+        ThrowingExceptionCollector collector = new ThrowingExceptionCollector();
+        assertThatThrownBy(
+                        () -> {
+                            for (String line : lines) {
+                                deserializationSchema.deserialize(
+                                        line.getBytes(StandardCharsets.UTF_8), collector);
+                            }
+                        })
+                .isInstanceOf(RuntimeException.class)
+                .satisfies(
+                        anyCauseMatches(
+                                RuntimeException.class,
+                                "An error occurred while collecting data."));
+    }
+
+    @Test
+    void testIgnoreParseErrorsLogsDebugMessage() throws Exception {
+        String corruptMessage = "{\"before\":null,\"after\":null,\"op\":\"UNKNOWN_OP\"}";
+        DebeziumJsonDeserializationSchema deserializationSchema =
+                new DebeziumJsonDeserializationSchema(
+                        PHYSICAL_DATA_TYPE,
+                        Collections.emptyList(),
+                        InternalTypeInfo.of(PHYSICAL_DATA_TYPE.getLogicalType()),
+                        false,
+                        true, // ignoreParseErrors
+                        TimestampFormat.ISO_8601);
+        open(deserializationSchema);
+
+        SimpleCollector collector = new SimpleCollector();
+        deserializationSchema.deserialize(
+                corruptMessage.getBytes(StandardCharsets.UTF_8), collector);
+
+        // Verify no records were collected
+        assertThat(collector.list).isEmpty();
+
+        // Verify the error was logged at DEBUG level
+        assertThat(loggerExtension.getMessages())
+                .anyMatch(
+                        msg ->
+                                msg.contains("Unknown \"op\" value")
+                                        || msg.contains("Corrupt Debezium JSON"));
     }
 
     @Test
@@ -249,7 +313,8 @@ class DebeziumJsonSerDeSchemaTest {
                         TimestampFormat.SQL,
                         JsonFormatOptions.MapNullKeyMode.LITERAL,
                         "null",
-                        true);
+                        true,
+                        false);
 
         open(serializationSchema);
         actual = new ArrayList<>();
@@ -332,6 +397,19 @@ class DebeziumJsonSerDeSchemaTest {
         @Override
         public void collect(RowData record) {
             list.add(record);
+        }
+
+        @Override
+        public void close() {
+            // do nothing
+        }
+    }
+
+    private static class ThrowingExceptionCollector implements Collector<RowData> {
+
+        @Override
+        public void collect(RowData record) {
+            throw new RuntimeException("An error occurred while collecting data.");
         }
 
         @Override

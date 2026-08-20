@@ -73,7 +73,7 @@ The *cluster-id ZooKeeper node*, under which all required coordination data for 
 
 ### Example configuration
 
-Configure high availability mode and ZooKeeper quorum in `conf/flink-conf.yaml`:
+Configure high availability mode and ZooKeeper quorum in [Flink configuration file]({{< ref "docs/deployment/config#flink-configuration-file" >}}):
 
 ```bash
 high-availability.type: zookeeper
@@ -87,7 +87,7 @@ high-availability.storageDir: hdfs:///flink/recovery
 
 ## Configuring for ZooKeeper Security
 
-If ZooKeeper is running in secure mode with Kerberos, you can override the following configurations in `flink-conf.yaml` as necessary:
+If ZooKeeper is running in secure mode with Kerberos, you can override the following configurations in [Flink configuration file]({{< ref "docs/deployment/config#flink-configuration-file" >}}) as necessary:
 
 ```bash
 # default is "zookeeper". If the ZooKeeper quorum is configured
@@ -106,6 +106,19 @@ You can also find further details on [how Flink sets up Kerberos-based security 
 {{< top >}}
 
 ## Advanced Configuration
+
+### ZooKeeper Client Retry Configuration
+
+When ZooKeeper connections fail or are interrupted, Flink automatically retries the connection using a bounded exponential backoff strategy. This strategy progressively increases the wait time between retries (doubling each time) to avoid overwhelming the ZooKeeper cluster, while capping the maximum wait time to ensure reasonably fast recovery.
+
+- **[high-availability.zookeeper.client.retry-wait]({{< ref "docs/deployment/config" >}}#high-availability-zookeeper-client-retry-wait)** (default: `5s`):
+  Initial wait time between consecutive retries. This value doubles with each retry (exponential backoff).
+
+- **[high-availability.zookeeper.client.max-retry-wait]({{< ref "docs/deployment/config" >}}#high-availability-zookeeper-client-max-retry-wait)** (default: `60s`):
+  Maximum wait time between retries. This caps the exponential backoff to ensure recovery doesn't become unreasonably slow during extended ZooKeeper outages.
+
+- **[high-availability.zookeeper.client.max-retry-attempts]({{< ref "docs/deployment/config" >}}#high-availability-zookeeper-client-max-retry-attempts)** (default: `3`):
+  Maximum number of connection retry attempts before giving up. After this many failed attempts, the operation will fail.
 
 ### Tolerating Suspended ZooKeeper Connections
 

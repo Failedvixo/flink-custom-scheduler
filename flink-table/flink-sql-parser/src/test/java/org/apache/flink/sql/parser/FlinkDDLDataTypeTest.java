@@ -18,8 +18,8 @@
 
 package org.apache.flink.sql.parser;
 
-import org.apache.flink.sql.parser.ddl.SqlCreateTable;
 import org.apache.flink.sql.parser.ddl.SqlTableColumn.SqlRegularColumn;
+import org.apache.flink.sql.parser.ddl.table.SqlCreateTable;
 import org.apache.flink.sql.parser.impl.FlinkSqlParserImpl;
 
 import org.apache.calcite.avatica.util.Casing;
@@ -27,6 +27,7 @@ import org.apache.calcite.avatica.util.Quoting;
 import org.apache.calcite.rel.type.DelegatingTypeSystem;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeSystem;
+import org.apache.calcite.rel.type.StructKind;
 import org.apache.calcite.sql.SqlDataTypeSpec;
 import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql.SqlNode;
@@ -47,7 +48,6 @@ import org.apache.calcite.sql.validate.SqlConformance;
 import org.apache.calcite.sql.validate.SqlConformanceEnum;
 import org.apache.calcite.sql.validate.SqlValidator;
 import org.apache.calcite.sql.validate.SqlValidatorCatalogReader;
-import org.apache.calcite.sql.validate.SqlValidatorUtil;
 import org.apache.calcite.test.MockSqlOperatorTable;
 import org.apache.calcite.test.catalog.MockCatalogReaderSimple;
 import org.apache.calcite.util.SourceStringReader;
@@ -59,8 +59,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import javax.annotation.Nullable;
 
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
@@ -210,6 +209,7 @@ class FlinkDDLDataTypeTest {
                         "ROW<f0 INT NOT NULL, f1 BOOLEAN>",
                         nullable(
                                 FIXTURE.createStructType(
+                                        StructKind.PEEK_FIELDS_NO_EXPAND,
                                         Arrays.asList(
                                                 FIXTURE.intType, nullable(FIXTURE.booleanType)),
                                         Arrays.asList("f0", "f1"))),
@@ -218,6 +218,7 @@ class FlinkDDLDataTypeTest {
                         "ROW(f0 INT NOT NULL, f1 BOOLEAN)",
                         nullable(
                                 FIXTURE.createStructType(
+                                        StructKind.PEEK_FIELDS_NO_EXPAND,
                                         Arrays.asList(
                                                 FIXTURE.intType, nullable(FIXTURE.booleanType)),
                                         Arrays.asList("f0", "f1"))),
@@ -226,33 +227,36 @@ class FlinkDDLDataTypeTest {
                         "ROW<`f0` INT>",
                         nullable(
                                 FIXTURE.createStructType(
-                                        Collections.singletonList(nullable(FIXTURE.intType)),
-                                        Collections.singletonList("f0"))),
+                                        StructKind.PEEK_FIELDS_NO_EXPAND,
+                                        List.of(nullable(FIXTURE.intType)),
+                                        List.of("f0"))),
                         "ROW< `f0` INTEGER >"),
                 createArgumentsTestItem(
                         "ROW(`f0` INT)",
                         nullable(
                                 FIXTURE.createStructType(
-                                        Collections.singletonList(nullable(FIXTURE.intType)),
-                                        Collections.singletonList("f0"))),
+                                        StructKind.PEEK_FIELDS_NO_EXPAND,
+                                        List.of(nullable(FIXTURE.intType)),
+                                        List.of("f0"))),
                         "ROW(`f0` INTEGER)"),
                 createArgumentsTestItem(
                         "ROW<>",
                         nullable(
                                 FIXTURE.createStructType(
-                                        Collections.emptyList(), Collections.emptyList())),
+                                        StructKind.PEEK_FIELDS_NO_EXPAND, List.of(), List.of())),
                         "ROW<>"),
                 createArgumentsTestItem(
                         "ROW()",
                         nullable(
                                 FIXTURE.createStructType(
-                                        Collections.emptyList(), Collections.emptyList())),
+                                        StructKind.PEEK_FIELDS_NO_EXPAND, List.of(), List.of())),
                         "ROW()"),
                 createArgumentsTestItem(
                         "ROW<f0 INT NOT NULL 'This is a comment.', "
                                 + "f1 BOOLEAN 'This as well.'>",
                         nullable(
                                 FIXTURE.createStructType(
+                                        StructKind.PEEK_FIELDS_NO_EXPAND,
                                         Arrays.asList(
                                                 FIXTURE.intType, nullable(FIXTURE.booleanType)),
                                         Arrays.asList("f0", "f1"))),
@@ -292,6 +296,36 @@ class FlinkDDLDataTypeTest {
                                 Fixture.RAW_TYPE_INT_SERIALIZER_STRING.substring(1)
                                 + "') NOT NULL",
                         FIXTURE.rawTypeOfInteger),
+                createArgumentsTestItem(
+                        "STRUCTURED<'"
+                                + Fixture.STRUCTURED_TYPE_NAME
+                                + "', age INT, `updated` BOOLEAN NOT NULL>",
+                        nullable(
+                                FIXTURE.createStructuredType(
+                                        Fixture.STRUCTURED_TYPE_NAME,
+                                        List.of(nullable(FIXTURE.intType), FIXTURE.booleanType),
+                                        List.of("age", "updated"))),
+                        "STRUCTURED< '"
+                                + Fixture.STRUCTURED_TYPE_NAME
+                                + "', `age` INTEGER, `updated` BOOLEAN NOT NULL >"),
+                createArgumentsTestItem(
+                        "STRUCTURED<'" + Fixture.STRUCTURED_TYPE_NAME + "'>",
+                        nullable(
+                                FIXTURE.createStructuredType(
+                                        Fixture.STRUCTURED_TYPE_NAME, List.of(), List.of())),
+                        "STRUCTURED< '" + Fixture.STRUCTURED_TYPE_NAME + "' >"),
+                createArgumentsTestItem(
+                        "STRUCTURED<'"
+                                + Fixture.STRUCTURED_TYPE_NAME
+                                + "', age INT 'This is comment', `updated` BOOLEAN NOT NULL 'This as well'>",
+                        nullable(
+                                FIXTURE.createStructuredType(
+                                        Fixture.STRUCTURED_TYPE_NAME,
+                                        List.of(nullable(FIXTURE.intType), FIXTURE.booleanType),
+                                        List.of("age", "updated"))),
+                        "STRUCTURED< '"
+                                + Fixture.STRUCTURED_TYPE_NAME
+                                + "', `age` INTEGER 'This is comment', `updated` BOOLEAN NOT NULL 'This as well' >"),
 
                 // Test parse throws error.
                 createArgumentsTestItem(
@@ -547,7 +581,16 @@ class FlinkDDLDataTypeTest {
         private final SqlParser.Config parserConfig;
 
         TestFactory() {
-            this(DEFAULT_OPTIONS, MockCatalogReaderSimple::create, SqlValidatorUtil::newValidator);
+            this(
+                    DEFAULT_OPTIONS,
+                    MockCatalogReaderSimple::create,
+                    (sqlOperatorTable, sqlValidatorCatalogReader, relDataTypeFactory, config) ->
+                            new FlinkSqlParsingValidator(
+                                    sqlOperatorTable,
+                                    sqlValidatorCatalogReader,
+                                    relDataTypeFactory,
+                                    config,
+                                    false));
         }
 
         TestFactory(
@@ -631,16 +674,15 @@ class FlinkDDLDataTypeTest {
         }
 
         private static Map<String, Object> buildDefaultOptions() {
-            final Map<String, Object> m = new HashMap<>();
-            m.put("quoting", Quoting.BACK_TICK);
-            m.put("quotedCasing", Casing.UNCHANGED);
-            m.put("unquotedCasing", Casing.UNCHANGED);
-            m.put("caseSensitive", true);
-            m.put("enableTypeCoercion", false);
-            m.put("conformance", SqlConformanceEnum.DEFAULT);
-            m.put("operatorTable", SqlStdOperatorTable.instance());
-            m.put("parserFactory", FlinkSqlParserImpl.FACTORY);
-            return Collections.unmodifiableMap(m);
+            return Map.ofEntries(
+                    Map.entry("quoting", Quoting.BACK_TICK),
+                    Map.entry("quotedCasing", Casing.UNCHANGED),
+                    Map.entry("unquotedCasing", Casing.UNCHANGED),
+                    Map.entry("caseSensitive", true),
+                    Map.entry("enableTypeCoercion", false),
+                    Map.entry("conformance", SqlConformanceEnum.DEFAULT),
+                    Map.entry("operatorTable", SqlStdOperatorTable.instance()),
+                    Map.entry("parserFactory", FlinkSqlParserImpl.FACTORY));
         }
     }
 }

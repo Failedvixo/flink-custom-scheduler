@@ -57,40 +57,37 @@ public class CliFrontendTestUtils {
     }
 
     public static String getNonJarFilePath() {
-        return CliFrontendRunTest.class.getResource("/testconfig/flink-conf.yaml").getFile();
+        return CliFrontendRunTest.class.getResource("/testconfig/config.yaml").getFile();
     }
 
     public static String getConfigDir() {
-        String confFile =
-                CliFrontendRunTest.class.getResource("/testconfig/flink-conf.yaml").getFile();
+        String confFile = CliFrontendRunTest.class.getResource("/testconfig/config.yaml").getFile();
         return new File(confFile).getAbsoluteFile().getParent();
     }
 
     public static String getInvalidConfigDir() {
         String confFile =
-                CliFrontendRunTest.class
-                        .getResource("/invalidtestconfig/flink-conf.yaml")
-                        .getFile();
+                CliFrontendRunTest.class.getResource("/invalidtestconfig/config.yaml").getFile();
         return new File(confFile).getAbsoluteFile().getParent();
     }
 
     public static void pipeSystemOutToNull() {
-        System.setOut(new PrintStream(new BlackholeOutputSteam()));
+        System.setOut(new PrintStream(new BlackholeOutputStream()));
     }
 
     public static void restoreSystemOut() {
         System.setOut(previousSysout);
     }
 
-    private static final class BlackholeOutputSteam extends java.io.OutputStream {
+    private static final class BlackholeOutputStream extends java.io.OutputStream {
         @Override
         public void write(int b) {}
     }
 
     public static void checkJobManagerAddress(
             Configuration config, String expectedAddress, int expectedPort) {
-        String jobManagerAddress = config.getString(JobManagerOptions.ADDRESS);
-        int jobManagerPort = config.getInteger(JobManagerOptions.PORT, -1);
+        String jobManagerAddress = config.get(JobManagerOptions.ADDRESS);
+        int jobManagerPort = config.get(JobManagerOptions.PORT, -1);
 
         assertThat(jobManagerAddress).isEqualTo(expectedAddress);
         assertThat(jobManagerPort).isEqualTo(expectedPort);

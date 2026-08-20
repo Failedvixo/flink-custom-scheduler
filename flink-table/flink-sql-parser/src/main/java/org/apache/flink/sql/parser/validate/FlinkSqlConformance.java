@@ -98,6 +98,11 @@ public enum FlinkSqlConformance implements SqlConformance {
     }
 
     @Override
+    public boolean isRegexReplaceCaptureGroupDollarIndexed() {
+        return true;
+    }
+
+    @Override
     public boolean isApplyAllowed() {
         return false;
     }
@@ -114,7 +119,7 @@ public enum FlinkSqlConformance implements SqlConformance {
 
     @Override
     public boolean allowNiladicParentheses() {
-        return false;
+        return true;
     }
 
     @Override
@@ -165,5 +170,15 @@ public enum FlinkSqlConformance implements SqlConformance {
     @Override
     public SqlLibrary semantics() {
         return SqlConformanceEnum.DEFAULT.semantics();
+    }
+
+    @Override
+    public boolean allowLenientCoercion() {
+        return SqlConformanceEnum.DEFAULT.allowLenientCoercion();
+    }
+
+    @Override
+    public boolean isValueAllowed() {
+        return true;
     }
 }

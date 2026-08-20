@@ -27,6 +27,7 @@ export interface TaskManagerDetail {
   timeSinceLastHeartbeat: number;
   slotsNumber: number;
   freeSlots: number;
+  assignedTasks: number;
   hardware: Hardware;
   metrics: Metrics;
   memoryConfiguration: MemoryConfiguration;
@@ -38,6 +39,7 @@ export interface TaskManagerDetail {
 
 export interface AllocatedSlot {
   jobId: string;
+  assignedTasks: number;
   resource: Resources;
 }
 
@@ -67,6 +69,7 @@ export interface TaskManagersItem {
   timeSinceLastHeartbeat: number;
   slotsNumber: number;
   freeSlots: number;
+  assignedTasks: number;
   hardware: Hardware;
   blocked?: boolean;
 }
@@ -91,8 +94,6 @@ interface Metrics {
   mappedCount: number;
   mappedUsed: number;
   mappedMax: number;
-  memorySegmentsAvailable: number;
-  memorySegmentsTotal: number;
   garbageCollectors: GarbageCollectorsItem[];
 }
 

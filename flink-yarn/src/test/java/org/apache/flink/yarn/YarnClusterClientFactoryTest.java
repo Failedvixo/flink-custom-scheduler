@@ -23,7 +23,6 @@ import org.apache.flink.client.deployment.ClusterClientServiceLoader;
 import org.apache.flink.client.deployment.DefaultClusterClientServiceLoader;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.DeploymentOptions;
-import org.apache.flink.yarn.executors.YarnJobClusterExecutor;
 import org.apache.flink.yarn.executors.YarnSessionClusterExecutor;
 
 import org.apache.hadoop.yarn.api.records.ApplicationId;
@@ -35,18 +34,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class YarnClusterClientFactoryTest {
 
     @Test
-    void testYarnClusterClientFactoryDiscoveryWithPerJobExecutor() {
-        testYarnClusterClientFactoryDiscoveryHelper(YarnJobClusterExecutor.NAME);
-    }
-
-    @Test
     void testYarnClusterClientFactoryDiscoveryWithSessionExecutor() {
         testYarnClusterClientFactoryDiscoveryHelper(YarnSessionClusterExecutor.NAME);
     }
 
     private void testYarnClusterClientFactoryDiscoveryHelper(final String targetName) {
         final Configuration configuration = new Configuration();
-        configuration.setString(DeploymentOptions.TARGET, targetName);
+        configuration.set(DeploymentOptions.TARGET, targetName);
 
         final ClusterClientServiceLoader serviceLoader = new DefaultClusterClientServiceLoader();
         final ClusterClientFactory<ApplicationId> factory =

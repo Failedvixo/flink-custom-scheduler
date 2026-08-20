@@ -37,12 +37,12 @@ under the License.
 
 ### Try Flink
 
-If you’re interested in playing around with Flink, try one of our tutorials:
+If you're interested in playing around with Flink, try one of our tutorials:
 
-* [Fraud Detection with the DataStream API]({{< ref "docs/try-flink/datastream" >}})
-* [Real Time Reporting with the Table API]({{< ref "docs/try-flink/table_api" >}})
-* [Intro to PyFlink]({{< ref "docs/dev/python/overview" >}})
-* [Flink Operations Playground]({{< ref "docs/try-flink/flink-operations-playground" >}})
+* [Flink SQL Tutorial]({{< ref "docs/getting-started/quickstart-sql" >}}) - Interactive queries with the SQL Client
+* [Table API Tutorial]({{< ref "docs/getting-started/table_api" >}}) - Declarative streaming with a relational API
+* [DataStream API Tutorial]({{< ref "docs/getting-started/datastream" >}}) - Imperative, event-driven stream processing
+* [Operations Playground]({{< ref "docs/getting-started/flink-operations-playground" >}}) - Explore Flink in Docker
 
 ### Learn Flink
 
@@ -61,14 +61,15 @@ If you get stuck, check out our [community support resources](https://flink.apac
 The reference documentation covers all the details. Some starting points:
 
 {{< columns >}}
+* [Flink SQL]({{< ref "docs/sql/overview" >}})
+* [Table API]({{< ref "docs/dev/table/overview" >}})
 * [DataStream API]({{< ref "docs/dev/datastream/overview" >}})
-* [Table API & SQL]({{< ref "docs/dev/table/overview" >}})
-* [Stateful Functions](https://nightlies.apache.org/flink/flink-statefun-docs-stable/)
+* [DataStream API (V2)]({{< ref "docs/dev/datastream-v2/overview" >}})
 
 <--->
 
 * [Configuration]({{< ref "docs/deployment/config" >}})
-* [Rest API]({{< ref "docs/ops/rest_api" >}})
+* [REST API]({{< ref "docs/ops/rest_api" >}})
 * [CLI]({{< ref "docs/deployment/cli" >}})
 {{< /columns >}}
 
@@ -86,6 +87,12 @@ For some reason Hugo will only allow linking to the
 release notes if there is a leading '/' and file extension.
 -->
 See the release notes for
+[Flink 2.2]({{< ref "/release-notes/flink-2.2.md" >}}),
+[Flink 2.1]({{< ref "/release-notes/flink-2.1.md" >}}),
+[Flink 2.0]({{< ref "/release-notes/flink-2.0.md" >}}),
+[Flink 1.20]({{< ref "/release-notes/flink-1.20.md" >}}),
+[Flink 1.19]({{< ref "/release-notes/flink-1.19.md" >}}),
+[Flink 1.18]({{< ref "/release-notes/flink-1.18.md" >}}),
 [Flink 1.17]({{< ref "/release-notes/flink-1.17.md" >}}),
 [Flink 1.16]({{< ref "/release-notes/flink-1.16.md" >}}), 
 [Flink 1.15]({{< ref "/release-notes/flink-1.15.md" >}}), 

@@ -23,10 +23,12 @@ import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.core.execution.CheckpointType;
 import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.queryablestate.KvStateID;
+import org.apache.flink.runtime.OperatorIDPair;
 import org.apache.flink.runtime.accumulators.AccumulatorSnapshot;
 import org.apache.flink.runtime.checkpoint.CheckpointCoordinator;
 import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
 import org.apache.flink.runtime.checkpoint.CompletedCheckpoint;
+import org.apache.flink.runtime.checkpoint.SubTaskInitializationMetrics;
 import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.executiongraph.AccessExecution;
@@ -53,6 +55,8 @@ import org.apache.flink.runtime.scheduler.ExecutionGraphHandler;
 import org.apache.flink.runtime.scheduler.KvStateHandler;
 import org.apache.flink.runtime.scheduler.OperatorCoordinatorHandler;
 import org.apache.flink.runtime.scheduler.VertexEndOfDataListener;
+import org.apache.flink.runtime.scheduler.adaptive.timeline.Durable;
+import org.apache.flink.runtime.scheduler.adaptive.timeline.RescaleContext;
 import org.apache.flink.runtime.scheduler.exceptionhistory.ExceptionHistoryEntry;
 import org.apache.flink.runtime.scheduler.exceptionhistory.RootExceptionHistoryEntry;
 import org.apache.flink.runtime.scheduler.stopwithsavepoint.StopWithSavepointTerminationManager;
@@ -63,8 +67,11 @@ import org.apache.flink.util.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -97,6 +104,8 @@ abstract class StateWithExecutionGraph implements State {
 
     private final VertexEndOfDataListener vertexEndOfDataListener;
 
+    private final Durable durable;
+
     StateWithExecutionGraph(
             Context context,
             ExecutionGraph executionGraph,
@@ -114,6 +123,7 @@ abstract class StateWithExecutionGraph implements State {
         this.userCodeClassLoader = userClassCodeLoader;
         this.failureCollection = new ArrayList<>(failureCollection);
         this.vertexEndOfDataListener = new VertexEndOfDataListener(executionGraph);
+        this.durable = new Durable();
 
         FutureUtils.assertNoException(
                 executionGraph
@@ -133,11 +143,17 @@ abstract class StateWithExecutionGraph implements State {
                                 context.getMainThreadExecutor()));
     }
 
+    @Override
+    public Durable getDurable() {
+        return durable;
+    }
+
     ExecutionGraph getExecutionGraph() {
         return executionGraph;
     }
 
-    JobID getJobId() {
+    @Override
+    public JobID getJobId() {
         return executionGraph.getJobID();
     }
 
@@ -151,6 +167,7 @@ abstract class StateWithExecutionGraph implements State {
 
     @Override
     public void onLeave(Class<? extends State> newState) {
+        getDurable().setLeaveTimestamp(Instant.now().toEpochMilli());
         if (!StateWithExecutionGraph.class.isAssignableFrom(newState)) {
             // we are leaving the StateWithExecutionGraph --> we need to dispose temporary services
             operatorCoordinatorHandler.disposeAllOperatorCoordinators();
@@ -164,9 +181,22 @@ abstract class StateWithExecutionGraph implements State {
 
     @Override
     public void suspend(Throwable cause) {
+        suspend(cause, null);
+    }
+
+    /**
+     * Suspends the underlying {@link ExecutionGraph} and transitions the context to {@link
+     * Finished} state.
+     *
+     * @param cause The reason the job is suspended.
+     * @param statusOverride The state of the resulting {@link ArchivedExecutionGraph}. The
+     *     underlying {@code ExecutionGraph}'s state is not going to be overridden if {@code null}
+     *     is passed.
+     */
+    protected void suspend(Throwable cause, @Nullable JobStatus statusOverride) {
         executionGraph.suspend(cause);
         Preconditions.checkState(executionGraph.getState().isTerminalState());
-        context.goToFinished(ArchivedExecutionGraph.createFrom(executionGraph));
+        context.goToFinished(ArchivedExecutionGraph.createFrom(executionGraph, statusOverride));
     }
 
     @Override
@@ -207,6 +237,21 @@ abstract class StateWithExecutionGraph implements State {
                 && checkpointCoordinatorConfiguration.isCheckpointingEnabled()
                 && checkpointCoordinatorConfiguration.isEnableCheckpointsAfterTasksFinish()) {
             vertexEndOfDataListener.recordTaskEndOfData(executionAttemptID);
+            if (vertexEndOfDataListener.areAllTasksOfJobVertexEndOfData(
+                    executionAttemptID.getJobVertexId())) {
+                List<OperatorIDPair> operatorIDPairs =
+                        executionGraph
+                                .getJobVertex(executionAttemptID.getJobVertexId())
+                                .getOperatorIDs();
+                CheckpointCoordinator checkpointCoordinator =
+                        executionGraph.getCheckpointCoordinator();
+                if (checkpointCoordinator != null) {
+                    for (OperatorIDPair operatorIDPair : operatorIDPairs) {
+                        checkpointCoordinator.setIsProcessingBacklog(
+                                operatorIDPair.getGeneratedOperatorID(), false);
+                    }
+                }
+            }
             if (vertexEndOfDataListener.areAllTasksEndOfData()) {
                 triggerCheckpoint(CheckpointType.CONFIGURED);
             }
@@ -219,6 +264,13 @@ abstract class StateWithExecutionGraph implements State {
             CheckpointMetrics checkpointMetrics) {
         executionGraphHandler.reportCheckpointMetrics(
                 executionAttemptID, checkpointId, checkpointMetrics);
+    }
+
+    void reportInitializationMetrics(
+            ExecutionAttemptID executionAttemptId,
+            SubTaskInitializationMetrics initializationMetrics) {
+        executionGraphHandler.reportInitializationMetrics(
+                executionAttemptId, initializationMetrics);
     }
 
     void updateAccumulators(AccumulatorSnapshot accumulatorSnapshot) {
@@ -341,7 +393,7 @@ abstract class StateWithExecutionGraph implements State {
     }
 
     /** Transition to different state when failure occurs. Stays in the same state by default. */
-    abstract void onFailure(Throwable cause);
+    abstract void onFailure(Throwable cause, CompletableFuture<Map<String, String>> failureLabels);
 
     /**
      * Transition to different state when the execution graph reaches a globally terminal state.
@@ -354,7 +406,7 @@ abstract class StateWithExecutionGraph implements State {
     public void handleGlobalFailure(
             Throwable cause, CompletableFuture<Map<String, String>> failureLabels) {
         failureCollection.add(ExceptionHistoryEntry.createGlobal(cause, failureLabels));
-        onFailure(cause);
+        onFailure(cause, failureLabels);
     }
 
     /**
@@ -386,7 +438,8 @@ abstract class StateWithExecutionGraph implements State {
                         ExceptionHistoryEntry.create(execution, taskName, failureLabels));
                 onFailure(
                         ErrorInfo.handleMissingThrowable(
-                                taskExecutionStateTransition.getError(userCodeClassLoader)));
+                                taskExecutionStateTransition.getError(userCodeClassLoader)),
+                        failureLabels);
             }
         }
         return successfulUpdate;
@@ -407,7 +460,7 @@ abstract class StateWithExecutionGraph implements State {
     }
 
     /** Context of the {@link StateWithExecutionGraph} state. */
-    interface Context extends StateTransitions.ToFinished {
+    interface Context extends RescaleContext, StateTransitions.ToFinished {
 
         /**
          * Run the given action if the current state equals the expected state.

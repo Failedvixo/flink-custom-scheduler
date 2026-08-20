@@ -19,7 +19,6 @@ package org.apache.flink.test.checkpointing;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.runtime.minicluster.MiniCluster;
-import org.apache.flink.runtime.state.AbstractStateBackend;
 import org.apache.flink.runtime.state.StateBackendTestUtils;
 import org.apache.flink.runtime.state.StateHandleID;
 import org.apache.flink.runtime.testutils.ExceptionallyDoneFuture;
@@ -27,9 +26,8 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.testutils.junit.SharedReference;
 import org.apache.flink.util.Preconditions;
 
-import org.junit.Test;
+import org.junit.jupiter.api.TestTemplate;
 
-import java.io.File;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -39,30 +37,26 @@ import java.util.concurrent.atomic.AtomicInteger;
  * This verifies that checkpointing works correctly for Changelog state backend with materialized
  * state / non-materialized state.
  */
-public class ChangelogRecoveryITCase extends ChangelogRecoveryITCaseBase {
-
-    public ChangelogRecoveryITCase(AbstractStateBackend delegatedStateBackend) {
-        super(delegatedStateBackend);
-    }
+class ChangelogRecoveryITCase extends ChangelogRecoveryITCaseBase {
 
     /** Recovery from checkpoint only containing non-materialized state. */
-    @Test
-    public void testNonMaterialization() throws Exception {
-        File checkpointFolder = TEMPORARY_FOLDER.newFolder();
+    @TestTemplate
+    void testNonMaterialization() throws Exception {
         SharedReference<JobID> jobID = sharedObjects.add(generateJobID());
         SharedReference<MiniCluster> miniCluster = sharedObjects.add(cluster.getMiniCluster());
         SharedReference<AtomicBoolean> hasMaterialization =
                 sharedObjects.add(new AtomicBoolean(true));
-        StreamExecutionEnvironment env =
-                getEnv(delegatedStateBackend, checkpointFolder, 1000, 1, -1, 0);
+        StreamExecutionEnvironment env = getEnv(temporaryFolder, 1000, 1, 10, 0);
+        env.getConfig().enablePeriodicMaterialize(false);
         waitAndAssert(
                 buildJobGraph(
+                        delegatedStateBackend,
                         env,
                         new ControlledSource() {
                             @Override
                             protected void beforeElement(SourceContext<Integer> ctx)
                                     throws Exception {
-                                if (getRuntimeContext().getAttemptNumber() == 0
+                                if (getRuntimeContext().getTaskInfo().getAttemptNumber() == 0
                                         && currentIndex == TOTAL_ELEMENTS / 2) {
                                     waitWhile(() -> completedCheckpointNum.get() <= 0);
                                     hasMaterialization
@@ -81,27 +75,26 @@ public class ChangelogRecoveryITCase extends ChangelogRecoveryITCaseBase {
     }
 
     /** Recovery from checkpoint containing non-materialized state and materialized state. */
-    @Test
-    public void testMaterialization() throws Exception {
-        File checkpointFolder = TEMPORARY_FOLDER.newFolder();
+    @TestTemplate
+    void testMaterialization() throws Exception {
         SharedReference<JobID> jobID = sharedObjects.add(generateJobID());
         SharedReference<MiniCluster> miniCluster = sharedObjects.add(cluster.getMiniCluster());
         SharedReference<AtomicInteger> currentCheckpointNum =
                 sharedObjects.add(new AtomicInteger());
         SharedReference<Set<StateHandleID>> currentMaterializationId =
                 sharedObjects.add(ConcurrentHashMap.newKeySet());
-        StreamExecutionEnvironment env =
-                getEnv(delegatedStateBackend, checkpointFolder, 100, 2, 50, 0);
+        StreamExecutionEnvironment env = getEnv(temporaryFolder, 100, 2, 200, 0);
         waitAndAssert(
                 buildJobGraph(
+                        delegatedStateBackend,
                         env,
                         new ControlledSource() {
                             @Override
                             protected void beforeElement(SourceContext<Integer> ctx)
                                     throws Exception {
                                 Preconditions.checkState(
-                                        getRuntimeContext().getAttemptNumber() <= 2);
-                                if (getRuntimeContext().getAttemptNumber() == 0
+                                        getRuntimeContext().getTaskInfo().getAttemptNumber() <= 2);
+                                if (getRuntimeContext().getTaskInfo().getAttemptNumber() == 0
                                         && currentIndex == TOTAL_ELEMENTS / 4) {
                                     waitWhile(
                                             () -> {
@@ -126,7 +119,7 @@ public class ChangelogRecoveryITCase extends ChangelogRecoveryITCaseBase {
                                             });
 
                                     throwArtificialFailure();
-                                } else if (getRuntimeContext().getAttemptNumber() == 1
+                                } else if (getRuntimeContext().getTaskInfo().getAttemptNumber() == 1
                                         && currentIndex == TOTAL_ELEMENTS / 2) {
                                     waitWhile(
                                             () -> {
@@ -149,16 +142,18 @@ public class ChangelogRecoveryITCase extends ChangelogRecoveryITCaseBase {
                         jobID.get()));
     }
 
-    @Test
-    public void testFailedMaterialization() throws Exception {
-        File checkpointFolder = TEMPORARY_FOLDER.newFolder();
+    @TestTemplate
+    void testFailedMaterialization() throws Exception {
         SharedReference<JobID> jobID = sharedObjects.add(generateJobID());
         SharedReference<MiniCluster> miniCluster = sharedObjects.add(cluster.getMiniCluster());
         SharedReference<AtomicBoolean> hasFailed = sharedObjects.add(new AtomicBoolean());
         SharedReference<Set<StateHandleID>> currentMaterializationId =
                 sharedObjects.add(ConcurrentHashMap.newKeySet());
-        StreamExecutionEnvironment env =
-                getEnv(
+        StreamExecutionEnvironment env = getEnv(temporaryFolder, 100, 0, 10, 1);
+
+        env.setParallelism(1);
+        waitAndAssert(
+                buildJobGraph(
                         StateBackendTestUtils.wrapStateBackendWithSnapshotFunction(
                                 delegatedStateBackend,
                                 snapshotResultFuture -> {
@@ -168,14 +163,6 @@ public class ChangelogRecoveryITCase extends ChangelogRecoveryITCaseBase {
                                         return snapshotResultFuture;
                                     }
                                 }),
-                        checkpointFolder,
-                        100,
-                        0,
-                        10,
-                        1);
-        env.setParallelism(1);
-        waitAndAssert(
-                buildJobGraph(
                         env,
                         new ControlledSource() {
                             @Override

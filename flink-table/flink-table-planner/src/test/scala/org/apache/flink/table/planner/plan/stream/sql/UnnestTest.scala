@@ -17,12 +17,11 @@
  */
 package org.apache.flink.table.planner.plan.stream.sql
 
-import org.apache.flink.api.scala._
 import org.apache.flink.table.api._
 import org.apache.flink.table.planner.plan.common.UnnestTestBase
 import org.apache.flink.table.planner.utils.TableTestUtil
 
-import org.junit.Test
+import org.junit.jupiter.api.Test
 
 class UnnestTest extends UnnestTestBase(true) {
 
@@ -33,7 +32,7 @@ class UnnestTest extends UnnestTestBase(true) {
     util.addTableSource[(Int, Array[Int])]("T2", 'a, 'b)
     verifyPlan(
       """
-        |SELECT /*+ LOOKUP('table'='D', 'retry-predicate'='lookup_miss','retry-strategy'='fixed_delay', 
+        |SELECT /*+ LOOKUP('table'='D', 'retry-predicate'='lookup_miss','retry-strategy'='fixed_delay',
         |         'fixed-delay'='155 ms', 'max-attempts'='10') */ T2.a
         |FROM T2 CROSS JOIN UNNEST(T2.b) AS D(c)
         |""".stripMargin)

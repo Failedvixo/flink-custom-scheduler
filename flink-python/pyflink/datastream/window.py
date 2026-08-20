@@ -171,7 +171,7 @@ class TimeWindow(Window):
         return self.start == other.start and self.end < other.end or self.start < other.start
 
     def __le__(self, other: 'TimeWindow'):
-        return self.__eq__(other) and self.__lt__(other)
+        return self.__eq__(other) or self.__lt__(other)
 
     def __repr__(self):
         return "TimeWindow(start={}, end={})".format(self.start, self.end)
@@ -368,7 +368,8 @@ class Trigger(ABC, Generic[T, W]):
             """
             Returns the metric group for this :class:`Trigger`. This is the same metric group that
             would be returned from
-            :func:`~pyflink.datasteam.functions.RuntimeContext.get_metric_group` in a user function.
+            :func:`~pyflink.datastream.functions.RuntimeContext.get_metric_group` in a user
+            function.
 
             :return: The metric group.
             """

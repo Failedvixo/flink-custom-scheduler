@@ -58,19 +58,11 @@ created for an job/application and will contain the job/application's jar files.
 
 -->
 
-**Per-Job模式（已弃用）（Yarn）**
-
-当前只有Yarn支持Per-Job模式。默认情况下，Flink集群运行在Per-Job模式下时会将用户的jar文件包含在系统的classpath中。
-这种模式可以由[yarn.classpath.include-user-jar]({{< ref "docs/deployment/config" >}}#yarn-classpath-include-user-jar) 参数控制。
-当该参数设定为`DISABLED`时，Flink会将用户jar文件含在用户的classpath中，并由*FlinkUserCodeClassLoader*进行动态加载。
-
-详细信息参见[Flink on Yarn]({{< ref "docs/deployment/resource-providers/yarn" >}})。
-
 **Application模式（Standalone/Yarn/Kubernetes）**
 
 当Application模式的Flink集群基于Standalone或Kubernetes方式运行时，用户jar文件（启动命令指定的jar文件和Flink的`usrlib`目录中的jar包）会由*FlinkUserCodeClassLoader*进行动态加载。
 
-当Flink集群以Application模式运行时，用户jar文件（启动命令指定的jar文件和Flink的`usrlib`目录中的jar包）默认情况下会包含在系统classpath（*AppClassLoader*）。与Per-Job模式相同，当[yarn.classpath.include-user-jar]({{< ref "docs/deployment/config" >}}#yarn-classpath-include-user-jar)设置为`DISABLED`时，Flink会将用户jar文件含在用户的classpath中，并由*FlinkUserCodeClassLoader*进行动态加载。
+当Flink集群以Application模式运行时，用户jar文件（启动命令指定的jar文件和Flink的`usrlib`目录中的jar包）默认情况下会包含在系统classpath（*AppClassLoader*）。当[yarn.classpath.include-user-jar]({{< ref "docs/deployment/config" >}}#yarn-classpath-include-user-jar)设置为`DISABLED`时，Flink会将用户jar文件含在用户的classpath中，并由*FlinkUserCodeClassLoader*进行动态加载。
 
 
 ## 倒置类加载（Inverted Class Loading）和ClassLoader解析顺序
@@ -87,7 +79,7 @@ created for an job/application and will contain the job/application's jar files.
 
 对于用户代码的类加载，您可以通过调整Flink的[`classloader.resolve-order`]({{< ref "docs/deployment/config" >}}#classloader-resolve-order)配置将ClassLoader解析顺序还原至Java的默认模式（从Flink默认的`child-first`调整为`parent-first`）。
 
-请注意由于有些类在Flink内核与插件或用户代码间共享，它们总是以*parent-first*方式进行解析的。这些类相关的包通过[`classloader.parent-first-patterns-default`]({{< ref "docs/deployment/config" >}}#classloader-parent-first-patterns-default)和[`classloader.parent-first-patterns-additional`]({{< ref "docs/deployment/config" >}}#classloader-parent-first-patterns-additional)进行配置。如果需要新添加*parent-first* 方式的包，请调整`classloader.parent-first-patterns-additional` 配置选项。
+请注意由于有些类在Flink内核与插件或用户代码间共享，它们总是以*parent-first*方式进行解析的。这些类相关的包通过[`classloader.parent-first-patterns.default`]({{< ref "docs/deployment/config" >}}#classloader-parent-first-patterns-default)和[`classloader.parent-first-patterns.additional`]({{< ref "docs/deployment/config" >}}#classloader-parent-first-patterns.additional)进行配置。如果需要新添加*parent-first* 方式的包，请调整`classloader.parent-first-patterns.additional` 配置选项。
 
 
 ## 避免用户代码的动态类加载
@@ -116,7 +108,7 @@ Flink的组件（JobManager, TaskManager, Client, ApplicationMaster等）在启�
 当进行动态类加载时，您可能会遇到类似`com.foo.X cannot be cast to com.foo.X`类型的异常。
 出现这种异常代表不同的类加载器加载了不同版本的`com.foo.X`类，并且它们互相之间尝试进行类型指定转换。
 
-发生这种情况的通常原因是这个库与Flink的*倒置类加载*（*inverted classloading*）方式不兼容造成的。您可以通过关闭倒置类加载（inverted classloading）来进行验证（在Flink设置中调整[`classloader.resolve-order: parent-first`]({{< ref "docs/deployment/config" >}}#classloader-resolve-order)），或者将库排除在inverted classloading之外（通过设置[`classloader.parent-first-patterns-additional`]({{< ref "docs/deployment/config" >}}#classloader-parent-first-patterns-additional)）。
+发生这种情况的通常原因是这个库与Flink的*倒置类加载*（*inverted classloading*）方式不兼容造成的。您可以通过关闭倒置类加载（inverted classloading）来进行验证（在Flink设置中调整[`classloader.resolve-order: parent-first`]({{< ref "docs/deployment/config" >}}#classloader-resolve-order)），或者将库排除在inverted classloading之外（通过设置[`classloader.parent-first-patterns.additional`]({{< ref "docs/deployment/config" >}}#classloader-parent-first-patterns-additional)）。
 
 另一种原因可能是由缓存的对象实例引起的，比如类似*Apache Avro*或者Guava的Interners类型的对象。
 解决办法是设置没有任何动态类加载，或者确保相应的库完全是动态加载代码的一部分。后者意味着库不能添加到Flink的`/lib`目录下，但必须作为应用程序的fat-jar或uber-jar的一部分。
@@ -137,7 +129,7 @@ Flink的组件（JobManager, TaskManager, Client, ApplicationMaster等）在启�
 
   - *Interners*: 避免缓存超出function/sources/sinks生命周期的特殊结构中的对象。比如Guava的Interner，或是Avro的序列化器中的类或对象。
 
-  - *JDBC*: JDBC驱动会在用户类加载器之外泄漏引用。为了确保这些类只被加载一次，您可以将驱动JAR包放在Flink的`lib/`目录下，或者将驱动类通过[`classloader.parent-first-patterns-additional`]({{< ref "docs/deployment/config" >}}#classloader-parent-first-patterns-additional)加到父级优先加载类的列表中。
+  - *JDBC*: JDBC驱动会在用户类加载器之外泄漏引用。为了确保这些类只被加载一次，您可以将驱动JAR包放在Flink的`lib/`目录下，或者将驱动类通过[`classloader.parent-first-patterns.additional`]({{< ref "docs/deployment/config" >}}#classloader-parent-first-patterns-additional)加到父级优先加载类的列表中。
 
 释放用户代码类加载器的钩子（hook）可以帮助卸载动态加载的类。这种钩子在类加载器卸载前执行。通常情况下最好把关闭和卸载资源作为正常函数生命周期操作的一部分（比如典型的`close()`方法）。有些情况下（比如静态字段）最好确定类加载器不再需要后就立即卸载。
 

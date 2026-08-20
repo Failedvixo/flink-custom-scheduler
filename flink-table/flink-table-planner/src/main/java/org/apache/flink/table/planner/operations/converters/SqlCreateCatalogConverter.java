@@ -18,29 +18,24 @@
 
 package org.apache.flink.table.planner.operations.converters;
 
-import org.apache.flink.sql.parser.ddl.SqlCreateCatalog;
-import org.apache.flink.sql.parser.ddl.SqlTableOption;
+import org.apache.flink.sql.parser.ddl.catalog.SqlCreateCatalog;
 import org.apache.flink.table.operations.Operation;
 import org.apache.flink.table.operations.ddl.CreateCatalogOperation;
 
-import java.util.HashMap;
 import java.util.Map;
 
 /** A converter for {@link SqlCreateCatalog}. */
 public class SqlCreateCatalogConverter implements SqlNodeConverter<SqlCreateCatalog> {
 
     @Override
-    public Operation convertSqlNode(SqlCreateCatalog node, ConvertContext context) {
+    public Operation convertSqlNode(SqlCreateCatalog sqlCreateCatalog, ConvertContext context) {
         // set with properties
-        Map<String, String> properties = new HashMap<>();
-        node.getPropertyList()
-                .getList()
-                .forEach(
-                        p ->
-                                properties.put(
-                                        ((SqlTableOption) p).getKeyString(),
-                                        ((SqlTableOption) p).getValueString()));
+        final Map<String, String> properties = sqlCreateCatalog.getProperties();
 
-        return new CreateCatalogOperation(node.catalogName(), properties);
+        return new CreateCatalogOperation(
+                sqlCreateCatalog.catalogName(),
+                properties,
+                sqlCreateCatalog.getComment(),
+                sqlCreateCatalog.isIfNotExists());
     }
 }

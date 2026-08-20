@@ -20,10 +20,11 @@ package org.apache.flink.client.python;
 
 import org.apache.flink.client.deployment.application.UnsuccessfulExecutionException;
 import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.configuration.ConfigurationUtils;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.core.fs.Path;
-import org.apache.flink.python.util.CompressionUtils;
 import org.apache.flink.python.util.PythonDependencyUtils;
+import org.apache.flink.util.CompressionUtils;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FileUtils;
 import org.apache.flink.util.NetUtils;
@@ -31,7 +32,7 @@ import org.apache.flink.util.OperatingSystem;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.StringUtils;
 
-import org.apache.flink.shaded.guava31.com.google.common.base.Strings;
+import org.apache.flink.shaded.guava33.com.google.common.base.Strings;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -311,14 +312,15 @@ final class PythonEnvUtils {
                 // add the parent directory of .py file itself to PYTHONPATH
                 pythonPathList.add(targetPath.getParent().toString());
             } else if (Files.isRegularFile(Paths.get(targetPath.toString()).toRealPath())
-                    && sourceFileName.endsWith(".zip")) {
-                // expand the zip file and add the root directory to PYTHONPATH
-                // as not all zip files are importable
+                    && CompressionUtils.isCompressedFile(sourceFileName)) {
+                // expand the compressed file and add the root directory to PYTHONPATH
+                // as not all compressed files are importable
                 Path targetDirectory =
                         new Path(
                                 targetPath.getParent(),
-                                sourceFileName.substring(0, sourceFileName.lastIndexOf(".")));
-                FileUtils.expandDirectory(targetPath, targetDirectory);
+                                CompressionUtils.getBaseNameWithoutExtension(sourceFileName));
+                CompressionUtils.extractFile(
+                        targetPath.toString(), targetDirectory.toString(), sourceFileName);
                 pythonPathList.add(targetDirectory.toString());
             } else {
                 pythonPathList.add(targetPath.toString());
@@ -368,10 +370,9 @@ final class PythonEnvUtils {
             // set the child process the output same as the parent process.
             pythonProcessBuilder.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         }
-
         LOG.info(
                 "Starting Python process with environment variables: {{}}, command: {}",
-                env.entrySet().stream()
+                ConfigurationUtils.hideSensitiveValues(env).entrySet().stream()
                         .map(e -> e.getKey() + "=" + e.getValue())
                         .collect(Collectors.joining(", ")),
                 String.join(" ", commands));
@@ -426,7 +427,9 @@ final class PythonEnvUtils {
      * @param gatewayServer the gateway which creates the callback server.
      */
     private static void resetCallbackClientExecutorService(GatewayServer gatewayServer)
-            throws NoSuchFieldException, IllegalAccessException, NoSuchMethodException,
+            throws NoSuchFieldException,
+                    IllegalAccessException,
+                    NoSuchMethodException,
                     InvocationTargetException {
         CallbackClient callbackClient = (CallbackClient) gatewayServer.getCallbackClient();
         // The Java API of py4j does not provide approach to set "daemonize_connections" parameter.
@@ -451,8 +454,11 @@ final class PythonEnvUtils {
             GatewayServer gatewayServer,
             String callbackServerListeningAddress,
             int callbackServerListeningPort)
-            throws UnknownHostException, InvocationTargetException, NoSuchMethodException,
-                    IllegalAccessException, NoSuchFieldException {
+            throws UnknownHostException,
+                    InvocationTargetException,
+                    NoSuchMethodException,
+                    IllegalAccessException,
+                    NoSuchFieldException {
 
         gatewayServer.resetCallbackClient(
                 InetAddress.getByName(callbackServerListeningAddress), callbackServerListeningPort);

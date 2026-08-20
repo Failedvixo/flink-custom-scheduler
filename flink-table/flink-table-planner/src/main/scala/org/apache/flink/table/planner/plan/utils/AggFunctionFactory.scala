@@ -18,15 +18,16 @@
 package org.apache.flink.table.planner.plan.utils
 
 import org.apache.flink.table.api.TableException
-import org.apache.flink.table.functions.{DeclarativeAggregateFunction, UserDefinedFunction}
+import org.apache.flink.table.functions.{BuiltInFunctionDefinitions, DeclarativeAggregateFunction, UserDefinedFunction}
 import org.apache.flink.table.planner.functions.aggfunctions._
 import org.apache.flink.table.planner.functions.aggfunctions.SingleValueAggFunction._
 import org.apache.flink.table.planner.functions.aggfunctions.SumWithRetractAggFunction._
 import org.apache.flink.table.planner.functions.bridging.BridgingSqlAggFunction
 import org.apache.flink.table.planner.functions.sql.{SqlFirstLastValueAggFunction, SqlListAggFunction}
 import org.apache.flink.table.planner.functions.utils.AggSqlFunction
-import org.apache.flink.table.runtime.functions.aggregate.{BuiltInAggregateFunction, CollectAggFunction, FirstValueAggFunction, FirstValueWithRetractAggFunction, JsonArrayAggFunction, JsonObjectAggFunction, LagAggFunction, LastValueAggFunction, LastValueWithRetractAggFunction, ListAggWithRetractAggFunction, ListAggWsWithRetractAggFunction, MaxWithRetractAggFunction, MinWithRetractAggFunction}
+import org.apache.flink.table.runtime.functions.aggregate._
 import org.apache.flink.table.runtime.functions.aggregate.BatchApproxCountDistinctAggFunctions._
+import org.apache.flink.table.runtime.functions.aggregate.PercentileAggFunction.{MultiPercentileAggFunction, SinglePercentileAggFunction}
 import org.apache.flink.table.types.logical._
 import org.apache.flink.table.types.logical.LogicalTypeRoot._
 
@@ -141,10 +142,17 @@ class AggFunctionFactory(
       case _: SqlListAggFunction if call.getArgList.size() == 2 =>
         createListAggWsFunction(argTypes, index)
 
+      case a: SqlBasicAggFunction
+          if a.getName == BuiltInFunctionDefinitions.INTERNAL_WELFORD_M2.getName =>
+        createWelfordM2AggFunction(argTypes)
+
       // TODO supports SqlCardinalityCountAggFunction
 
       case a: SqlAggFunction if a.getKind == SqlKind.COLLECT =>
         createCollectAggFunction(argTypes)
+
+      case a: SqlAggFunction if a.getKind == SqlKind.ARRAY_AGG =>
+        createArrayAggFunction(argTypes, call.ignoreNulls)
 
       case fn: SqlAggFunction if fn.getKind == SqlKind.JSON_OBJECTAGG =>
         val onNull = fn.asInstanceOf[SqlJsonObjectAggAggFunction].getNullClause
@@ -162,7 +170,30 @@ class AggFunctionFactory(
         udagg.makeFunction(constants.toArray, argTypes)
 
       case bridge: BridgingSqlAggFunction =>
-        bridge.getDefinition.asInstanceOf[UserDefinedFunction]
+        bridge.getDefinition match {
+          // built-in imperativeFunction
+          case BuiltInFunctionDefinitions.PERCENTILE =>
+            createPercentileAggFunction(argTypes)
+          case BuiltInFunctionDefinitions.BITMAP_BUILD_AGG =>
+            createBitmapBuildAggFunction(argTypes, index)
+          case BuiltInFunctionDefinitions.BITMAP_BUILD_CARDINALITY_AGG =>
+            createBitmapBuildCardinalityAggFunction(argTypes, index)
+          case BuiltInFunctionDefinitions.BITMAP_AND_AGG =>
+            createBitmapAndAggFunction(argTypes, index)
+          case BuiltInFunctionDefinitions.BITMAP_AND_CARDINALITY_AGG =>
+            createBitmapAndCardinalityAggFunction(argTypes, index)
+          case BuiltInFunctionDefinitions.BITMAP_OR_AGG =>
+            createBitmapOrAggFunction(argTypes, index)
+          case BuiltInFunctionDefinitions.BITMAP_OR_CARDINALITY_AGG =>
+            createBitmapOrCardinalityAggFunction(argTypes, index)
+          case BuiltInFunctionDefinitions.BITMAP_XOR_AGG =>
+            createBitmapXorAggFunction(argTypes, index)
+          case BuiltInFunctionDefinitions.BITMAP_XOR_CARDINALITY_AGG =>
+            createBitmapXorCardinalityAggFunction(argTypes, index)
+          // DeclarativeAggregateFunction & UDF
+          case _ =>
+            bridge.getDefinition.asInstanceOf[UserDefinedFunction]
+        }
 
       case unSupported: SqlAggFunction =>
         throw new TableException(s"Unsupported Function: '${unSupported.getName}'")
@@ -273,8 +304,8 @@ class AggFunctionFactory(
     val valueType = argTypes(0)
     if (aggCallNeedRetractions(index)) {
       valueType.getTypeRoot match {
-        case TINYINT | SMALLINT | INTEGER | BIGINT | FLOAT | DOUBLE | BOOLEAN | VARCHAR | DECIMAL |
-            TIME_WITHOUT_TIME_ZONE | DATE | TIMESTAMP_WITHOUT_TIME_ZONE |
+        case TINYINT | SMALLINT | INTEGER | BIGINT | FLOAT | DOUBLE | BOOLEAN | VARCHAR | CHAR |
+            DECIMAL | TIME_WITHOUT_TIME_ZONE | DATE | TIMESTAMP_WITHOUT_TIME_ZONE |
             TIMESTAMP_WITH_LOCAL_TIME_ZONE =>
           new MinWithRetractAggFunction(argTypes(0))
         case t =>
@@ -303,7 +334,8 @@ class AggFunctionFactory(
         case DATE =>
           new MinAggFunction.DateMinAggFunction
         case TIME_WITHOUT_TIME_ZONE =>
-          new MinAggFunction.TimeMinAggFunction
+          val t = argTypes(0).asInstanceOf[TimeType]
+          new MinAggFunction.TimeMinAggFunction(t)
         case TIMESTAMP_WITHOUT_TIME_ZONE =>
           val d = argTypes(0).asInstanceOf[TimestampType]
           new MinAggFunction.TimestampMinAggFunction(d)
@@ -362,7 +394,8 @@ class AggFunctionFactory(
       case DATE =>
         new LeadLagAggFunction.DateLeadLagAggFunction(argTypes.length)
       case TIME_WITHOUT_TIME_ZONE =>
-        new LeadLagAggFunction.TimeLeadLagAggFunction(argTypes.length)
+        val t = argTypes(0).asInstanceOf[TimeType]
+        new LeadLagAggFunction.TimeLeadLagAggFunction(t, argTypes.length)
       case TIMESTAMP_WITHOUT_TIME_ZONE =>
         val d = argTypes(0).asInstanceOf[TimestampType]
         new LeadLagAggFunction.TimestampLeadLagAggFunction(argTypes.length, d)
@@ -382,8 +415,8 @@ class AggFunctionFactory(
     val valueType = argTypes(0)
     if (aggCallNeedRetractions(index)) {
       valueType.getTypeRoot match {
-        case TINYINT | SMALLINT | INTEGER | BIGINT | FLOAT | DOUBLE | BOOLEAN | VARCHAR | DECIMAL |
-            TIME_WITHOUT_TIME_ZONE | DATE | TIMESTAMP_WITHOUT_TIME_ZONE |
+        case TINYINT | SMALLINT | INTEGER | BIGINT | FLOAT | DOUBLE | BOOLEAN | VARCHAR | CHAR |
+            DECIMAL | TIME_WITHOUT_TIME_ZONE | DATE | TIMESTAMP_WITHOUT_TIME_ZONE |
             TIMESTAMP_WITH_LOCAL_TIME_ZONE =>
           new MaxWithRetractAggFunction(argTypes(0))
         case t =>
@@ -407,12 +440,13 @@ class AggFunctionFactory(
           new MaxAggFunction.DoubleMaxAggFunction
         case BOOLEAN =>
           new MaxAggFunction.BooleanMaxAggFunction
-        case VARCHAR =>
+        case VARCHAR | CHAR =>
           new MaxAggFunction.StringMaxAggFunction
         case DATE =>
           new MaxAggFunction.DateMaxAggFunction
         case TIME_WITHOUT_TIME_ZONE =>
-          new MaxAggFunction.TimeMaxAggFunction
+          val t = argTypes(0).asInstanceOf[TimeType]
+          new MaxAggFunction.TimeMaxAggFunction(t)
         case TIMESTAMP_WITHOUT_TIME_ZONE =>
           val d = argTypes(0).asInstanceOf[TimestampType]
           new MaxAggFunction.TimestampMaxAggFunction(d)
@@ -505,7 +539,8 @@ class AggFunctionFactory(
       case DATE =>
         new DateSingleValueAggFunction
       case TIME_WITHOUT_TIME_ZONE =>
-        new TimeSingleValueAggFunction
+        val t = argTypes(0).asInstanceOf[TimeType]
+        new TimeSingleValueAggFunction(t)
       case TIMESTAMP_WITHOUT_TIME_ZONE =>
         val d = argTypes(0).asInstanceOf[TimestampType]
         new TimestampSingleValueAggFunction(d)
@@ -529,18 +564,23 @@ class AggFunctionFactory(
   }
 
   private def createRankAggFunction(argTypes: Array[LogicalType]): UserDefinedFunction = {
-    val argTypes = orderKeyIndexes.map(inputRowType.getChildren.get(_))
-    new RankAggFunction(argTypes)
+    new RankAggFunction(getArgTypesOrEmpty())
   }
 
   private def createDenseRankAggFunction(argTypes: Array[LogicalType]): UserDefinedFunction = {
-    val argTypes = orderKeyIndexes.map(inputRowType.getChildren.get(_))
-    new DenseRankAggFunction(argTypes)
+    new DenseRankAggFunction(getArgTypesOrEmpty())
   }
 
   private def createPercentRankAggFunction(argTypes: Array[LogicalType]): UserDefinedFunction = {
-    val argTypes = orderKeyIndexes.map(inputRowType.getChildren.get(_))
-    new PercentRankAggFunction(argTypes)
+    new PercentRankAggFunction(getArgTypesOrEmpty())
+  }
+
+  private def getArgTypesOrEmpty(): Array[LogicalType] = {
+    if (orderKeyIndexes != null) {
+      orderKeyIndexes.map(inputRowType.getChildren.get(_))
+    } else {
+      Array[LogicalType]()
+    }
   }
 
   private def createNTILEAggFUnction(argTypes: Array[LogicalType]): UserDefinedFunction = {
@@ -552,23 +592,9 @@ class AggFunctionFactory(
       index: Int): UserDefinedFunction = {
     val valueType = argTypes(0)
     if (aggCallNeedRetractions(index)) {
-      valueType.getTypeRoot match {
-        case TINYINT | SMALLINT | INTEGER | BIGINT | FLOAT | DOUBLE | BOOLEAN | VARCHAR | DECIMAL =>
-          new FirstValueWithRetractAggFunction(valueType)
-        case t =>
-          throw new TableException(
-            s"FIRST_VALUE with retract aggregate function does not " +
-              s"support type: ''$t''.\nPlease re-check the data type.")
-      }
+      new FirstValueWithRetractAggFunction(valueType)
     } else {
-      valueType.getTypeRoot match {
-        case TINYINT | SMALLINT | INTEGER | BIGINT | FLOAT | DOUBLE | BOOLEAN | VARCHAR | DECIMAL =>
-          new FirstValueAggFunction(valueType)
-        case t =>
-          throw new TableException(
-            s"FIRST_VALUE aggregate function does not support " +
-              s"type: ''$t''.\nPlease re-check the data type.")
-      }
+      new FirstValueAggFunction(valueType)
     }
   }
 
@@ -577,23 +603,9 @@ class AggFunctionFactory(
       index: Int): UserDefinedFunction = {
     val valueType = argTypes(0)
     if (aggCallNeedRetractions(index)) {
-      valueType.getTypeRoot match {
-        case TINYINT | SMALLINT | INTEGER | BIGINT | FLOAT | DOUBLE | BOOLEAN | VARCHAR | DECIMAL =>
-          new LastValueWithRetractAggFunction(valueType)
-        case t =>
-          throw new TableException(
-            s"LAST_VALUE with retract aggregate function does not " +
-              s"support type: ''$t''.\nPlease re-check the data type.")
-      }
+      new LastValueWithRetractAggFunction(valueType)
     } else {
-      valueType.getTypeRoot match {
-        case TINYINT | SMALLINT | INTEGER | BIGINT | FLOAT | DOUBLE | BOOLEAN | VARCHAR | DECIMAL =>
-          new LastValueAggFunction(valueType)
-        case t =>
-          throw new TableException(
-            s"LAST_VALUE aggregate function does not support " +
-              s"type: ''$t''.\nPlease re-check the data type.")
-      }
+      new LastValueAggFunction(valueType)
     }
   }
 
@@ -617,7 +629,124 @@ class AggFunctionFactory(
     }
   }
 
+  private def createWelfordM2AggFunction(argTypes: Array[LogicalType]): UserDefinedFunction = {
+    argTypes(0).getTypeRoot match {
+      case TINYINT | SMALLINT | INTEGER | BIGINT | FLOAT | DOUBLE =>
+        new WelfordM2AggFunction.NumberFunction(argTypes(0))
+      case DECIMAL =>
+        new WelfordM2AggFunction.DecimalFunction(argTypes(0))
+      case _ =>
+        throw new TableException(
+          s"${BuiltInFunctionDefinitions.INTERNAL_WELFORD_M2.getName} aggregate function does not support type: '${argTypes(
+              0).getTypeRoot}'.")
+    }
+  }
+
   private def createCollectAggFunction(argTypes: Array[LogicalType]): UserDefinedFunction = {
     new CollectAggFunction(argTypes(0))
+  }
+
+  private def createArrayAggFunction(
+      types: Array[LogicalType],
+      ignoreNulls: Boolean): UserDefinedFunction = {
+    new ArrayAggFunction(types(0), ignoreNulls)
+  }
+
+  private def createPercentileAggFunction(
+      argTypes: Array[LogicalType]
+  ): UserDefinedFunction = {
+    val isMultiPercentile = argTypes(1).is(LogicalTypeRoot.ARRAY)
+    val firstArg = argTypes(0)
+    val secondArg = if (argTypes.length < 3) null else argTypes(2)
+
+    if (isMultiPercentile) {
+      new MultiPercentileAggFunction(firstArg, secondArg)
+    } else {
+      new SinglePercentileAggFunction(firstArg, secondArg)
+    }
+  }
+
+  private def createBitmapBuildAggFunction(
+      argTypes: Array[LogicalType],
+      index: Int): UserDefinedFunction = {
+    if (aggCallNeedRetractions(index)) {
+      new AbstractBitmapBuildWithRetractAggFunction.BitmapBuildWithRetractAggFunction(argTypes(0))
+    } else {
+      new AbstractBitmapBuildAggFunction.BitmapBuildAggFunction(argTypes(0))
+    }
+  }
+
+  private def createBitmapBuildCardinalityAggFunction(
+      argTypes: Array[LogicalType],
+      index: Int): UserDefinedFunction = {
+    if (aggCallNeedRetractions(index)) {
+      new AbstractBitmapBuildWithRetractAggFunction.BitmapBuildCardinalityWithRetractAggFunction(
+        argTypes(0))
+    } else {
+      new AbstractBitmapBuildAggFunction.BitmapBuildCardinalityAggFunction(argTypes(0))
+    }
+  }
+
+  private def createBitmapAndAggFunction(
+      argTypes: Array[LogicalType],
+      index: Int): UserDefinedFunction = {
+    if (aggCallNeedRetractions(index)) {
+      new AbstractBitmapAndWithRetractAggFunction.BitmapAndWithRetractAggFunction(argTypes(0))
+    } else {
+      new AbstractBitmapAndAggFunction.BitmapAndAggFunction(argTypes(0))
+    }
+  }
+
+  private def createBitmapAndCardinalityAggFunction(
+      argTypes: Array[LogicalType],
+      index: Int): UserDefinedFunction = {
+    if (aggCallNeedRetractions(index)) {
+      new AbstractBitmapAndWithRetractAggFunction.BitmapAndCardinalityWithRetractAggFunction(
+        argTypes(0))
+    } else {
+      new AbstractBitmapAndAggFunction.BitmapAndCardinalityAggFunction(argTypes(0))
+    }
+  }
+
+  private def createBitmapOrAggFunction(
+      argTypes: Array[LogicalType],
+      index: Int): UserDefinedFunction = {
+    if (aggCallNeedRetractions(index)) {
+      new AbstractBitmapOrWithRetractAggFunction.BitmapOrWithRetractAggFunction(argTypes(0))
+    } else {
+      new AbstractBitmapOrAggFunction.BitmapOrAggFunction(argTypes(0))
+    }
+  }
+
+  private def createBitmapOrCardinalityAggFunction(
+      argTypes: Array[LogicalType],
+      index: Int): UserDefinedFunction = {
+    if (aggCallNeedRetractions(index)) {
+      new AbstractBitmapOrWithRetractAggFunction.BitmapOrCardinalityWithRetractAggFunction(
+        argTypes(0))
+    } else {
+      new AbstractBitmapOrAggFunction.BitmapOrCardinalityAggFunction(argTypes(0))
+    }
+  }
+
+  private def createBitmapXorAggFunction(
+      argTypes: Array[LogicalType],
+      index: Int): UserDefinedFunction = {
+    if (aggCallNeedRetractions(index)) {
+      new AbstractBitmapXorWithRetractAggFunction.BitmapXorWithRetractAggFunction(argTypes(0))
+    } else {
+      new AbstractBitmapXorAggFunction.BitmapXorAggFunction(argTypes(0))
+    }
+  }
+
+  private def createBitmapXorCardinalityAggFunction(
+      argTypes: Array[LogicalType],
+      index: Int): UserDefinedFunction = {
+    if (aggCallNeedRetractions(index)) {
+      new AbstractBitmapXorWithRetractAggFunction.BitmapXorCardinalityWithRetractAggFunction(
+        argTypes(0))
+    } else {
+      new AbstractBitmapXorAggFunction.BitmapXorCardinalityAggFunction(argTypes(0))
+    }
   }
 }

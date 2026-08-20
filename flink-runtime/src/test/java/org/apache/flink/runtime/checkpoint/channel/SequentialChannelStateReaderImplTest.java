@@ -20,7 +20,6 @@ package org.apache.flink.runtime.checkpoint.channel;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.core.memory.MemorySegmentFactory;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
-import org.apache.flink.runtime.checkpoint.StateObjectCollection;
 import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.io.network.buffer.Buffer;
 import org.apache.flink.runtime.io.network.buffer.FreeingBufferRecycler;
@@ -31,6 +30,7 @@ import org.apache.flink.runtime.io.network.partition.NoOpBufferAvailablityListen
 import org.apache.flink.runtime.io.network.partition.ResultPartition;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionBuilder;
 import org.apache.flink.runtime.io.network.partition.ResultSubpartition.BufferAndBacklog;
+import org.apache.flink.runtime.io.network.partition.ResultSubpartitionIndexSet;
 import org.apache.flink.runtime.io.network.partition.ResultSubpartitionView;
 import org.apache.flink.runtime.io.network.partition.consumer.BufferOrEvent;
 import org.apache.flink.runtime.io.network.partition.consumer.InputGate;
@@ -40,12 +40,13 @@ import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.state.InputChannelStateHandle;
 import org.apache.flink.runtime.state.ResultSubpartitionStateHandle;
 import org.apache.flink.runtime.state.memory.ByteStreamStateHandle;
+import org.apache.flink.streaming.runtime.io.recovery.RecordFilterContext;
 import org.apache.flink.testutils.junit.extensions.parameterized.Parameter;
 import org.apache.flink.testutils.junit.extensions.parameterized.ParameterizedTestExtension;
 import org.apache.flink.testutils.junit.extensions.parameterized.Parameters;
 import org.apache.flink.util.function.ThrowingConsumer;
 
-import org.apache.flink.shaded.guava31.com.google.common.io.Closer;
+import org.apache.flink.shaded.guava33.com.google.common.io.Closer;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.TestTemplate;
@@ -69,6 +70,8 @@ import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toMap;
 import static java.util.stream.IntStream.range;
+import static org.apache.flink.runtime.state.ChannelStateHelper.castToInputStateCollection;
+import static org.apache.flink.runtime.state.ChannelStateHelper.castToOutputStateCollection;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** {@link SequentialChannelStateReaderImpl} Test. */
@@ -141,7 +144,7 @@ public class SequentialChannelStateReaderImplTest {
 
         withInputGates(
                 gates -> {
-                    reader.readInputData(gates);
+                    reader.readInputData(gates, RecordFilterContext.disabled());
                     assertBuffersEquals(inputChannelsData, collectBuffers(gates));
                     assertConsumed(gates);
                 });
@@ -156,7 +159,8 @@ public class SequentialChannelStateReaderImplTest {
                         resultPartition.getAllPartitions()[i].getSubpartitionInfo();
                 ResultSubpartitionView view =
                         resultPartition.createSubpartitionView(
-                                info.getSubPartitionIdx(), new NoOpBufferAvailablityListener());
+                                new ResultSubpartitionIndexSet(info.getSubPartitionIdx()),
+                                new NoOpBufferAvailablityListener());
                 for (BufferAndBacklog buffer = view.getNextBuffer();
                         buffer != null;
                         buffer = view.getNextBuffer()) {
@@ -266,8 +270,8 @@ public class SequentialChannelStateReaderImplTest {
                 Collections.singletonMap(
                         new OperatorID(),
                         OperatorSubtaskState.builder()
-                                .setInputChannelState(new StateObjectCollection<>(handles.f0))
-                                .setResultSubpartitionState(new StateObjectCollection<>(handles.f1))
+                                .setInputChannelState(castToInputStateCollection(handles.f0))
+                                .setResultSubpartitionState(castToOutputStateCollection(handles.f1))
                                 .build()));
     }
 

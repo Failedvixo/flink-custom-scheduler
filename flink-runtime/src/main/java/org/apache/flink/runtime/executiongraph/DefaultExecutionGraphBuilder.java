@@ -19,10 +19,11 @@
 package org.apache.flink.runtime.executiongraph;
 
 import org.apache.flink.api.common.JobID;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.IllegalConfigurationException;
 import org.apache.flink.configuration.JobManagerOptions;
+import org.apache.flink.core.execution.JobStatusChangedListener;
+import org.apache.flink.core.execution.JobStatusChangedListenerUtils;
 import org.apache.flink.runtime.JobException;
 import org.apache.flink.runtime.blob.BlobWriter;
 import org.apache.flink.runtime.checkpoint.CheckpointIDCounter;
@@ -34,8 +35,8 @@ import org.apache.flink.runtime.checkpoint.hooks.MasterHooks;
 import org.apache.flink.runtime.client.JobExecutionException;
 import org.apache.flink.runtime.client.JobSubmissionException;
 import org.apache.flink.runtime.deployment.TaskDeploymentDescriptorFactory;
-import org.apache.flink.runtime.executiongraph.failover.flip1.partitionrelease.PartitionGroupReleaseStrategy;
-import org.apache.flink.runtime.executiongraph.failover.flip1.partitionrelease.PartitionGroupReleaseStrategyFactoryLoader;
+import org.apache.flink.runtime.executiongraph.failover.partitionrelease.PartitionGroupReleaseStrategy;
+import org.apache.flink.runtime.executiongraph.failover.partitionrelease.PartitionGroupReleaseStrategyFactoryLoader;
 import org.apache.flink.runtime.io.network.partition.JobMasterPartitionTracker;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobVertex;
@@ -43,7 +44,9 @@ import org.apache.flink.runtime.jobgraph.jsonplan.JsonPlanGenerator;
 import org.apache.flink.runtime.jobgraph.tasks.CheckpointCoordinatorConfiguration;
 import org.apache.flink.runtime.jobgraph.tasks.JobCheckpointingSettings;
 import org.apache.flink.runtime.metrics.groups.JobManagerJobMetricGroup;
+import org.apache.flink.runtime.rest.messages.JobPlanInfo;
 import org.apache.flink.runtime.scheduler.VertexParallelismStore;
+import org.apache.flink.runtime.scheduler.adaptivebatch.ExecutionPlanSchedulingContext;
 import org.apache.flink.runtime.shuffle.ShuffleMaster;
 import org.apache.flink.runtime.state.CheckpointStorage;
 import org.apache.flink.runtime.state.CheckpointStorageLoader;
@@ -55,12 +58,12 @@ import org.apache.flink.util.SerializedValue;
 import org.slf4j.Logger;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.function.Supplier;
 
 import static org.apache.flink.configuration.StateChangelogOptions.STATE_CHANGE_LOG_STORAGE;
 import static org.apache.flink.util.Preconditions.checkNotNull;
@@ -80,7 +83,7 @@ public class DefaultExecutionGraphBuilder {
             CompletedCheckpointStore completedCheckpointStore,
             CheckpointsCleaner checkpointsCleaner,
             CheckpointIDCounter checkpointIdCounter,
-            Time rpcTimeout,
+            Duration rpcTimeout,
             BlobWriter blobWriter,
             Logger log,
             ShuffleMaster<?> shuffleMaster,
@@ -91,12 +94,13 @@ public class DefaultExecutionGraphBuilder {
             long initializationTimestamp,
             VertexAttemptNumberStore vertexAttemptNumberStore,
             VertexParallelismStore vertexParallelismStore,
-            Supplier<CheckpointStatsTracker> checkpointStatsTrackerFactory,
+            CheckpointStatsTracker checkpointStatsTracker,
             boolean isDynamicGraph,
             ExecutionJobVertex.Factory executionJobVertexFactory,
             MarkPartitionFinishedStrategy markPartitionFinishedStrategy,
             boolean nonFinishedHybridPartitionShouldBeUnknown,
-            JobManagerJobMetricGroup jobManagerJobMetricGroup)
+            JobManagerJobMetricGroup jobManagerJobMetricGroup,
+            ExecutionPlanSchedulingContext executionPlanSchedulingContext)
             throws JobExecutionException, JobException {
 
         checkNotNull(jobGraph, "job graph cannot be null");
@@ -107,14 +111,16 @@ public class DefaultExecutionGraphBuilder {
         final JobInformation jobInformation =
                 new JobInformation(
                         jobId,
+                        jobGraph.getJobType(),
                         jobName,
                         jobGraph.getSerializedExecutionConfig(),
                         jobGraph.getJobConfiguration(),
                         jobGraph.getUserJarBlobKeys(),
-                        jobGraph.getClasspaths());
+                        jobGraph.getClasspaths(),
+                        jobGraph.getApplicationId().orElse(null));
 
         final int executionHistorySizeLimit =
-                jobManagerConfig.getInteger(JobManagerOptions.MAX_ATTEMPTS_HISTORY_SIZE);
+                jobManagerConfig.get(JobManagerOptions.MAX_ATTEMPTS_HISTORY_SIZE);
 
         final PartitionGroupReleaseStrategy.Factory partitionGroupReleaseStrategyFactory =
                 PartitionGroupReleaseStrategyFactoryLoader.loadPartitionGroupReleaseStrategyFactory(
@@ -138,6 +144,10 @@ public class DefaultExecutionGraphBuilder {
             throw new JobException("Could not create the TaskDeploymentDescriptorFactory.", e);
         }
 
+        final List<JobStatusChangedListener> jobStatusChangedListeners =
+                JobStatusChangedListenerUtils.createJobStatusChangedListeners(
+                        classLoader, jobManagerConfig, ioExecutor);
+
         // create a new execution graph, if none exists so far
         final DefaultExecutionGraph executionGraph =
                 new DefaultExecutionGraph(
@@ -160,54 +170,22 @@ public class DefaultExecutionGraphBuilder {
                         executionJobVertexFactory,
                         jobGraph.getJobStatusHooks(),
                         markPartitionFinishedStrategy,
-                        taskDeploymentDescriptorFactory);
+                        taskDeploymentDescriptorFactory,
+                        jobStatusChangedListeners,
+                        executionPlanSchedulingContext);
 
         // set the basic properties
 
         try {
-            executionGraph.setJsonPlan(JsonPlanGenerator.generatePlan(jobGraph));
+            executionGraph.setPlan(JsonPlanGenerator.generatePlan(jobGraph));
         } catch (Throwable t) {
-            log.warn("Cannot create JSON plan for job", t);
+            log.warn("Cannot create plan for job", t);
             // give the graph an empty plan
-            executionGraph.setJsonPlan("{}");
+            executionGraph.setPlan(new JobPlanInfo.Plan("", "", "", new ArrayList<>()));
         }
 
-        // initialize the vertices that have a master initialization hook
-        // file output formats create directories here, input formats create splits
-
-        final long initMasterStart = System.nanoTime();
-        log.info("Running initialization on master for job {} ({}).", jobName, jobId);
-
-        for (JobVertex vertex : jobGraph.getVertices()) {
-            String executableClass = vertex.getInvokableClassName();
-            if (executableClass == null || executableClass.isEmpty()) {
-                throw new JobSubmissionException(
-                        jobId,
-                        "The vertex "
-                                + vertex.getID()
-                                + " ("
-                                + vertex.getName()
-                                + ") has no invokable class.");
-            }
-
-            try {
-                vertex.initializeOnMaster(
-                        new SimpleInitializeOnMasterContext(
-                                classLoader,
-                                vertexParallelismStore
-                                        .getParallelismInfo(vertex.getID())
-                                        .getParallelism()));
-            } catch (Throwable t) {
-                throw new JobExecutionException(
-                        jobId,
-                        "Cannot initialize task '" + vertex.getName() + "': " + t.getMessage(),
-                        t);
-            }
-        }
-
-        log.info(
-                "Successfully ran initialization on master in {} ms.",
-                (System.nanoTime() - initMasterStart) / 1_000_000);
+        initJobVerticesOnMaster(
+                jobGraph.getVertices(), classLoader, log, vertexParallelismStore, jobName, jobId);
 
         // topologically sort the job vertices and attach the graph to the existing one
         List<JobVertex> sortedTopology = jobGraph.getVerticesSortedTopologicallyFromSources();
@@ -254,7 +232,7 @@ public class DefaultExecutionGraphBuilder {
                 rootBackend =
                         StateBackendLoader.fromApplicationOrConfigOrDefault(
                                 applicationConfiguredBackend,
-                                snapshotSettings.isChangelogStateBackendEnabled(),
+                                jobGraph.getJobConfiguration(),
                                 jobManagerConfig,
                                 classLoader,
                                 log);
@@ -287,8 +265,8 @@ public class DefaultExecutionGraphBuilder {
                 rootStorage =
                         CheckpointStorageLoader.load(
                                 applicationConfiguredStorage,
-                                null,
                                 rootBackend,
+                                jobGraph.getJobConfiguration(),
                                 jobManagerConfig,
                                 classLoader,
                                 log);
@@ -330,7 +308,6 @@ public class DefaultExecutionGraphBuilder {
 
             final CheckpointCoordinatorConfiguration chkConfig =
                     snapshotSettings.getCheckpointCoordinatorConfiguration();
-            String changelogStorage = jobManagerConfig.getString(STATE_CHANGE_LOG_STORAGE);
 
             executionGraph.enableCheckpointing(
                     chkConfig,
@@ -339,12 +316,58 @@ public class DefaultExecutionGraphBuilder {
                     completedCheckpointStore,
                     rootBackend,
                     rootStorage,
-                    checkpointStatsTrackerFactory.get(),
+                    checkpointStatsTracker,
                     checkpointsCleaner,
-                    jobManagerConfig.getString(STATE_CHANGE_LOG_STORAGE));
+                    jobManagerConfig.get(STATE_CHANGE_LOG_STORAGE));
         }
 
         return executionGraph;
+    }
+
+    public static void initJobVerticesOnMaster(
+            Iterable<JobVertex> jobVertices,
+            ClassLoader classLoader,
+            Logger log,
+            VertexParallelismStore vertexParallelismStore,
+            String jobName,
+            JobID jobId)
+            throws JobExecutionException {
+        // initialize the vertices that have a master initialization hook
+        // file output formats create directories here, input formats create splits
+
+        final long initMasterStart = System.nanoTime();
+        log.info("Running initialization on master for job {} ({}).", jobName, jobId);
+
+        for (JobVertex vertex : jobVertices) {
+            String executableClass = vertex.getInvokableClassName();
+            if (executableClass == null || executableClass.isEmpty()) {
+                throw new JobSubmissionException(
+                        jobId,
+                        "The vertex "
+                                + vertex.getID()
+                                + " ("
+                                + vertex.getName()
+                                + ") has no invokable class.");
+            }
+
+            try {
+                vertex.initializeOnMaster(
+                        new SimpleInitializeOnMasterContext(
+                                classLoader,
+                                vertexParallelismStore
+                                        .getParallelismInfo(vertex.getID())
+                                        .getParallelism()));
+            } catch (Throwable t) {
+                throw new JobExecutionException(
+                        jobId,
+                        "Cannot initialize task '" + vertex.getName() + "': " + t.getMessage(),
+                        t);
+            }
+        }
+
+        log.info(
+                "Successfully ran initialization on master in {} ms.",
+                (System.nanoTime() - initMasterStart) / 1_000_000);
     }
 
     public static boolean isCheckpointingEnabled(JobGraph jobGraph) {

@@ -23,7 +23,7 @@ import org.apache.flink.runtime.executiongraph.ExecutionGraph;
 import org.apache.flink.runtime.executiongraph.ExecutionGraphCheckpointPlanCalculatorContext;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.CheckpointCoordinatorConfiguration;
-import org.apache.flink.runtime.state.memory.MemoryStateBackend;
+import org.apache.flink.runtime.state.storage.JobManagerCheckpointStorage;
 import org.apache.flink.testutils.TestingUtils;
 import org.apache.flink.testutils.executor.TestExecutorExtension;
 import org.apache.flink.util.concurrent.Executors;
@@ -84,7 +84,7 @@ class FailoverStrategyCheckpointCoordinatorTest {
                         Collections.emptyList(),
                         new StandaloneCheckpointIDCounter(),
                         new StandaloneCompletedCheckpointStore(1),
-                        new MemoryStateBackend(),
+                        new JobManagerCheckpointStorage(),
                         Executors.directExecutor(),
                         new CheckpointsCleaner(),
                         manualThreadExecutor,
@@ -108,7 +108,8 @@ class FailoverStrategyCheckpointCoordinatorTest {
         assertThat(checkpointCoordinator.isCurrentPeriodicTriggerAvailable()).isTrue();
         // only trigger the periodic scheduling
         // we can't trigger all scheduled task, because there is also a cancellation scheduled
-        manualThreadExecutor.triggerPeriodicScheduledTasks();
+        manualThreadExecutor.triggerNonPeriodicScheduledTasks(
+                CheckpointCoordinator.ScheduledTrigger.class);
         manualThreadExecutor.triggerAll();
         assertThat(checkpointCoordinator.getNumberOfPendingCheckpoints()).isOne();
 

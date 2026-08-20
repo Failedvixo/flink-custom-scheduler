@@ -19,12 +19,19 @@
 package org.apache.flink.table.expressions;
 
 import org.apache.flink.annotation.PublicEvolving;
+import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.inference.CallContext;
+import org.apache.flink.table.types.logical.DecimalType;
+import org.apache.flink.table.types.logical.LocalZonedTimestampType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeFamily;
+import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.utils.ValueDataTypeConverter;
+import org.apache.flink.table.utils.DateTimeUtils;
+import org.apache.flink.table.utils.EncodingUtils;
+import org.apache.flink.types.ColumnList;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.StringUtils;
 
@@ -43,8 +50,10 @@ import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.Period;
 import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -220,6 +229,110 @@ public final class ValueLiteralExpression implements ResolvedExpression {
     }
 
     @Override
+    public String asSerializableString(SqlFactory sqlFactory) {
+        if (value == null && !dataType.getLogicalType().is(LogicalTypeRoot.NULL)) {
+            return String.format(
+                    "CAST(NULL AS %s)",
+                    // casting does not support nullability
+                    dataType.getLogicalType().copy(true).asSerializableString());
+        }
+        final LogicalType logicalType = dataType.getLogicalType();
+        switch (logicalType.getTypeRoot()) {
+            case TINYINT:
+                return String.format("CAST(%s AS TINYINT)", value);
+            case SMALLINT:
+                return String.format("CAST(%s AS SMALLINT)", value);
+            case BIGINT:
+                return String.format("CAST(%s AS BIGINT)", value);
+            case FLOAT:
+                return String.format("CAST(%s AS FLOAT)", value);
+            case DOUBLE:
+                return String.format("CAST(%s AS DOUBLE)", value);
+            case DECIMAL:
+                DecimalType decimalType = (DecimalType) logicalType;
+                final BigDecimal decimal = getValueAs(BigDecimal.class).get();
+                final String decimalString = decimal.toString();
+                if (decimal.precision() == decimalType.getPrecision()
+                        && decimal.scale() == decimalType.getScale()) {
+                    return decimalString;
+                } else {
+                    return String.format(
+                            "CAST(%s AS DECIMAL(%d, %d))",
+                            decimalString, decimalType.getPrecision(), decimalType.getScale());
+                }
+            case CHAR:
+            case VARCHAR:
+                return "'" + ((String) value).replace("'", "''") + "'";
+            case INTEGER:
+                return String.valueOf(value);
+            case BOOLEAN:
+            case NULL:
+                return String.valueOf(value).toUpperCase(Locale.ROOT);
+            case BINARY:
+            case VARBINARY:
+                return String.format("X'%s'", StringUtils.byteToHexString((byte[]) value));
+            case DATE:
+                return String.format("DATE '%s'", getValueAs(LocalDate.class).get());
+            case TIME_WITHOUT_TIME_ZONE:
+                final LocalTime localTime = getValueAs(LocalTime.class).get();
+                return String.format(
+                        "TIME '%s'", localTime.format(DateTimeFormatter.ISO_LOCAL_TIME));
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                final LocalDateTime localDateTime = getValueAs(LocalDateTime.class).get();
+                return String.format(
+                        "TIMESTAMP '%s %s'",
+                        localDateTime.toLocalDate(),
+                        localDateTime.toLocalTime().format(DateTimeFormatter.ISO_LOCAL_TIME));
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                return serializeTimestampLtz(
+                        getValueAs(Instant.class).get(),
+                        ((LocalZonedTimestampType) dataType.getLogicalType()).getPrecision());
+            case INTERVAL_YEAR_MONTH:
+                final Period period = getValueAs(Period.class).get().normalized();
+                return String.format(
+                        "INTERVAL '%d-%d' YEAR TO MONTH", period.getYears(), period.getMonths());
+            case INTERVAL_DAY_TIME:
+                final Duration duration = getValueAs(Duration.class).get();
+                return String.format(
+                        "INTERVAL '%d %02d:%02d:%02d.%d' DAY TO SECOND(3)",
+                        duration.toDays(),
+                        duration.toHours() % 24,
+                        duration.toMinutes() % 60,
+                        duration.getSeconds() % 60,
+                        duration.getNano() / 1_000_000);
+            case DESCRIPTOR:
+                final ColumnList columnList = getValueAs(ColumnList.class).get();
+                if (!columnList.getDataTypes().isEmpty()) {
+                    throw new TableException("Data types in DESCRIPTOR are not supported yet.");
+                }
+                return String.format(
+                        "DESCRIPTOR(%s)",
+                        columnList.getNames().stream()
+                                .map(EncodingUtils::escapeBackticks)
+                                .map(c -> String.format("`%s`", c))
+                                .collect(Collectors.joining()));
+            case ARRAY:
+            case MULTISET:
+            case MAP:
+            case ROW:
+                throw new TableException(
+                        "Constructed type literals are not SQL serializable. Please use respective"
+                                + " constructor functions");
+            case TIMESTAMP_WITH_TIME_ZONE:
+            case DISTINCT_TYPE:
+            case STRUCTURED_TYPE:
+            case RAW:
+            case SYMBOL:
+            case UNRESOLVED:
+            default:
+                throw new TableException(
+                        "Literals with "
+                                + dataType.getLogicalType()
+                                + " are not SQL serializable.");
+        }
+    }
+
+    @Override
     public List<Expression> getChildren() {
         return Collections.emptyList();
     }
@@ -314,5 +427,46 @@ public final class ValueLiteralExpression implements ResolvedExpression {
             return "'" + ((String) value).replace("'", "''") + "'";
         }
         return StringUtils.arrayAwareToString(value);
+    }
+
+    /**
+     * Serializes a TIMESTAMP_LTZ literal as a SQL string. Uses the numeric variant {@code
+     * TO_TIMESTAMP_LTZ(epoch, precision)} for readability when the value fits in a long, and falls
+     * back to the string variant for large values that would overflow.
+     */
+    private static String serializeTimestampLtz(Instant instant, int precision) {
+        String toTimestampLtzExpr;
+        if (canRepresentAsLong(instant, precision)) {
+            long epochValue = DateTimeUtils.toEpochValue(instant, precision);
+            toTimestampLtzExpr = String.format("TO_TIMESTAMP_LTZ(%d, %d)", epochValue, precision);
+        } else {
+            final LocalDateTime utcDateTime =
+                    LocalDateTime.ofInstant(instant, java.time.ZoneOffset.UTC);
+            final String formatPattern =
+                    precision > 0
+                            ? "yyyy-MM-dd HH:mm:ss." + "S".repeat(precision)
+                            : "yyyy-MM-dd HH:mm:ss";
+            final String timestampStr =
+                    utcDateTime.format(DateTimeFormatter.ofPattern(formatPattern));
+            toTimestampLtzExpr =
+                    String.format(
+                            "TO_TIMESTAMP_LTZ('%s', '%s', 'UTC')", timestampStr, formatPattern);
+        }
+        // For precision 0-2, TO_TIMESTAMP_LTZ returns TIMESTAMP_LTZ(3), so we need a CAST
+        // to match the actual data type precision.
+        if (precision < 3) {
+            return String.format("CAST(%s AS TIMESTAMP_LTZ(%d))", toTimestampLtzExpr, precision);
+        }
+        return toTimestampLtzExpr;
+    }
+
+    /**
+     * Checks whether an {@link Instant} can be represented as a {@code long} epoch value at the
+     * given precision without overflow.
+     */
+    private static boolean canRepresentAsLong(Instant instant, int precision) {
+        long factor = (long) Math.pow(10, precision);
+        long epochSeconds = instant.getEpochSecond();
+        return factor == 0 || Math.abs(epochSeconds) <= Long.MAX_VALUE / factor;
     }
 }

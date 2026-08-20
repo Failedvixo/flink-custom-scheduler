@@ -20,6 +20,7 @@ package org.apache.flink.table.types;
 
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.table.catalog.ObjectIdentifier;
+import org.apache.flink.table.legacy.types.logical.TypeInformationRawType;
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.BinaryType;
@@ -43,7 +44,6 @@ import org.apache.flink.table.types.logical.TimeType;
 import org.apache.flink.table.types.logical.TimestampKind;
 import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.table.types.logical.TinyIntType;
-import org.apache.flink.table.types.logical.TypeInformationRawType;
 import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.table.types.logical.YearMonthIntervalType;
@@ -100,12 +100,24 @@ class LogicalTypeCastAvoidanceTest {
                         new YearMonthIntervalType(
                                 YearMonthIntervalType.YearMonthResolution.YEAR_TO_MONTH, 2),
                         new YearMonthIntervalType(YearMonthIntervalType.YearMonthResolution.MONTH),
+                        true),
+                of(
+                        new YearMonthIntervalType(
+                                YearMonthIntervalType.YearMonthResolution.YEAR_TO_MONTH, 4),
+                        new YearMonthIntervalType(
+                                YearMonthIntervalType.YearMonthResolution.MONTH, 2),
                         false),
                 of(
                         new DayTimeIntervalType(
                                 DayTimeIntervalType.DayTimeResolution.DAY_TO_SECOND, 2, 6),
                         new DayTimeIntervalType(
                                 DayTimeIntervalType.DayTimeResolution.DAY_TO_SECOND, 2, 7),
+                        true),
+                of(
+                        new DayTimeIntervalType(
+                                DayTimeIntervalType.DayTimeResolution.DAY_TO_SECOND, 2, 7),
+                        new DayTimeIntervalType(
+                                DayTimeIntervalType.DayTimeResolution.DAY_TO_SECOND, 2, 6),
                         false),
                 of(new ArrayType(new TimestampType()), new ArrayType(new SmallIntType()), false),
                 of(

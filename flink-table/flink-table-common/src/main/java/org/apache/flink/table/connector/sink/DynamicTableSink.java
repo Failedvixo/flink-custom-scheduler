@@ -23,8 +23,10 @@ import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.RuntimeConverter;
+import org.apache.flink.table.connector.sink.abilities.SupportsBucketing;
 import org.apache.flink.table.connector.sink.abilities.SupportsOverwrite;
 import org.apache.flink.table.connector.sink.abilities.SupportsPartitioning;
+import org.apache.flink.table.connector.sink.abilities.SupportsTargetColumnWriting;
 import org.apache.flink.table.connector.sink.abilities.SupportsWritingMetadata;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.DataType;
@@ -66,9 +68,11 @@ import java.util.Optional;
  * <p>A {@link DynamicTableSink} can implement the following abilities:
  *
  * <ul>
+ *   <li>{@link SupportsBucketing}
  *   <li>{@link SupportsPartitioning}
  *   <li>{@link SupportsOverwrite}
  *   <li>{@link SupportsWritingMetadata}
+ *   <li>{@link SupportsTargetColumnWriting}
  * </ul>
  *
  * <p>In the last step, the planner will call {@link #getSinkRuntimeProvider(Context)} for obtaining
@@ -101,11 +105,11 @@ public interface DynamicTableSink {
      * <p>The given {@link Context} offers utilities by the planner for creating runtime
      * implementation with minimal dependencies to internal data structures.
      *
-     * <p>{@link SinkProvider} is the recommended core interface. {@code SinkFunctionProvider} in
+     * <p>{@link SinkV2Provider} is the recommended core interface. {@code SinkFunctionProvider} in
      * {@code flink-table-api-java-bridge} and {@link OutputFormatProvider} are available for
      * backwards compatibility.
      *
-     * @see SinkProvider
+     * @see SinkV2Provider
      */
     SinkRuntimeProvider getSinkRuntimeProvider(Context context);
 
@@ -186,7 +190,10 @@ public interface DynamicTableSink {
          * </ul>
          *
          * <p>Note: will always return empty for the delete statement because it has no column list.
+         *
+         * @deprecated use {@link SupportsTargetColumnWriting} instead.
          */
+        @Deprecated(since = "2.2")
         Optional<int[][]> getTargetColumns();
     }
 
@@ -215,11 +222,11 @@ public interface DynamicTableSink {
      * SinkRuntimeProvider} serves as the base interface. Concrete {@link SinkRuntimeProvider}
      * interfaces might be located in other Flink modules.
      *
-     * <p>{@link SinkProvider} is the recommended core interface. {@code SinkFunctionProvider} in
+     * <p>{@link SinkV2Provider} is the recommended core interface.{@code SinkFunctionProvider} in
      * {@code flink-table-api-java-bridge} and {@link OutputFormatProvider} are available for
      * backwards compatibility.
      *
-     * @see SinkProvider
+     * @see SinkV2Provider
      */
     @PublicEvolving
     interface SinkRuntimeProvider {

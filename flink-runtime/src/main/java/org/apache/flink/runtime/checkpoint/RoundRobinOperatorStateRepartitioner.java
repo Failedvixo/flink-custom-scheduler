@@ -19,6 +19,7 @@
 package org.apache.flink.runtime.checkpoint;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.runtime.state.OperatorStateHandle;
 import org.apache.flink.runtime.state.OperatorStreamStateHandle;
@@ -136,7 +137,8 @@ public class RoundRobinOperatorStateRepartitioner
 
     private Map<String, List<Tuple2<StreamStateHandle, OperatorStateHandle.StateMetaInfo>>>
             collectUnionStates(List<List<OperatorStateHandle>> parallelSubtaskStates) {
-        return collectStates(parallelSubtaskStates, OperatorStateHandle.Mode.UNION).entrySet()
+        return collectStates(parallelSubtaskStates, OperatorStateHandle.Mode.UNION)
+                .entrySet()
                 .stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().entries));
     }
@@ -144,7 +146,8 @@ public class RoundRobinOperatorStateRepartitioner
     private Map<String, List<Tuple2<StreamStateHandle, OperatorStateHandle.StateMetaInfo>>>
             collectPartlyFinishedBroadcastStates(
                     List<List<OperatorStateHandle>> parallelSubtaskStates) {
-        return collectStates(parallelSubtaskStates, OperatorStateHandle.Mode.BROADCAST).entrySet()
+        return collectStates(parallelSubtaskStates, OperatorStateHandle.Mode.BROADCAST)
+                .entrySet()
                 .stream()
                 .filter(e -> e.getValue().isPartiallyReported())
                 .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().entries));
@@ -486,13 +489,16 @@ public class RoundRobinOperatorStateRepartitioner
         }
     }
 
-    private static final class StateEntry {
+    @VisibleForTesting
+    static final class StateEntry {
         final List<Tuple2<StreamStateHandle, OperatorStateHandle.StateMetaInfo>> entries;
         final BitSet reportedSubtaskIndices;
+        final int parallelism;
 
         public StateEntry(int estimatedEntrySize, int parallelism) {
             this.entries = new ArrayList<>(estimatedEntrySize);
             this.reportedSubtaskIndices = new BitSet(parallelism);
+            this.parallelism = parallelism;
         }
 
         void addEntry(
@@ -504,7 +510,7 @@ public class RoundRobinOperatorStateRepartitioner
 
         boolean isPartiallyReported() {
             return reportedSubtaskIndices.cardinality() > 0
-                    && reportedSubtaskIndices.cardinality() < reportedSubtaskIndices.size();
+                    && reportedSubtaskIndices.cardinality() < parallelism;
         }
     }
 }

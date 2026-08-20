@@ -56,13 +56,13 @@ public abstract class MinAggFunction extends DeclarativeAggregateFunction {
 
     @Override
     public Expression[] initialValuesExpressions() {
-        return new Expression[] {/* min = */ nullOf(getResultType())};
+        return new Expression[] {/* min= */ nullOf(getResultType())};
     }
 
     @Override
     public Expression[] accumulateExpressions() {
         return new Expression[] {
-            /* min = */ ifThenElse(
+            /* min= */ ifThenElse(
                     isNull(operand(0)),
                     min,
                     ifThenElse(
@@ -81,7 +81,7 @@ public abstract class MinAggFunction extends DeclarativeAggregateFunction {
     @Override
     public Expression[] mergeExpressions() {
         return new Expression[] {
-            /* min = */ ifThenElse(
+            /* min= */ ifThenElse(
                     isNull(mergeOperand(min)),
                     min,
                     ifThenElse(
@@ -185,9 +185,15 @@ public abstract class MinAggFunction extends DeclarativeAggregateFunction {
 
     /** Built-in Time Min aggregate function. */
     public static class TimeMinAggFunction extends MinAggFunction {
+        private final TimeType type;
+
+        public TimeMinAggFunction(TimeType type) {
+            this.type = type;
+        }
+
         @Override
         public DataType getResultType() {
-            return DataTypes.TIME(TimeType.DEFAULT_PRECISION);
+            return DataTypes.TIME(type.getPrecision());
         }
     }
 

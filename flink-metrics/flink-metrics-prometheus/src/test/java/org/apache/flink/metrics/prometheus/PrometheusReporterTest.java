@@ -23,28 +23,29 @@ import org.apache.flink.metrics.Gauge;
 import org.apache.flink.metrics.Histogram;
 import org.apache.flink.metrics.Meter;
 import org.apache.flink.metrics.Metric;
+import org.apache.flink.metrics.MetricConfig;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.metrics.SimpleCounter;
 import org.apache.flink.metrics.util.TestHistogram;
 import org.apache.flink.metrics.util.TestMeter;
-import org.apache.flink.util.NetUtils;
+import org.apache.flink.util.PortRange;
 
-import org.apache.flink.shaded.curator5.com.google.common.collect.Iterators;
-
-import com.mashape.unirest.http.HttpResponse;
-import com.mashape.unirest.http.Unirest;
-import com.mashape.unirest.http.exceptions.UnirestException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.NoSuchElementException;
 
+import static org.apache.flink.metrics.prometheus.PrometheusPushGatewayReporterOptions.ALLOW_LIST;
+import static org.apache.flink.metrics.prometheus.PrometheusReporterFactory.ARG_PORT;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -62,6 +63,7 @@ class PrometheusReporterTest {
     private static final String DEFAULT_LABELS = "{" + DIMENSIONS + ",}";
     private static final String SCOPE_PREFIX =
             PrometheusReporter.SCOPE_PREFIX + LOGICAL_SCOPE + PrometheusReporter.SCOPE_SEPARATOR;
+    private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
 
     private static final PortRangeProvider portRangeProvider = new PortRangeProvider();
 
@@ -70,7 +72,8 @@ class PrometheusReporterTest {
 
     @BeforeEach
     void setupReporter() {
-        reporter = new PrometheusReporter(portRangeProvider.next());
+        PortRange portRange = new PortRange(portRangeProvider.nextRange());
+        reporter = new PrometheusReporter(portRange);
 
         metricGroup =
                 TestUtils.createTestMetricGroup(
@@ -88,10 +91,11 @@ class PrometheusReporterTest {
      * {@link io.prometheus.client.Counter} may not decrease, so report {@link Counter} as {@link
      * io.prometheus.client.Gauge}.
      *
-     * @throws UnirestException Might be thrown on HTTP problems.
+     * @throws IOException Might be thrown on I/O problems.
+     * @throws InterruptedException Might be thrown if the thread is interrupted.
      */
     @Test
-    void counterIsReportedAsPrometheusGauge() throws UnirestException {
+    void counterIsReportedAsPrometheusGauge() throws IOException, InterruptedException {
         Counter testCounter = new SimpleCounter();
         testCounter.inc(7);
 
@@ -99,34 +103,34 @@ class PrometheusReporterTest {
     }
 
     @Test
-    void gaugeIsReportedAsPrometheusGauge() throws UnirestException {
+    void gaugeIsReportedAsPrometheusGauge() throws IOException, InterruptedException {
         Gauge<Integer> testGauge = () -> 1;
 
         assertThatGaugeIsExported(testGauge, "testGauge", "1.0");
     }
 
     @Test
-    void nullGaugeDoesNotBreakReporter() throws UnirestException {
+    void nullGaugeDoesNotBreakReporter() throws IOException, InterruptedException {
         Gauge<Integer> testGauge = () -> null;
 
         assertThatGaugeIsExported(testGauge, "testGauge", "0.0");
     }
 
     @Test
-    void meterRateIsReportedAsPrometheusGauge() throws UnirestException {
+    void meterRateIsReportedAsPrometheusGauge() throws IOException, InterruptedException {
         Meter testMeter = new TestMeter();
 
         assertThatGaugeIsExported(testMeter, "testMeter", "5.0");
     }
 
     private void assertThatGaugeIsExported(Metric metric, String name, String expectedValue)
-            throws UnirestException {
+            throws IOException, InterruptedException {
         assertThat(addMetricAndPollResponse(metric, name))
                 .contains(createExpectedPollResponse(name, "", "gauge", expectedValue));
     }
 
     @Test
-    void histogramIsReportedAsPrometheusSummary() throws UnirestException {
+    void histogramIsReportedAsPrometheusSummary() throws IOException, InterruptedException {
         Histogram testHistogram = new TestHistogram();
 
         String histogramName = "testHistogram";
@@ -155,7 +159,8 @@ class PrometheusReporterTest {
      * name still exist.
      */
     @Test
-    void metricIsRemovedWhileOtherMetricsWithSameNameExist() throws UnirestException {
+    void metricIsRemovedWhileOtherMetricsWithSameNameExist()
+            throws IOException, InterruptedException {
         String metricName = "metric";
 
         Counter metric1 = new SimpleCounter();
@@ -171,7 +176,7 @@ class PrometheusReporterTest {
         reporter.notifyOfAddedMetric(metric2, metricName, metricGroup2);
         reporter.notifyOfRemovedMetric(metric1, metricName, metricGroup);
 
-        String response = pollMetrics(reporter.getPort()).getBody();
+        String response = pollMetrics(reporter.getPort()).body();
 
         assertThat(response).contains("some_value").doesNotContain(labelValueThatShouldBeRemoved);
     }
@@ -227,29 +232,60 @@ class PrometheusReporterTest {
 
     @Test
     void cannotStartTwoReportersOnSamePort() {
-        assertThatThrownBy(
-                        () ->
-                                new PrometheusReporter(
-                                        Collections.singleton(reporter.getPort()).iterator()))
-                .isInstanceOf(Exception.class);
+        PortRange portRange = new PortRange(reporter.getPort());
+        assertThatThrownBy(() -> new PrometheusReporter(portRange))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageMatching(
+                        "^Could not start PrometheusReporter HTTP server on any configured port. Ports: \\d+(, \\d+)*");
     }
 
     @Test
     void canStartTwoReportersWhenUsingPortRange() {
-        final Iterator<Integer> portRange =
-                Iterators.concat(
-                        Iterators.singletonIterator(reporter.getPort()), portRangeProvider.next());
+        String ports = reporter.getPort() + ", " + portRangeProvider.nextRange();
+        PortRange portRange = new PortRange(ports);
         new PrometheusReporter(portRange).close();
     }
 
-    private String addMetricAndPollResponse(Metric metric, String metricName)
-            throws UnirestException {
-        reporter.notifyOfAddedMetric(metric, metricName, metricGroup);
-        return pollMetrics(reporter.getPort()).getBody();
+    @Test
+    public void testMetricFilter() throws Exception {
+        MetricConfig metricConfig = new MetricConfig();
+        metricConfig.setProperty(ALLOW_LIST.key(), LOGICAL_SCOPE + ".metricName1");
+        metricConfig.setProperty(ARG_PORT, portRangeProvider.nextRange());
+
+        PrometheusReporterFactory prometheusReporterFactory = new PrometheusReporterFactory();
+        PrometheusReporter metricReporter =
+                prometheusReporterFactory.createMetricReporter(metricConfig);
+        metricReporter.open(metricConfig);
+
+        final Map<String, String> variables = new HashMap<>(metricGroup.getAllVariables());
+        final MetricGroup metricGroup2 = TestUtils.createTestMetricGroup(LOGICAL_SCOPE, variables);
+
+        Counter metric1 = new SimpleCounter();
+        metric1.inc(7);
+        Counter metric2 = new SimpleCounter();
+        metric2.inc(2);
+        metricReporter.notifyOfAddedMetric(metric1, "metricName1", metricGroup2);
+        metricReporter.notifyOfAddedMetric(metric2, "metricName2", metricGroup2);
+
+        String response = pollMetrics(metricReporter.getPort()).body();
+
+        assertThat(response).contains("metricName1");
+        assertThat(response).doesNotContain("metricName2");
     }
 
-    static HttpResponse<String> pollMetrics(int port) throws UnirestException {
-        return Unirest.get("http://localhost:" + port + "/metrics").asString();
+    private String addMetricAndPollResponse(Metric metric, String metricName)
+            throws IOException, InterruptedException {
+        reporter.notifyOfAddedMetric(metric, metricName, metricGroup);
+        return pollMetrics(reporter.getPort()).body();
+    }
+
+    static HttpResponse<String> pollMetrics(int port) throws IOException, InterruptedException {
+        HttpRequest request =
+                HttpRequest.newBuilder()
+                        .uri(URI.create("http://localhost:" + port + "/metrics"))
+                        .GET()
+                        .build();
+        return HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
     private static String createExpectedPollResponse(
@@ -262,28 +298,27 @@ class PrometheusReporterTest {
     }
 
     /** Utility class providing distinct port ranges. */
-    private static class PortRangeProvider implements Iterator<Iterator<Integer>> {
+    private static class PortRangeProvider {
 
         private int base = 9000;
 
-        @Override
-        public boolean hasNext() {
-            return base < 14000; // arbitrary limit that should be sufficient for test purposes
-        }
-
         /**
-         * Returns the next port range containing exactly 100 ports.
+         * Returns the next port range containing exactly 100 ports as string.
          *
          * @return next port range
          */
-        public Iterator<Integer> next() {
+        public String nextRange() {
             if (!hasNext()) {
                 throw new NoSuchElementException();
             }
             int lowEnd = base;
             int highEnd = base + 99;
             base += 100;
-            return NetUtils.getPortRangeFromString(lowEnd + "-" + highEnd);
+            return lowEnd + "-" + highEnd;
+        }
+
+        private boolean hasNext() {
+            return base < 14000; // arbitrary limit that should be sufficient for test purposes
         }
     }
 }

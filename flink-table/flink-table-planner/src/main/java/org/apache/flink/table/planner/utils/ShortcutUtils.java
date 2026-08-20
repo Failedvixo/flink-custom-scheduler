@@ -20,15 +20,18 @@ package org.apache.flink.table.planner.utils;
 
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.table.api.TableConfig;
+import org.apache.flink.table.catalog.DataTypeFactory;
 import org.apache.flink.table.delegation.Planner;
 import org.apache.flink.table.expressions.CallExpression;
 import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.functions.FunctionDefinition;
+import org.apache.flink.table.functions.FunctionKind;
 import org.apache.flink.table.planner.calcite.FlinkContext;
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
 import org.apache.flink.table.planner.delegation.PlannerBase;
 import org.apache.flink.table.planner.expressions.RexNodeExpression;
 import org.apache.flink.table.planner.functions.bridging.BridgingSqlFunction;
+import org.apache.flink.table.planner.functions.utils.TableSqlFunction;
 
 import org.apache.calcite.plan.Context;
 import org.apache.calcite.plan.RelOptCluster;
@@ -38,6 +41,7 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.sql.SqlOperator;
 import org.apache.calcite.sql.SqlOperatorBinding;
 import org.apache.calcite.tools.RelBuilder;
 
@@ -107,8 +111,16 @@ public final class ShortcutUtils {
         return unwrapContext(relOptRuleCall.getPlanner()).getTableConfig();
     }
 
+    public static TableConfig unwrapTableConfig(RelOptCluster relOptCluster) {
+        return unwrapContext(relOptCluster.getPlanner()).getTableConfig();
+    }
+
     public static ClassLoader unwrapClassLoader(RelNode relNode) {
         return unwrapContext(relNode).getClassLoader();
+    }
+
+    public static DataTypeFactory unwrapDataTypeFactory(RelBuilder relBuilder) {
+        return unwrapContext(relBuilder).getCatalogManager().getDataTypeFactory();
     }
 
     public static @Nullable FunctionDefinition unwrapFunctionDefinition(
@@ -136,9 +148,33 @@ public final class ShortcutUtils {
         }
         final RexCall call = (RexCall) rexNode;
         if (!(call.getOperator() instanceof BridgingSqlFunction)) {
+            // legacy
+            if (call.getOperator() instanceof TableSqlFunction) {
+                return ((TableSqlFunction) call.getOperator()).udtf();
+            }
             return null;
         }
         return ((BridgingSqlFunction) call.getOperator()).getDefinition();
+    }
+
+    public static @Nullable FunctionDefinition unwrapFunctionDefinition(SqlOperator operator) {
+        if (!(operator instanceof BridgingSqlFunction)) {
+            return null;
+        }
+        return ((BridgingSqlFunction) operator).getDefinition();
+    }
+
+    public static boolean isFunctionKind(SqlOperator operator, FunctionKind kind) {
+        final FunctionDefinition functionDefinition = unwrapFunctionDefinition(operator);
+        return functionDefinition != null && functionDefinition.getKind() == kind;
+    }
+
+    public static @Nullable BridgingSqlFunction unwrapBridgingSqlFunction(RexCall call) {
+        final SqlOperator operator = call.getOperator();
+        if (operator instanceof BridgingSqlFunction) {
+            return (BridgingSqlFunction) operator;
+        }
+        return null;
     }
 
     private ShortcutUtils() {

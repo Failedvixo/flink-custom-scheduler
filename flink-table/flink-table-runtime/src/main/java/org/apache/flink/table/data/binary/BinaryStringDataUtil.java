@@ -594,13 +594,16 @@ public class BinaryStringDataUtil {
         return date;
     }
 
-    public static int toTime(BinaryStringData input) throws DateTimeException {
-        Integer date = DateTimeUtils.parseTime(input.toString());
-        if (date == null) {
-            throw new DateTimeException("For input string: '" + input + "'.");
+    public static int toTime(BinaryStringData input, int precision) throws DateTimeException {
+        Integer milliSeconds = DateTimeUtils.parseTime(input.toString());
+        if (milliSeconds == null) {
+            throw new DateTimeException(
+                    "Invalid time format: '"
+                            + input
+                            + "'. "
+                            + "Expected format: HH:mm:ss[.fff] where HH is 00-23, mm is 00-59, ss is 00-59");
         }
-
-        return date;
+        return DateTimeUtils.applyTimePrecisionTruncation(milliSeconds, precision);
     }
 
     /** Used by {@code CAST(x as TIMESTAMP)}. */
@@ -961,6 +964,16 @@ public class BinaryStringDataUtil {
             return EMPTY_UTF8;
         } else {
             return str.copyBinaryString(s, str.getSizeInBytes() - 1);
+        }
+    }
+
+    public static boolean isEmpty(BinaryStringData str) {
+        // check javaObject or binarySection directly rather than call
+        // BinaryStringData#getSizeInBytes to avoid performance loss caused by materialization
+        if (str.javaObject != null) {
+            return str.javaObject.isEmpty();
+        } else {
+            return str.binarySection == null || str.binarySection.getSizeInBytes() == 0;
         }
     }
 

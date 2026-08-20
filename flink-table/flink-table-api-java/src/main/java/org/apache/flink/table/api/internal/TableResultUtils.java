@@ -18,17 +18,20 @@
 
 package org.apache.flink.table.api.internal;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.ResultKind;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.utils.print.PrintStyle;
+import org.apache.flink.table.utils.print.RowDataToStringConverter;
 import org.apache.flink.types.Row;
 
 import java.util.Arrays;
 import java.util.stream.Collectors;
 
 /** Utilities to build {@link TableResultInternal}. */
+@Internal
 public class TableResultUtils {
 
     /**
@@ -54,13 +57,13 @@ public class TableResultUtils {
                 .resultKind(ResultKind.SUCCESS_WITH_CONTENT)
                 .schema(ResolvedSchema.physical(headers, types))
                 .resultProvider(provider)
-                .setPrintStyle(
-                        PrintStyle.tableauWithDataInferredColumnWidths(
-                                schema,
-                                provider.getRowDataStringConverter(),
-                                Integer.MAX_VALUE,
-                                true,
-                                false))
+                .setPrintStyle(buildPrintStyle(schema, provider.getRowDataStringConverter()))
                 .build();
+    }
+
+    public static PrintStyle buildPrintStyle(
+            ResolvedSchema schema, RowDataToStringConverter converter) {
+        return PrintStyle.tableauWithDataInferredColumnWidths(
+                schema, converter, Integer.MAX_VALUE, true, false);
     }
 }

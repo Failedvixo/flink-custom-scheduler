@@ -28,7 +28,7 @@ under the License.
 
 Table 和 SQL API 的默认配置能够确保结果准确，同时也提供可接受的性能。
 
-根据 Table 程序的需求，可能需要调整特定的参数用于优化。例如，无界流程序可能需要保证所需的状态是有限的(请参阅 [流式概念]({{< ref "docs/dev/table/concepts/overview" >}})).
+根据 Table 程序的需求，可能需要调整特定的参数用于优化。例如，无界流程序可能需要保证所需的状态是有限的(请参阅 [流式概念]({{< ref "docs/concepts/sql-table-concepts/overview" >}})).
 
 
 
@@ -116,11 +116,15 @@ Flink SQL> SET 'table.exec.mini-batch.size' = '5000';
 {{< /tab >}}
 {{< /tabs >}}
 
+<a name="execution-options" />
+
 ### 执行配置
 
 以下选项可用于优化查询执行的性能。
 
 {{< generated/execution_config_configuration >}}
+
+<a name="optimizer-options" />
 
 ### 优化器配置
 
@@ -128,11 +132,23 @@ Flink SQL> SET 'table.exec.mini-batch.size' = '5000';
 
 {{< generated/optimizer_config_configuration >}}
 
+<a name="table-options" />
+
 ### Planner 配置
 
 以下配置可以用于调整 planner 的行为。
 
 {{< generated/table_config_configuration >}}
+
+<a name="materialized-table-options" />
+
+### Materialized Table 配置
+
+以下配置可以用于调整 Materialized Table 的行为。
+
+{{< generated/materialized_table_config_configuration >}}
+
+<a name="sql-client-options" />
 
 ### SQL Client 配置
 

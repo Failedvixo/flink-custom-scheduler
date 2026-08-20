@@ -19,7 +19,6 @@
 package org.apache.flink.runtime.rest;
 
 import org.apache.flink.annotation.VisibleForTesting;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.RestOptions;
@@ -60,9 +59,11 @@ import org.apache.flink.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.flink.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.flink.shaded.netty4.io.netty.channel.ChannelOption;
 import org.apache.flink.shaded.netty4.io.netty.channel.DefaultSelectStrategyFactory;
+import org.apache.flink.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.flink.shaded.netty4.io.netty.channel.MultiThreadIoEventLoopGroup;
 import org.apache.flink.shaded.netty4.io.netty.channel.SelectStrategyFactory;
 import org.apache.flink.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
-import org.apache.flink.shaded.netty4.io.netty.channel.nio.NioEventLoopGroup;
+import org.apache.flink.shaded.netty4.io.netty.channel.nio.NioIoHandler;
 import org.apache.flink.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import org.apache.flink.shaded.netty4.io.netty.channel.socket.nio.NioSocketChannel;
 import org.apache.flink.shaded.netty4.io.netty.handler.codec.TooLongFrameException;
@@ -90,6 +91,8 @@ import org.apache.flink.shaded.netty4.io.netty.handler.timeout.IdleStateHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -98,6 +101,7 @@ import java.net.URL;
 import java.nio.channels.spi.SelectorProvider;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -121,6 +125,8 @@ public class RestClient implements AutoCloseableAsync {
     private static final Logger LOG = LoggerFactory.getLogger(RestClient.class);
 
     private static final ObjectMapper objectMapper = RestMapperUtils.getStrictObjectMapper();
+    private static final ObjectMapper flexibleObjectMapper =
+            RestMapperUtils.getFlexibleObjectMapper();
 
     // used to open connections to a rest server endpoint
     private final Executor executor;
@@ -133,14 +139,23 @@ public class RestClient implements AutoCloseableAsync {
 
     public static final String VERSION_PLACEHOLDER = "{{VERSION}}";
 
+    @VisibleForTesting
+    static final String CLOSED_BEFORE_REQUEST_COMPLETED_MESSAGE =
+            "RestClient closed before request completed";
+
     private final String urlPrefix;
 
-    // Used to track unresolved request futures in case they need to be resolved when the client is
-    // closed
     private final Collection<CompletableFuture<Channel>> responseChannelFutures =
             ConcurrentHashMap.newKeySet();
 
+    // Unlike responseChannelFutures, which only covers the connect phase, this tracks the terminal
+    // response future for its whole lifetime so that close() can fail a request that is already
+    // in-flight (its response has not yet arrived).
+    private final Collection<CompletableFuture<?>> pendingRequestFutures =
+            ConcurrentHashMap.newKeySet();
+
     private final List<OutboundChannelHandlerFactory> outboundChannelHandlerFactories;
+    private final boolean useInternalEventLoopGroup;
 
     /**
      * Creates a new RestClient for the provided root URL. If the protocol of the URL is "https",
@@ -148,23 +163,34 @@ public class RestClient implements AutoCloseableAsync {
      */
     public static RestClient forUrl(Configuration configuration, Executor executor, URL rootUrl)
             throws ConfigurationException {
+        return forUrl(configuration, executor, rootUrl, null);
+    }
+
+    public static RestClient forUrl(
+            Configuration configuration, Executor executor, URL rootUrl, EventLoopGroup group)
+            throws ConfigurationException {
         Preconditions.checkNotNull(configuration);
         Preconditions.checkNotNull(rootUrl);
         if ("https".equals(rootUrl.getProtocol())) {
             configuration = configuration.clone();
-            configuration.setBoolean(SSL_REST_ENABLED, true);
+            configuration.set(SSL_REST_ENABLED, true);
         }
-        return new RestClient(configuration, executor, rootUrl.getHost(), rootUrl.getPort());
+        return new RestClient(configuration, executor, rootUrl.getHost(), rootUrl.getPort(), group);
     }
 
     public RestClient(Configuration configuration, Executor executor)
             throws ConfigurationException {
-        this(configuration, executor, null, -1);
+        this(configuration, executor, null, -1, null);
     }
 
-    public RestClient(Configuration configuration, Executor executor, String host, int port)
+    public RestClient(
+            Configuration configuration,
+            Executor executor,
+            String host,
+            int port,
+            EventLoopGroup group)
             throws ConfigurationException {
-        this(configuration, executor, host, port, DefaultSelectStrategyFactory.INSTANCE);
+        this(configuration, executor, host, port, DefaultSelectStrategyFactory.INSTANCE, group);
     }
 
     @VisibleForTesting
@@ -173,7 +199,7 @@ public class RestClient implements AutoCloseableAsync {
             Executor executor,
             SelectStrategyFactory selectStrategyFactory)
             throws ConfigurationException {
-        this(configuration, executor, null, -1, selectStrategyFactory);
+        this(configuration, executor, null, -1, selectStrategyFactory, null);
     }
 
     private RestClient(
@@ -181,7 +207,8 @@ public class RestClient implements AutoCloseableAsync {
             Executor executor,
             String host,
             int port,
-            SelectStrategyFactory selectStrategyFactory)
+            SelectStrategyFactory selectStrategyFactory,
+            @Nullable EventLoopGroup group)
             throws ConfigurationException {
         Preconditions.checkNotNull(configuration);
         this.executor = Preconditions.checkNotNull(executor);
@@ -262,15 +289,23 @@ public class RestClient implements AutoCloseableAsync {
                     }
                 };
 
-        // No NioEventLoopGroup constructor available that allows passing nThreads, threadFactory,
-        // and selectStrategyFactory without also passing a SelectorProvider, so mimicking its
-        // default value seen in other constructors
-        NioEventLoopGroup group =
-                new NioEventLoopGroup(
-                        1,
-                        new ExecutorThreadFactory("flink-rest-client-netty"),
-                        SelectorProvider.provider(),
-                        selectStrategyFactory);
+        if (group == null) {
+            // No NioIoHandler constructor available that allows only passing selectStrategyFactory
+            // without also passing a SelectorProvider, so mimicking its
+            // default value seen in other constructors
+            group =
+                    new MultiThreadIoEventLoopGroup(
+                            1,
+                            new ExecutorThreadFactory("flink-rest-client-netty"),
+                            NioIoHandler.newFactory(
+                                    SelectorProvider.provider(), selectStrategyFactory));
+            useInternalEventLoopGroup = true;
+        } else {
+            Preconditions.checkArgument(
+                    !group.isShuttingDown() && !group.isShutdown(),
+                    "provided eventLoopGroup is shut/shutting down");
+            useInternalEventLoopGroup = false;
+        }
 
         bootstrap = new Bootstrap();
         bootstrap
@@ -290,36 +325,41 @@ public class RestClient implements AutoCloseableAsync {
     }
 
     @VisibleForTesting
+    Collection<CompletableFuture<?>> getPendingRequestFutures() {
+        return pendingRequestFutures;
+    }
+
+    @VisibleForTesting
     List<OutboundChannelHandlerFactory> getOutboundChannelHandlerFactories() {
         return outboundChannelHandlerFactories;
     }
 
     @Override
     public CompletableFuture<Void> closeAsync() {
-        return shutdownInternally(Time.seconds(10L));
+        return shutdownInternally(Duration.ofSeconds(10L));
     }
 
-    public void shutdown(Time timeout) {
+    public void shutdown(Duration timeout) {
         final CompletableFuture<Void> shutDownFuture = shutdownInternally(timeout);
 
         try {
-            shutDownFuture.get(timeout.toMilliseconds(), TimeUnit.MILLISECONDS);
+            shutDownFuture.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
             LOG.debug("Rest endpoint shutdown complete.");
         } catch (Exception e) {
             LOG.warn("Rest endpoint shutdown failed.", e);
         }
     }
 
-    private CompletableFuture<Void> shutdownInternally(Time timeout) {
+    private CompletableFuture<Void> shutdownInternally(Duration timeout) {
         if (isRunning.compareAndSet(true, false)) {
             LOG.debug("Shutting down rest endpoint.");
 
             if (bootstrap != null) {
-                if (bootstrap.config().group() != null) {
+                if (bootstrap.config().group() != null && useInternalEventLoopGroup) {
                     bootstrap
                             .config()
                             .group()
-                            .shutdownGracefully(0L, timeout.toMilliseconds(), TimeUnit.MILLISECONDS)
+                            .shutdownGracefully(0L, timeout.toMillis(), TimeUnit.MILLISECONDS)
                             .addListener(
                                     finished -> {
                                         notifyResponseFuturesOfShutdown();
@@ -342,8 +382,14 @@ public class RestClient implements AutoCloseableAsync {
                 future ->
                         future.completeExceptionally(
                                 new IllegalStateException(
-                                        "RestClient closed before request completed")));
+                                        CLOSED_BEFORE_REQUEST_COMPLETED_MESSAGE)));
         responseChannelFutures.clear();
+        pendingRequestFutures.forEach(
+                future ->
+                        future.completeExceptionally(
+                                new IllegalStateException(
+                                        CLOSED_BEFORE_REQUEST_COMPLETED_MESSAGE)));
+        pendingRequestFutures.clear();
     }
 
     public <
@@ -591,40 +637,59 @@ public class RestClient implements AutoCloseableAsync {
                     }
                 });
 
-        return channelFuture
-                .thenComposeAsync(
-                        channel -> {
-                            ClientHandler handler = channel.pipeline().get(ClientHandler.class);
+        final CompletableFuture<P> responseFuture =
+                channelFuture
+                        .thenComposeAsync(
+                                channel -> {
+                                    ClientHandler handler =
+                                            channel.pipeline().get(ClientHandler.class);
 
-                            CompletableFuture<JsonResponse> future;
-                            boolean success = false;
+                                    CompletableFuture<JsonResponse> future;
+                                    boolean success = false;
 
-                            try {
-                                if (handler == null) {
-                                    throw new IOException(
-                                            "Netty pipeline was not properly initialized.");
-                                } else {
-                                    httpRequest.writeTo(channel);
-                                    future = handler.getJsonFuture();
-                                    success = true;
-                                }
-                            } catch (IOException e) {
-                                future =
-                                        FutureUtils.completedExceptionally(
-                                                new ConnectionException(
-                                                        "Could not write request.", e));
-                            } finally {
-                                if (!success) {
-                                    channel.close();
-                                }
-                            }
+                                    try {
+                                        if (handler == null) {
+                                            throw new IOException(
+                                                    "Netty pipeline was not properly initialized.");
+                                        } else {
+                                            httpRequest.writeTo(channel);
+                                            future = handler.getJsonFuture();
+                                            success = true;
+                                        }
+                                    } catch (IOException e) {
+                                        future =
+                                                FutureUtils.completedExceptionally(
+                                                        new ConnectionException(
+                                                                "Could not write request.", e));
+                                    } finally {
+                                        if (!success) {
+                                            channel.close();
+                                        }
+                                    }
 
-                            return future;
-                        },
-                        executor)
-                .thenComposeAsync(
-                        (JsonResponse rawResponse) -> parseResponse(rawResponse, responseType),
-                        executor);
+                                    return future;
+                                },
+                                executor)
+                        .thenComposeAsync(
+                                (JsonResponse rawResponse) ->
+                                        parseResponse(rawResponse, responseType),
+                                executor);
+
+        // Register for the whole request lifetime; deregister on completion to avoid leaking.
+        pendingRequestFutures.add(responseFuture);
+        responseFuture.whenComplete(
+                (ignored, throwable) -> pendingRequestFutures.remove(responseFuture));
+
+        // Re-check after registering to cover a close() that ran between the isRunning check at the
+        // top of this method and the registration above (such a close could not have seen this
+        // future). Only fail it if still registered, so we do not double-complete; completion is
+        // idempotent regardless.
+        if (!isRunning.get() && pendingRequestFutures.remove(responseFuture)) {
+            responseFuture.completeExceptionally(
+                    new IllegalStateException(CLOSED_BEFORE_REQUEST_COMPLETED_MESSAGE));
+        }
+
+        return responseFuture;
     }
 
     private static <P extends ResponseBody> CompletableFuture<P> parseResponse(
@@ -632,35 +697,34 @@ public class RestClient implements AutoCloseableAsync {
         CompletableFuture<P> responseFuture = new CompletableFuture<>();
         final JsonParser jsonParser = objectMapper.treeAsTokens(rawResponse.json);
         try {
-            P response = objectMapper.readValue(jsonParser, responseType);
-            responseFuture.complete(response);
-        } catch (IOException originalException) {
-            // the received response did not matched the expected response type
-
-            // lets see if it is an ErrorResponse instead
-            try {
+            // We make sure it fits to ErrorResponseBody, this condition is enforced by test in
+            // RestClientTest
+            if (rawResponse.json.size() == 1 && rawResponse.json.has("errors")) {
                 ErrorResponseBody error =
                         objectMapper.treeToValue(rawResponse.getJson(), ErrorResponseBody.class);
                 responseFuture.completeExceptionally(
                         new RestClientException(
                                 error.errors.toString(), rawResponse.getHttpResponseStatus()));
-            } catch (JsonProcessingException jpe2) {
-                // if this fails it is either the expected type or response type was wrong, most
-                // likely caused
-                // by a client/search MessageHeaders mismatch
-                LOG.error(
-                        "Received response was neither of the expected type ({}) nor an error. Response={}",
-                        responseType,
-                        rawResponse,
-                        jpe2);
-                responseFuture.completeExceptionally(
-                        new RestClientException(
-                                "Response was neither of the expected type("
-                                        + responseType
-                                        + ") nor an error.",
-                                originalException,
-                                rawResponse.getHttpResponseStatus()));
+            } else {
+                P response = flexibleObjectMapper.readValue(jsonParser, responseType);
+                responseFuture.complete(response);
             }
+        } catch (IOException ex) {
+            // if this fails it is either the expected type or response type was wrong, most
+            // likely caused
+            // by a client/search MessageHeaders mismatch
+            LOG.error(
+                    "Received response was neither of the expected type ({}) nor an error. Response={}",
+                    responseType,
+                    rawResponse,
+                    ex);
+            responseFuture.completeExceptionally(
+                    new RestClientException(
+                            "Response was neither of the expected type("
+                                    + responseType
+                                    + ") nor an error.",
+                            ex,
+                            rawResponse.getHttpResponseStatus()));
         }
         return responseFuture;
     }

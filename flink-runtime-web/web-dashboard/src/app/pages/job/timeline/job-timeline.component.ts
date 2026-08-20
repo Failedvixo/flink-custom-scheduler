@@ -42,8 +42,7 @@ import { JobLocalService } from '../job-local.service';
   templateUrl: './job-timeline.component.html',
   styleUrls: ['./job-timeline.component.less'],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NzDividerModule, NgIf],
-  standalone: true
+  imports: [NzDividerModule, NgIf]
 })
 export class JobTimelineComponent implements AfterViewInit, OnDestroy {
   public listOfVertex: VerticesItemRange[] = [];
@@ -97,7 +96,7 @@ export class JobTimelineComponent implements AfterViewInit, OnDestroy {
           range: {
             alias: 'Time',
             type: 'time',
-            mask: 'HH:mm:ss',
+            mask: 'HH:mm:ss.SSS',
             nice: false
           }
         });
@@ -155,7 +154,7 @@ export class JobTimelineComponent implements AfterViewInit, OnDestroy {
           range: {
             alias: 'Time',
             type: 'time',
-            mask: 'HH:mm:ss',
+            mask: 'HH:mm:ss.SSS',
             nice: false
           }
         });

@@ -17,8 +17,13 @@
 
 package org.apache.flink.runtime.metrics;
 
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.connector.source.ReaderOutput;
+import org.apache.flink.api.connector.source.SourceReader;
+import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.MetricOptions;
+import org.apache.flink.core.io.InputStatus;
 import org.apache.flink.core.testutils.BlockerSync;
 import org.apache.flink.core.testutils.CheckedThread;
 import org.apache.flink.metrics.Gauge;
@@ -26,11 +31,14 @@ import org.apache.flink.metrics.MetricConfig;
 import org.apache.flink.metrics.reporter.AbstractReporter;
 import org.apache.flink.metrics.reporter.MetricReporter;
 import org.apache.flink.metrics.reporter.MetricReporterFactory;
+import org.apache.flink.runtime.resourcemanager.slotmanager.FineGrainedSlotManager;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.PrintSinkFunction;
-import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.apache.flink.streaming.api.functions.sink.PrintSink;
 import org.apache.flink.test.junit5.MiniClusterExtension;
+import org.apache.flink.test.util.source.AbstractTestSource;
+import org.apache.flink.test.util.source.TestSourceReader;
+import org.apache.flink.test.util.source.TestSplit;
 import org.apache.flink.testutils.junit.extensions.ContextClassLoaderExtension;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -46,8 +54,8 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /** Integration tests for proper initialization of the job manager metrics. */
 class JobManagerMetricsITCase {
@@ -60,14 +68,14 @@ class JobManagerMetricsITCase {
 
     @RegisterExtension
     @Order(1)
-    static final ContextClassLoaderExtension CONTEXT_CLASS_LOADER_EXTENSION =
+    private static final ContextClassLoaderExtension CONTEXT_CLASS_LOADER_EXTENSION =
             ContextClassLoaderExtension.builder()
                     .withServiceEntry(MetricReporterFactory.class, TestReporter.class.getName())
                     .build();
 
     @RegisterExtension
     @Order(2)
-    static final MiniClusterExtension MINI_CLUSTER_RESOURCE =
+    private static final MiniClusterExtension MINI_CLUSTER_RESOURCE =
             new MiniClusterExtension(
                     new MiniClusterResourceConfiguration.Builder()
                             .setConfiguration(getConfiguration())
@@ -84,21 +92,11 @@ class JobManagerMetricsITCase {
                     public void go() throws Exception {
                         StreamExecutionEnvironment env =
                                 StreamExecutionEnvironment.getExecutionEnvironment();
-                        env.addSource(
-                                        new SourceFunction<String>() {
-
-                                            @Override
-                                            public void run(SourceContext<String> ctx)
-                                                    throws Exception {
-                                                sync.block();
-                                            }
-
-                                            @Override
-                                            public void cancel() {
-                                                sync.releaseBlocker();
-                                            }
-                                        })
-                                .addSink(new PrintSinkFunction());
+                        env.fromSource(
+                                        new BlockingSource(),
+                                        WatermarkStrategy.noWatermarks(),
+                                        "BlockingSourceV2")
+                                .sinkTo(new PrintSink<>());
 
                         env.execute();
                     }
@@ -110,7 +108,7 @@ class JobManagerMetricsITCase {
 
     @Test
     void testJobManagerMetrics() throws Exception {
-        assertEquals(1, TestReporter.OPENED_REPORTERS.size());
+        assertThat(TestReporter.OPENED_REPORTERS).hasSize(1);
         TestReporter reporter = TestReporter.OPENED_REPORTERS.iterator().next();
 
         List<String> expectedPatterns = getExpectedPatterns();
@@ -131,16 +129,17 @@ class JobManagerMetricsITCase {
                                 expectedPattern, gaugeNames));
             }
         }
-
+        // wait for metrics update
+        Thread.sleep(FineGrainedSlotManager.METRICS_UPDATE_INTERVAL.toMillis());
         for (Map.Entry<Gauge<?>, String> entry : reporter.getGauges().entrySet()) {
             if (entry.getValue().contains(MetricNames.TASK_SLOTS_AVAILABLE)) {
-                assertEquals(0L, entry.getKey().getValue());
+                assertThat(entry.getKey().getValue()).isEqualTo(0L);
             } else if (entry.getValue().contains(MetricNames.TASK_SLOTS_TOTAL)) {
-                assertEquals(1L, entry.getKey().getValue());
+                assertThat(entry.getKey().getValue()).isEqualTo(1L);
             } else if (entry.getValue().contains(MetricNames.NUM_REGISTERED_TASK_MANAGERS)) {
-                assertEquals(1L, entry.getKey().getValue());
+                assertThat(entry.getKey().getValue()).isEqualTo(1L);
             } else if (entry.getValue().contains(MetricNames.NUM_RUNNING_JOBS)) {
-                assertEquals(1L, entry.getKey().getValue());
+                assertThat(entry.getKey().getValue()).isEqualTo(1L);
             }
         }
 
@@ -199,6 +198,29 @@ class JobManagerMetricsITCase {
         @Override
         public MetricReporter createMetricReporter(Properties properties) {
             return this;
+        }
+    }
+
+    private static class BlockingSource extends AbstractTestSource<String> {
+        @Override
+        public SourceReader<String, TestSplit> createReader(SourceReaderContext ctx) {
+            return new TestSourceReader<String>(ctx) {
+                @Override
+                public InputStatus pollNext(ReaderOutput<String> out) {
+                    try {
+                        sync.block();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                    return InputStatus.END_OF_INPUT;
+                }
+
+                @Override
+                public void close() throws Exception {
+                    sync.releaseBlocker();
+                    super.close();
+                }
+            };
         }
     }
 }

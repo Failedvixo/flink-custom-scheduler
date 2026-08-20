@@ -19,8 +19,11 @@
 package org.apache.flink.table.planner.functions.sql;
 
 import org.apache.flink.table.api.TableException;
+import org.apache.flink.table.functions.BuiltInFunctionDefinitions;
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
 import org.apache.flink.table.planner.functions.sql.internal.SqlAuxiliaryGroupAggFunction;
+import org.apache.flink.table.planner.functions.sql.ml.SqlMLEvaluateTableFunction;
+import org.apache.flink.table.planner.functions.sql.ml.SqlVectorSearchTableFunction;
 import org.apache.flink.table.planner.plan.type.FlinkReturnTypes;
 import org.apache.flink.table.planner.plan.type.NumericExceptFirstOperandChecker;
 
@@ -36,6 +39,8 @@ import org.apache.calcite.sql.SqlOperator;
 import org.apache.calcite.sql.SqlPostfixOperator;
 import org.apache.calcite.sql.SqlPrefixOperator;
 import org.apache.calcite.sql.SqlSyntax;
+import org.apache.calcite.sql.fun.SqlBasicAggFunction;
+import org.apache.calcite.sql.fun.SqlLibraryOperators;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.type.InferTypes;
 import org.apache.calcite.sql.type.OperandTypes;
@@ -50,6 +55,7 @@ import org.apache.calcite.sql.util.ReflectiveSqlOperatorTable;
 import org.apache.calcite.sql.validate.SqlMonotonicity;
 import org.apache.calcite.sql.validate.SqlNameMatcher;
 import org.apache.calcite.sql.validate.SqlNameMatchers;
+import org.apache.calcite.util.Util;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -82,14 +88,14 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
 
             // register functions based on batch or streaming mode
             final FlinkSqlOperatorTable finalInstance = instance;
-            dynamicFunctions(isBatchMode).forEach(f -> finalInstance.register(f));
+            dynamicFunctions(isBatchMode).forEach(finalInstance::register);
             cachedInstances.put(isBatchMode, finalInstance);
         }
         return instance;
     }
 
     public static List<SqlFunction> dynamicFunctions(boolean isBatchMode) {
-        return Arrays.asList(
+        return List.of(
                 new FlinkTimestampDynamicFunction(
                         SqlStdOperatorTable.LOCALTIME.getName(), SqlTypeName.TIME, isBatchMode),
                 new FlinkTimestampDynamicFunction(
@@ -110,6 +116,7 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
                         SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE,
                         isBatchMode,
                         3) {
+
                     @Override
                     public SqlSyntax getSyntax() {
                         return SqlSyntax.FUNCTION;
@@ -142,9 +149,32 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
             SqlSyntax syntax,
             List<SqlOperator> operatorList,
             SqlNameMatcher nameMatcher) {
-        // set caseSensitive=false to make sure the behavior is same with before.
-        super.lookupOperatorOverloads(
-                opName, category, syntax, operatorList, SqlNameMatchers.withCaseSensitive(false));
+
+        final SqlNameMatcher matcher = SqlNameMatchers.withCaseSensitive(false);
+        String simpleName;
+        if (opName.names.size() > 1) {
+            if (opName.names.get(opName.names.size() - 2).equals(IS_NAME)) {
+                // per SQL99 Part 2 Section 10.4 Syntax Rule 7.b.ii.1
+                simpleName = Util.last(opName.names);
+            } else {
+                return;
+            }
+        } else {
+            simpleName = opName.getSimple();
+        }
+
+        lookUpOperators(
+                simpleName,
+                matcher.isCaseSensitive(),
+                op -> {
+                    if (op.getSyntax() == syntax) {
+                        operatorList.add(op);
+                    } else if (syntax == SqlSyntax.FUNCTION && op instanceof SqlFunction) {
+                        // this special case is needed for operators like CAST,
+                        // which are treated as functions but have special syntax
+                        operatorList.add(op);
+                    }
+                });
     }
 
     // -----------------------------------------------------------------------------
@@ -581,10 +611,7 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
                             ReturnTypes.explicit(SqlTypeName.VARCHAR, 128),
                             SqlTypeTransforms.TO_NULLABLE),
                     null,
-                    OperandTypes.sequence(
-                            "'SHA2(DATA, HASH_LENGTH)'",
-                            OperandTypes.STRING,
-                            OperandTypes.NUMERIC_INTEGER),
+                    OperandTypes.family(SqlTypeFamily.STRING, SqlTypeFamily.INTEGER),
                     SqlFunctionCategory.STRING);
 
     public static final SqlFunction DATE_FORMAT =
@@ -808,17 +835,6 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
                             OperandTypes.family(SqlTypeFamily.CHARACTER, SqlTypeFamily.CHARACTER)),
                     SqlFunctionCategory.TIMEDATE);
 
-    public static final SqlFunction TO_TIMESTAMP_LTZ =
-            new SqlFunction(
-                    "TO_TIMESTAMP_LTZ",
-                    SqlKind.OTHER_FUNCTION,
-                    ReturnTypes.cascade(
-                            ReturnTypes.explicit(SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE, 3),
-                            SqlTypeTransforms.FORCE_NULLABLE),
-                    null,
-                    OperandTypes.family(SqlTypeFamily.NUMERIC, SqlTypeFamily.INTEGER),
-                    SqlFunctionCategory.TIMEDATE);
-
     public static final SqlFunction TO_DATE =
             new SqlFunction(
                     "TO_DATE",
@@ -872,8 +888,8 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
                     "ENCODE",
                     SqlKind.OTHER_FUNCTION,
                     ReturnTypes.cascade(
-                            ReturnTypes.explicit(SqlTypeName.BINARY),
-                            SqlTypeTransforms.FORCE_NULLABLE),
+                            ReturnTypes.explicit(SqlTypeName.VARBINARY),
+                            SqlTypeTransforms.TO_NULLABLE),
                     null,
                     OperandTypes.family(SqlTypeFamily.CHARACTER, SqlTypeFamily.CHARACTER),
                     SqlFunctionCategory.STRING);
@@ -882,7 +898,9 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
             new SqlFunction(
                     "DECODE",
                     SqlKind.OTHER_FUNCTION,
-                    VARCHAR_FORCE_NULLABLE,
+                    ReturnTypes.cascade(
+                            ReturnTypes.explicit(SqlTypeName.VARCHAR),
+                            SqlTypeTransforms.TO_NULLABLE),
                     null,
                     OperandTypes.family(SqlTypeFamily.BINARY, SqlTypeFamily.CHARACTER),
                     SqlFunctionCategory.STRING);
@@ -940,7 +958,9 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
             new SqlFunction(
                     "RAND",
                     SqlKind.OTHER_FUNCTION,
-                    ReturnTypes.DOUBLE,
+                    ReturnTypes.cascade(
+                            ReturnTypes.explicit(SqlTypeName.DOUBLE),
+                            SqlTypeTransforms.TO_NULLABLE),
                     null,
                     OperandTypes.or(
                             new SqlSingleOperandTypeChecker[] {
@@ -958,7 +978,9 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
             new SqlFunction(
                     "RAND_INTEGER",
                     SqlKind.OTHER_FUNCTION,
-                    ReturnTypes.INTEGER,
+                    ReturnTypes.cascade(
+                            ReturnTypes.explicit(SqlTypeName.INTEGER),
+                            SqlTypeTransforms.TO_NULLABLE),
                     null,
                     OperandTypes.or(
                             new SqlSingleOperandTypeChecker[] {
@@ -1131,9 +1153,32 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
     public static final SqlAggFunction VARIANCE = SqlStdOperatorTable.VARIANCE;
     public static final SqlAggFunction VAR_POP = SqlStdOperatorTable.VAR_POP;
     public static final SqlAggFunction VAR_SAMP = SqlStdOperatorTable.VAR_SAMP;
+    public static final SqlAggFunction INTERNAL_WELFORD_M2 =
+            SqlBasicAggFunction.create(
+                            BuiltInFunctionDefinitions.INTERNAL_WELFORD_M2.getName(),
+                            SqlKind.OTHER_FUNCTION,
+                            ReturnTypes.DOUBLE.andThen(SqlTypeTransforms.FORCE_NULLABLE),
+                            OperandTypes.NUMERIC)
+                    .withFunctionType(SqlFunctionCategory.SYSTEM);
     public static final SqlAggFunction SINGLE_VALUE = SqlStdOperatorTable.SINGLE_VALUE;
     public static final SqlAggFunction APPROX_COUNT_DISTINCT =
             SqlStdOperatorTable.APPROX_COUNT_DISTINCT;
+
+    /**
+     * Use the definitions in Flink instead of {@link SqlLibraryOperators#ARRAY_AGG}, because we
+     * return nullable ARRAY type. Order by clause like <code>ARRAY_AGG(x ORDER BY x, y)</code> for
+     * aggregate function is not supported yet, because the row data cannot be obtained inside the
+     * aggregate function.
+     */
+    public static final SqlAggFunction ARRAY_AGG =
+            SqlBasicAggFunction.create(
+                            SqlKind.ARRAY_AGG,
+                            ReturnTypes.cascade(
+                                    ReturnTypes.TO_ARRAY, SqlTypeTransforms.TO_NULLABLE),
+                            OperandTypes.ANY)
+                    .withFunctionType(SqlFunctionCategory.SYSTEM)
+                    .withSyntax(SqlSyntax.FUNCTION)
+                    .withAllowsNullTreatment(true);
 
     // ARRAY OPERATORS
     public static final SqlOperator ARRAY_VALUE_CONSTRUCTOR = new SqlArrayConstructor();
@@ -1149,6 +1194,8 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
     // SPECIAL OPERATORS
     public static final SqlOperator MULTISET_VALUE = SqlStdOperatorTable.MULTISET_VALUE;
     public static final SqlOperator ROW = SqlStdOperatorTable.ROW;
+    public static final SqlOperator IGNORE_NULLS = SqlStdOperatorTable.IGNORE_NULLS;
+    public static final SqlOperator RESPECT_NULLS = SqlStdOperatorTable.RESPECT_NULLS;
     public static final SqlOperator OVERLAPS = SqlStdOperatorTable.OVERLAPS;
     public static final SqlOperator LITERAL_CHAIN = SqlStdOperatorTable.LITERAL_CHAIN;
     public static final SqlOperator BETWEEN = SqlStdOperatorTable.BETWEEN;
@@ -1264,14 +1311,34 @@ public class FlinkSqlOperatorTable extends ReflectiveSqlOperatorTable {
     public static final SqlPostfixOperator IS_NOT_JSON_SCALAR =
             SqlStdOperatorTable.IS_NOT_JSON_SCALAR;
 
+    // VARIANT FUNCTIONS
+    public static final SqlFunction TRY_PARSE_JSON =
+            new SqlFunction(
+                    "TRY_PARSE_JSON",
+                    SqlKind.OTHER_FUNCTION,
+                    ReturnTypes.cascade(
+                            ReturnTypes.explicit(SqlTypeName.VARIANT),
+                            SqlTypeTransforms.FORCE_NULLABLE),
+                    null,
+                    OperandTypes.or(
+                            OperandTypes.family(SqlTypeFamily.STRING),
+                            OperandTypes.family(SqlTypeFamily.STRING, SqlTypeFamily.BOOLEAN)),
+                    SqlFunctionCategory.SYSTEM);
+
     // WINDOW TABLE FUNCTIONS
     // use the definitions in Flink, because we have different return types
     // and special check on the time attribute.
-    // SESSION is not supported yet, because Calcite doesn't support PARTITION BY clause in TVF
-    public static final SqlOperator DESCRIPTOR = new SqlDescriptorOperator();
+    public static final SqlOperator DESCRIPTOR = SqlStdOperatorTable.DESCRIPTOR;
     public static final SqlFunction TUMBLE = new SqlTumbleTableFunction();
     public static final SqlFunction HOP = new SqlHopTableFunction();
     public static final SqlFunction CUMULATE = new SqlCumulateTableFunction();
+    public static final SqlFunction SESSION = new SqlSessionTableFunction();
+
+    // MODEL TABLE FUNCTIONS
+    public static final SqlFunction ML_EVALUATE = new SqlMLEvaluateTableFunction();
+
+    // SEARCH FUNCTIONS
+    public static final SqlFunction VECTOR_SEARCH = new SqlVectorSearchTableFunction();
 
     // Catalog Functions
     public static final SqlFunction CURRENT_DATABASE =

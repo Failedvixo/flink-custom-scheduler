@@ -26,7 +26,9 @@ import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
 import org.apache.flink.runtime.io.network.logger.NetworkActionsLogger;
 import org.apache.flink.runtime.io.network.partition.consumer.InputGate;
 import org.apache.flink.runtime.state.AbstractChannelStateHandle;
+import org.apache.flink.runtime.state.ChannelStateHelper;
 import org.apache.flink.runtime.state.StreamStateHandle;
+import org.apache.flink.streaming.runtime.io.recovery.RecordFilterContext;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -42,6 +44,7 @@ import java.util.stream.Stream;
 import static java.util.Comparator.comparingLong;
 import static java.util.stream.Collectors.groupingBy;
 import static java.util.stream.Collectors.toList;
+import static org.apache.flink.util.Preconditions.checkState;
 
 /** {@link SequentialChannelStateReader} implementation. */
 public class SequentialChannelStateReaderImpl implements SequentialChannelStateReader {
@@ -57,14 +60,37 @@ public class SequentialChannelStateReaderImpl implements SequentialChannelStateR
     }
 
     @Override
-    public void readInputData(InputGate[] inputGates) throws IOException, InterruptedException {
-        try (InputChannelRecoveredStateHandler stateHandler =
-                new InputChannelRecoveredStateHandler(
-                        inputGates, taskStateSnapshot.getInputRescalingDescriptor())) {
+    public void readInputData(InputGate[] inputGates, RecordFilterContext filterContext)
+            throws IOException, InterruptedException {
+
+        // Create filtering handler if filtering is needed
+        ChannelStateFilteringHandler filteringHandler =
+                filterContext.isCheckpointingDuringRecoveryEnabled()
+                        ? ChannelStateFilteringHandler.createFromContext(filterContext, inputGates)
+                        : null;
+
+        try (ChannelStateFilteringHandler ignored = filteringHandler;
+                InputChannelRecoveredStateHandler stateHandler =
+                        new InputChannelRecoveredStateHandler(
+                                inputGates,
+                                taskStateSnapshot.getInputRescalingDescriptor(),
+                                filteringHandler)) {
             read(
                     stateHandler,
                     groupByDelegate(
-                            streamSubtaskStates(), OperatorSubtaskState::getInputChannelState));
+                            streamSubtaskStates(),
+                            ChannelStateHelper::extractUnmergedInputHandles));
+            read(
+                    stateHandler,
+                    groupByDelegate(
+                            streamSubtaskStates(),
+                            OperatorSubtaskState::getUpstreamOutputBufferState));
+
+            if (filteringHandler != null) {
+                checkState(
+                        !filteringHandler.hasPartialData(),
+                        "Not all data has been fully consumed during filtering");
+            }
         }
     }
 
@@ -80,7 +106,7 @@ public class SequentialChannelStateReaderImpl implements SequentialChannelStateR
                     stateHandler,
                     groupByDelegate(
                             streamSubtaskStates(),
-                            OperatorSubtaskState::getResultSubpartitionState));
+                            ChannelStateHelper::extractUnmergedOutputHandles));
         }
     }
 

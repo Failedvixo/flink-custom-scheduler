@@ -18,20 +18,21 @@
 package org.apache.flink.table.planner.plan.nodes.physical.stream
 
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory
+import org.apache.flink.table.planner.plan.metadata.FlinkRelMetadataQuery
 import org.apache.flink.table.planner.plan.nodes.exec.{ExecNode, InputProperty}
 import org.apache.flink.table.planner.plan.nodes.exec.spec.TemporalTableSourceSpec
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLookupJoin
 import org.apache.flink.table.planner.plan.nodes.physical.common.CommonPhysicalLookupJoin
-import org.apache.flink.table.planner.plan.utils.{FlinkRexUtil, JoinTypeUtil}
-import org.apache.flink.table.planner.utils.JavaScalaConversionUtil
+import org.apache.flink.table.planner.plan.utils.{FlinkRexUtil, JoinTypeUtil, UpsertKeyUtil}
 
 import org.apache.calcite.plan.{RelOptCluster, RelOptTable, RelTraitSet}
-import org.apache.calcite.rel.RelNode
+import org.apache.calcite.rel.{RelNode, RelWriter}
 import org.apache.calcite.rel.core.{JoinInfo, JoinRelType}
 import org.apache.calcite.rel.hint.RelHint
 import org.apache.calcite.rex.RexProgram
 
 import java.util
+import java.util.Optional
 
 import scala.collection.JavaConverters._
 
@@ -45,7 +46,9 @@ class StreamPhysicalLookupJoin(
     joinInfo: JoinInfo,
     joinType: JoinRelType,
     lookupHint: Option[RelHint],
-    upsertMaterialize: Boolean)
+    upsertMaterialize: Boolean,
+    enableLookupShuffle: Boolean = false,
+    preferCustomShuffle: Boolean = false)
   extends CommonPhysicalLookupJoin(
     cluster,
     traitSet,
@@ -55,7 +58,9 @@ class StreamPhysicalLookupJoin(
     joinInfo,
     joinType,
     lookupHint,
-    upsertMaterialize)
+    upsertMaterialize,
+    enableLookupShuffle,
+    preferCustomShuffle)
   with StreamPhysicalRel {
 
   override def requireWatermark: Boolean = false
@@ -70,7 +75,9 @@ class StreamPhysicalLookupJoin(
       joinInfo,
       joinType,
       lookupHint,
-      upsertMaterialize
+      upsertMaterialize,
+      enableLookupShuffle,
+      preferCustomShuffle
     )
   }
 
@@ -84,7 +91,9 @@ class StreamPhysicalLookupJoin(
       joinInfo,
       joinType,
       lookupHint,
-      upsertMaterialize
+      upsertMaterialize,
+      enableLookupShuffle,
+      preferCustomShuffle
     )
   }
 
@@ -92,7 +101,7 @@ class StreamPhysicalLookupJoin(
     val (projectionOnTemporalTable, filterOnTemporalTable) = calcOnTemporalTable match {
       case Some(program) =>
         val (projection, filter) = FlinkRexUtil.expandRexProgram(program)
-        (JavaScalaConversionUtil.toJava(projection), filter.orNull)
+        (projection, filter.orNull)
       case _ =>
         (null, null)
     }
@@ -100,7 +109,8 @@ class StreamPhysicalLookupJoin(
     new StreamExecLookupJoin(
       tableConfig,
       JoinTypeUtil.getFlinkJoinType(joinType),
-      remainingCondition.orNull,
+      finalPreFilterCondition.orNull,
+      finalRemainingCondition.orNull,
       new TemporalTableSourceSpec(temporalTable),
       allLookupKeys.map(item => (Int.box(item._1), item._2)).asJava,
       projectionOnTemporalTable,
@@ -110,8 +120,26 @@ class StreamPhysicalLookupJoin(
       asyncOptions.orNull,
       retryOptions.orNull,
       inputChangelogMode,
+      getUpsertKey.orElse(null),
       InputProperty.DEFAULT,
       FlinkTypeFactory.toLogicalRowType(getRowType),
-      getRelDetailedDescription)
+      getRelDetailedDescription,
+      preferCustomShuffle)
+  }
+
+  override def explainTerms(pw: RelWriter): RelWriter = {
+    val upsertKey = getUpsertKey
+    super
+      .explainTerms(pw)
+      .itemIf("upsertKey", util.Arrays.toString(upsertKey.orElse(null)), upsertKey.isPresent)
+  }
+
+  private def getUpsertKey: Optional[Array[Int]] = {
+    // no need to call getUpsertKeysInKeyGroupRange here because there's no exchange before lookup
+    // join, and only add exchange inside the xxExecLookupJoin node.
+    val inputUpsertKeys = FlinkRelMetadataQuery
+      .reuseOrCreate(cluster.getMetadataQuery)
+      .getUpsertKeys(inputRel)
+    UpsertKeyUtil.smallestKey(inputUpsertKeys)
   }
 }

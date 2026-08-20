@@ -26,7 +26,6 @@ package org.apache.flink.runtime.rest.handler.legacy.files;
  * https://github.com/netty/netty/blob/4.0/example/src/main/java/io/netty/example/http/file/HttpStaticFileServerHandler.java
  * ***************************************************************************
  */
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.runtime.rest.NotFoundException;
 import org.apache.flink.runtime.rest.handler.LeaderRetrievalHandler;
 import org.apache.flink.runtime.rest.handler.RestHandlerException;
@@ -46,6 +45,7 @@ import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.DefaultFullHtt
 import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.DefaultHttpResponse;
 import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.FullHttpResponse;
 import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpChunkedInput;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpHeaderNames;
 import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpHeaderValues;
 import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpRequest;
 import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpResponse;
@@ -67,6 +67,7 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.time.Duration;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
@@ -115,7 +116,7 @@ public class StaticFileServerHandler<T extends RestfulGateway> extends LeaderRet
     private final File rootPath;
 
     public StaticFileServerHandler(
-            GatewayRetriever<? extends T> retriever, Time timeout, File rootPath)
+            GatewayRetriever<? extends T> retriever, Duration timeout, File rootPath)
             throws IOException {
 
         super(retriever, timeout, Collections.emptyMap());
@@ -307,6 +308,9 @@ public class StaticFileServerHandler<T extends RestfulGateway> extends LeaderRet
     public static void sendNotModified(ChannelHandlerContext ctx) {
         FullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1, NOT_MODIFIED);
         setDateHeader(response);
+
+        // Explicitly notify the client that the connection will be dropped
+        response.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
 
         // close the connection as soon as the error message is sent.
         ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);

@@ -18,6 +18,7 @@
 
 package org.apache.flink.table.operations.command;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.api.internal.TableResultImpl;
 import org.apache.flink.table.api.internal.TableResultInternal;
@@ -30,6 +31,7 @@ import java.io.IOException;
 import java.util.Collections;
 
 /** Operation to describe an ADD JAR statement. */
+@Internal
 public class AddJarOperation implements Operation, ExecutableOperation {
 
     private final String path;
@@ -51,7 +53,7 @@ public class AddJarOperation implements Operation, ExecutableOperation {
     public TableResultInternal execute(Context ctx) {
         ResourceUri resourceUri = new ResourceUri(ResourceType.JAR, getPath());
         try {
-            ctx.getResourceManager().registerJarResources(Collections.singletonList(resourceUri));
+            ctx.getResourceManager().registerResources(Collections.singletonList(resourceUri));
             return TableResultImpl.TABLE_RESULT_OK;
         } catch (IOException e) {
             throw new TableException(

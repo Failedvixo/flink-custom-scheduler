@@ -21,6 +21,7 @@ package org.apache.flink.state.api;
 import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.connector.sink.lib.OutputFormatSink;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
@@ -37,7 +38,6 @@ import org.apache.flink.state.api.runtime.StateBootstrapTransformationWithID;
 import org.apache.flink.state.api.runtime.metadata.SavepointMetadataV2;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.OutputFormatSinkFunction;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.Preconditions;
 
@@ -66,12 +66,6 @@ public class SavepointWriter {
     private final Map<OperatorIdentifier, OperatorIdentifier> uidTransformationMap =
             new HashMap<>();
 
-    /** @deprecated use {@link #fromExistingSavepoint(StreamExecutionEnvironment, String)} */
-    @Deprecated
-    public static SavepointWriter fromExistingSavepoint(String path) throws IOException {
-        return new SavepointWriter(readSavepointMetadata(path), null, null);
-    }
-
     /**
      * Loads an existing savepoint. Useful if you want to modify or extend the state of an existing
      * application. The savepoint will be written using the state backend defined via the clusters
@@ -88,23 +82,12 @@ public class SavepointWriter {
     }
 
     /**
-     * @deprecated use {@link #fromExistingSavepoint(StreamExecutionEnvironment, String,
-     *     StateBackend)}
-     */
-    @Deprecated
-    public static SavepointWriter fromExistingSavepoint(String path, StateBackend stateBackend)
-            throws IOException {
-        return new SavepointWriter(readSavepointMetadata(path), stateBackend, null);
-    }
-
-    /**
      * Loads an existing savepoint. Useful if you want to modify or extend the state of an existing
      * application.
      *
      * @param path The path to an existing savepoint on disk.
      * @param stateBackend The state backend of the savepoint.
      * @return A {@link SavepointWriter}.
-     * @see #fromExistingSavepoint(String)
      */
     public static SavepointWriter fromExistingSavepoint(
             StreamExecutionEnvironment executionEnvironment, String path, StateBackend stateBackend)
@@ -125,13 +108,10 @@ public class SavepointWriter {
                                                 "Savepoint must contain at least one operator state."));
 
         return new SavepointMetadataV2(
-                maxParallelism, metadata.getMasterStates(), metadata.getOperatorStates());
-    }
-
-    /** @deprecated use {@link #newSavepoint(StreamExecutionEnvironment, int)} */
-    @Deprecated
-    public static SavepointWriter newSavepoint(int maxParallelism) {
-        return new SavepointWriter(createSavepointMetadata(maxParallelism), null, null);
+                metadata.getCheckpointId(),
+                maxParallelism,
+                metadata.getMasterStates(),
+                metadata.getOperatorStates());
     }
 
     /**
@@ -146,13 +126,25 @@ public class SavepointWriter {
     public static SavepointWriter newSavepoint(
             StreamExecutionEnvironment executionEnvironment, int maxParallelism) {
         return new SavepointWriter(
-                createSavepointMetadata(maxParallelism), null, executionEnvironment);
+                createSavepointMetadata(0L, maxParallelism), null, executionEnvironment);
     }
 
-    /** @deprecated use {@link #newSavepoint(StreamExecutionEnvironment, StateBackend, int)} */
-    @Deprecated
-    public static SavepointWriter newSavepoint(StateBackend stateBackend, int maxParallelism) {
-        return new SavepointWriter(createSavepointMetadata(maxParallelism), stateBackend, null);
+    /**
+     * Creates a new savepoint. The savepoint will be written using the state backend defined via
+     * the clusters configuration.
+     *
+     * @param maxParallelism The max parallelism of the savepoint.
+     * @param checkpointId checkpoint ID.
+     * @return A {@link SavepointWriter}.
+     * @see #newSavepoint(StreamExecutionEnvironment, StateBackend, int)
+     * @see #withConfiguration(ConfigOption, Object)
+     */
+    public static SavepointWriter newSavepoint(
+            StreamExecutionEnvironment executionEnvironment,
+            long checkpointId,
+            int maxParallelism) {
+        return new SavepointWriter(
+                createSavepointMetadata(checkpointId, maxParallelism), null, executionEnvironment);
     }
 
     /**
@@ -168,10 +160,31 @@ public class SavepointWriter {
             StateBackend stateBackend,
             int maxParallelism) {
         return new SavepointWriter(
-                createSavepointMetadata(maxParallelism), stateBackend, executionEnvironment);
+                createSavepointMetadata(0L, maxParallelism), stateBackend, executionEnvironment);
     }
 
-    private static SavepointMetadataV2 createSavepointMetadata(int maxParallelism) {
+    /**
+     * Creates a new savepoint.
+     *
+     * @param stateBackend The state backend of the savepoint used for keyed state.
+     * @param checkpointId checkpoint ID.
+     * @param maxParallelism The max parallelism of the savepoint.
+     * @return A {@link SavepointWriter}.
+     * @see #newSavepoint(StreamExecutionEnvironment, int)
+     */
+    public static SavepointWriter newSavepoint(
+            StreamExecutionEnvironment executionEnvironment,
+            StateBackend stateBackend,
+            long checkpointId,
+            int maxParallelism) {
+        return new SavepointWriter(
+                createSavepointMetadata(checkpointId, maxParallelism),
+                stateBackend,
+                executionEnvironment);
+    }
+
+    private static SavepointMetadataV2 createSavepointMetadata(
+            long checkpointId, int maxParallelism) {
         Preconditions.checkArgument(
                 maxParallelism > 0 && maxParallelism <= UPPER_BOUND_MAX_PARALLELISM,
                 "Maximum parallelism must be between 1 and "
@@ -180,7 +193,7 @@ public class SavepointWriter {
                         + maxParallelism);
 
         return new SavepointMetadataV2(
-                maxParallelism, Collections.emptyList(), Collections.emptyList());
+                checkpointId, maxParallelism, Collections.emptyList(), Collections.emptyList());
     }
 
     /**
@@ -205,12 +218,6 @@ public class SavepointWriter {
         this.executionEnvironment = executionEnvironment;
     }
 
-    /** @deprecated use {@link #removeOperator(OperatorIdentifier)} */
-    @Deprecated
-    public SavepointWriter removeOperator(String uid) {
-        return removeOperator(OperatorIdentifier.forUid(uid));
-    }
-
     /**
      * Drop an existing operator from the savepoint.
      *
@@ -220,12 +227,6 @@ public class SavepointWriter {
     public SavepointWriter removeOperator(OperatorIdentifier identifier) {
         metadata.removeOperator(identifier);
         return this;
-    }
-
-    @Deprecated
-    public <T> SavepointWriter withOperator(
-            String uid, StateBootstrapTransformation<T> transformation) {
-        return withOperator(OperatorIdentifier.forUid(uid), transformation);
     }
 
     /**
@@ -313,14 +314,14 @@ public class SavepointWriter {
         Optional<DataStream<OperatorState>> newOperatorStates =
                 writeOperatorStates(newOperatorTransformations, configuration, savepointPath);
 
-        if (executionEnvironment == null && !newOperatorStates.isPresent()) {
+        if (executionEnvironment == null && newOperatorStates.isEmpty()) {
             throw new IllegalStateException(
                     "Savepoint must contain at least one operator if no execution environment was provided.");
         }
 
         List<OperatorState> existingOperators = metadata.getExistingOperators();
 
-        if (!newOperatorStates.isPresent() && existingOperators.isEmpty()) {
+        if (newOperatorStates.isEmpty() && existingOperators.isEmpty()) {
             throw new IllegalStateException(
                     "Savepoint must contain at least one operator to be created.");
         }
@@ -336,11 +337,12 @@ public class SavepointWriter {
                         "reduce(OperatorState)",
                         TypeInformation.of(CheckpointMetadata.class),
                         new GroupReduceOperator<>(
-                                new MergeOperatorStates(metadata.getMasterStates())))
+                                new MergeOperatorStates(
+                                        metadata.getCheckpointId(), metadata.getMasterStates())))
                 .forceNonParallel()
                 .map(new CheckpointMetadataCheckpointMetadataMapFunction(this.uidTransformationMap))
                 .setParallelism(1)
-                .addSink(new OutputFormatSinkFunction<>(new SavepointOutputFormat(savepointPath)))
+                .sinkTo(new OutputFormatSink<>(new SavepointOutputFormat(savepointPath)))
                 .setParallelism(1)
                 .name(path);
     }
@@ -355,14 +357,12 @@ public class SavepointWriter {
         }
 
         DataStream<OperatorState> existingOperatorStates =
-                executionEnvironment
-                        .fromCollection(existingOperators)
-                        .name("existingOperatorStates");
+                executionEnvironment.fromData(existingOperators).name("existingOperatorStates");
 
         existingOperatorStates
                 .flatMap(new StatePathExtractor())
                 .setParallelism(1)
-                .addSink(new OutputFormatSinkFunction<>(new FileCopyFunction(path)));
+                .sinkTo(new OutputFormatSink<>(new FileCopyFunction(path)));
 
         return newOperatorStates != null
                 ? newOperatorStates.union(existingOperatorStates)
@@ -379,7 +379,7 @@ public class SavepointWriter {
                                 newOperatorState
                                         .getBootstrapTransformation()
                                         .writeOperatorState(
-                                                newOperatorState.getOperatorID(),
+                                                newOperatorState.getOperatorIdentifier(),
                                                 stateBackend,
                                                 config,
                                                 metadata.getMaxParallelism(),
@@ -404,16 +404,24 @@ public class SavepointWriter {
                     value.getOperatorStates().stream()
                             .map(
                                     operatorState -> {
-                                        OperatorIdentifier operatorIdentifier =
-                                                OperatorIdentifier.forUidHash(
-                                                        operatorState
-                                                                .getOperatorID()
-                                                                .toHexString());
+                                        OperatorIdentifier operatorIdentifier;
+                                        if (operatorState.getOperatorUid().isPresent()) {
+                                            operatorIdentifier =
+                                                    OperatorIdentifier.forUid(
+                                                            operatorState.getOperatorUid().get());
+                                        } else {
+                                            operatorIdentifier =
+                                                    OperatorIdentifier.forUidHash(
+                                                            operatorState
+                                                                    .getOperatorID()
+                                                                    .toHexString());
+                                        }
 
                                         final OperatorIdentifier transformedIdentifier =
                                                 uidTransformationMap.remove(operatorIdentifier);
                                         if (transformedIdentifier != null) {
-                                            return operatorState.copyWithNewOperatorID(
+                                            return operatorState.copyWithNewIDs(
+                                                    transformedIdentifier.getUid().orElse(null),
                                                     transformedIdentifier.getOperatorId());
                                         }
                                         return operatorState;

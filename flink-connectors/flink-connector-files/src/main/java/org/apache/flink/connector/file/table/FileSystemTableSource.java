@@ -20,7 +20,6 @@ package org.apache.flink.connector.file.table;
 
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.serialization.DeserializationSchema;
-import org.apache.flink.api.java.io.CollectionInputFormat;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.connector.file.src.FileSource;
 import org.apache.flink.connector.file.src.FileSourceSplit;
@@ -30,6 +29,7 @@ import org.apache.flink.connector.file.src.enumerate.NonSplittingRecursiveEnumer
 import org.apache.flink.connector.file.src.reader.BulkFormat;
 import org.apache.flink.connector.file.table.format.BulkDecodingFormat;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.streaming.api.legacy.io.CollectionInputFormat;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.api.ValidationException;
@@ -63,7 +63,6 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.Serializable;
-import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -147,7 +146,7 @@ public class FileSystemTableSource extends AbstractFileSystemTable
         // the type without partition columns and metadata in the same order of the schema
         DataType physicalDataType = physicalRowDataType;
         final Projection partitionKeysProjections =
-                Projection.fromFieldNames(physicalDataType, partitionKeysToExtract);
+                Projection.fromFieldNames(physicalDataType, partitionKeys);
         final Projection physicalProjections =
                 (projectFields != null
                                 ? Projection.of(projectFields)
@@ -489,6 +488,14 @@ public class FileSystemTableSource extends AbstractFileSystemTable
         Object getValue(FileSourceSplit split);
     }
 
+    /**
+     * Extracts the file name in an OS-independent way as {@link java.nio.file.Paths} cannot handle
+     * Windows drive-letter URIs (e.g., file:/D:/...).
+     */
+    static String extractFileName(Path path) {
+        return path.getName();
+    }
+
     enum ReadableFileInfo implements Serializable {
         FILEPATH(
                 "file.path",
@@ -509,8 +516,7 @@ public class FileSystemTableSource extends AbstractFileSystemTable
 
                     @Override
                     public Object getValue(FileSourceSplit split) {
-                        return StringData.fromString(
-                                Paths.get(split.path().getPath()).getFileName().toString());
+                        return StringData.fromString(extractFileName(split.path()));
                     }
                 }),
         SIZE(

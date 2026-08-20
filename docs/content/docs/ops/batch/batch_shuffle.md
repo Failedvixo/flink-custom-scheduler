@@ -131,16 +131,6 @@ These could be configured via [jobmanager.partition.hybrid.partition-data-consum
 
 Hybrid shuffle supports to store the shuffle data to the remote storage. The remote storage path can be configured by [taskmanager.network.hybrid-shuffle.remote.path]({{< ref "docs/deployment/config" >}}#taskmanager-network-hybrid-shuffle-remote-path). This feature supports various remote storage systems, including OSS, HDFS, S3, etc. See [Flink Filesystem]({{< ref "docs/deployment/filesystems/overview" >}}) for more information about the Flink supported filesystems.
 
-Note: The remote storage is only supported in the new hybrid shuffle mode. For more details about the new mode, please refer to the following [The New Mode And The Legacy Mode]({{< ref "docs/ops/batch/batch_shuffle#the-new-mode-and-the-legacy-mode" >}}).
-
-### The New Mode And The Legacy Mode
-
-We have refactored the architecture of Hybrid shuffle in Flink 1.18 (new mode), to resolve some existing issues. It has several advantages compared to the original architecture (legacy mode), such as requiring less network memory and supporting remote storage.
-
-The new mode is enabled by default. To switch back to the legacy mode, set [taskmanager.network.hybrid-shuffle.enable-new-mode]({{< ref "docs/deployment/config" >}}#taskmanager-network-hybrid-shuffle-enable-new-mode) to `false`.
-
-Note: The legacy mode is deprecated and can be removed in future releases.
-
 ### Limitations
 
 Hybrid shuffle mode is still experimental and has some known limitations, which the Flink community is still working on eliminating.
@@ -189,7 +179,7 @@ Here are some exceptions you may encounter (rarely) and the corresponding soluti
 | Read buffer request timeout | This can happen only when you are using `Sort Shuffle` and it means a fierce contention of the shuffle read memory. To solve the issue, you can increase [taskmanager.memory.framework.off-heap.batch-shuffle.size]({{< ref "docs/deployment/config" >}}#taskmanager-memory-framework-off-heap-batch-shuffle-size) together with [taskmanager.memory.framework.off-heap.size]({{< ref "docs/deployment/config" >}}#taskmanager-memory-framework-off-heap-size). |
 | No space left on device | This usually means that the disk space or the inodes have been exhausted. Please consider extending the storage space or do some cleanup. |
 | Out of memory error | If you are using `Hash Shuffle`, please switch to `Sort Shuffle`. If you are already using `Sort Shuffle` and following the above guidelines, please consider increasing the corresponding memory size. For heap memory, you can increase [taskmanager.memory.task.heap.size]({{< ref "docs/deployment/config" >}}#ttaskmanager-memory-task-heap-size) and for direct memory, you can increase [taskmanager.memory.task.off-heap.size]({{< ref "docs/deployment/config" >}}#taskmanager-memory-task-off-heap-size). |
-| Container killed by external resource manger | There are several reasons which can lead to the killing of a container, for example, kill a low priority container to make room for high priority container or the container uses too many resources like memory and disk space. As mentioned in the above section, `Hash Shuffle` may use too much memory and gets killed by YARN. So if you are using `Hash Shuffle`, please switch to `Sort Shuffle`. If `Sort Shuffle` is already used, you may need to check both Flink log and the external resource manager log to find out the root cause and resolve it accordingly. |
+| Container killed by external resource manager | There are several reasons which can lead to the killing of a container, for example, kill a low priority container to make room for high priority container or the container uses too many resources like memory and disk space. As mentioned in the above section, `Hash Shuffle` may use too much memory and gets killed by YARN. So if you are using `Hash Shuffle`, please switch to `Sort Shuffle`. If `Sort Shuffle` is already used, you may need to check both Flink log and the external resource manager log to find out the root cause and resolve it accordingly. |
 
 {{< /tab >}}
 

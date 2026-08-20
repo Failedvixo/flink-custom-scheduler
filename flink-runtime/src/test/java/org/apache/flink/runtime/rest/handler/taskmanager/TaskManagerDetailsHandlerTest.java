@@ -83,8 +83,11 @@ class TaskManagerDetailsHandlerTest {
 
     @Test
     void testTaskManagerMetricsInfoExtraction()
-            throws RestHandlerException, ExecutionException, InterruptedException,
-                    JsonProcessingException, HandlerRequestException {
+            throws RestHandlerException,
+                    ExecutionException,
+                    InterruptedException,
+                    JsonProcessingException,
+                    HandlerRequestException {
         initializeMetricStore(metricFetcher.getMetricStore());
         resourceManagerGateway.setRequestTaskManagerDetailsInfoFunction(
                 taskManagerId ->
@@ -168,6 +171,7 @@ class TaskManagerDetailsHandlerTest {
                 0,
                 0,
                 0L,
+                0,
                 0,
                 0,
                 ResourceProfile.ZERO,

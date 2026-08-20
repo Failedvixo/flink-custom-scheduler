@@ -61,7 +61,10 @@ public class SerializerTestUtil {
         }
 
         TypeSerializerSchemaCompatibility<T> strategy =
-                restoredConfig.resolveSchemaCompatibility(serializerGetter.getSerializer());
+                serializerGetter
+                        .getSerializer()
+                        .snapshotConfiguration()
+                        .resolveSchemaCompatibility(restoredConfig);
         final TypeSerializer<T> restoredSerializer;
         if (strategy.isCompatibleAsIs()) {
             restoredSerializer = restoredConfig.restoreSerializer();
@@ -117,7 +120,7 @@ public class SerializerTestUtil {
         }
 
         @Override
-        public MyObj read(Kryo kryo, Input input, Class<MyObj> aClass) {
+        public MyObj read(Kryo kryo, Input input, Class<? extends MyObj> aClass) {
             int a = input.readInt() - delta;
             int b = input.readInt() - delta;
             return new MyObj(a, b);

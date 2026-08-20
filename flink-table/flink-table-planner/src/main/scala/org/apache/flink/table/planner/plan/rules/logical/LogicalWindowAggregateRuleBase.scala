@@ -120,7 +120,8 @@ abstract class LogicalWindowAggregateRuleBase(description: String)
       ) {
         builder.getRexBuilder.makeAbstractCast(
           builder.getRexBuilder.matchNullability(outAggGroupExpression0.getType, windowExpr),
-          outAggGroupExpression0)
+          outAggGroupExpression0,
+          false)
       } else {
         outAggGroupExpression0
       }
@@ -132,7 +133,7 @@ abstract class LogicalWindowAggregateRuleBase(description: String)
         case (aggCall, index) =>
           val aggCallIndex = index - agg.getGroupCount
           if (indexAndTypes.containsKey(aggCallIndex)) {
-            rexBuilder.makeCast(agg.getAggCallList.get(aggCallIndex).`type`, aggCall, true)
+            rexBuilder.makeCast(agg.getAggCallList.get(aggCallIndex).`type`, aggCall, true, false)
           } else {
             aggCall
           }
@@ -327,7 +328,7 @@ abstract class LogicalWindowAggregateRuleBase(description: String)
     if (isTimeIndicatorType(windowExpression.getType)) {
       // It's safe to simply cast the literal to time indicator type, because the window
       // expression column in group key would be projected out in the successor Project node.
-      rexBuilder.makeAbstractCast(windowExpression.getType, zeroLiteral)
+      rexBuilder.makeAbstractCast(windowExpression.getType, zeroLiteral, false)
     } else {
       zeroLiteral
     }

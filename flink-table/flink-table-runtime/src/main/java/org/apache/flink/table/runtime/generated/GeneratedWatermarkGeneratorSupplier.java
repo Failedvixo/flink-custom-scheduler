@@ -22,13 +22,15 @@ import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.eventtime.Watermark;
 import org.apache.flink.api.common.eventtime.WatermarkGeneratorSupplier;
 import org.apache.flink.api.common.eventtime.WatermarkOutput;
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.api.common.functions.DefaultOpenContext;
+import org.apache.flink.table.api.TableRuntimeException;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.watermark.WatermarkEmitStrategy;
 import org.apache.flink.table.watermark.WatermarkParams;
 
 import javax.annotation.Nullable;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -69,7 +71,7 @@ public class GeneratedWatermarkGeneratorSupplier implements WatermarkGeneratorSu
                         .newInstance(Thread.currentThread().getContextClassLoader());
 
         try {
-            innerWatermarkGenerator.open(new Configuration());
+            innerWatermarkGenerator.open(DefaultOpenContext.INSTANCE);
         } catch (Exception e) {
             throw new RuntimeException("Fail to instantiate generated watermark generator.", e);
         }
@@ -84,7 +86,8 @@ public class GeneratedWatermarkGeneratorSupplier implements WatermarkGeneratorSu
 
     /** Wrapper of the code-generated {@link WatermarkGenerator}. */
     public static class DefaultWatermarkGenerator
-            implements org.apache.flink.api.common.eventtime.WatermarkGenerator<RowData> {
+            implements org.apache.flink.api.common.eventtime.WatermarkGenerator<RowData>,
+                    Serializable {
         private static final long serialVersionUID = 1L;
 
         private final WatermarkGenerator innerWatermarkGenerator;
@@ -98,22 +101,30 @@ public class GeneratedWatermarkGeneratorSupplier implements WatermarkGeneratorSu
             this.watermarkEmitStrategy = watermarkEmitStrategy;
         }
 
+        public long extractTimestamp(RowData event) {
+            try {
+                return innerWatermarkGenerator.extractTimestamp(event);
+            } catch (Exception e) {
+                throw new TableRuntimeException(
+                        String.format(
+                                "Unable to generate an event-time timestamp for row: %s.", event),
+                        e);
+            }
+        }
+
         @Override
         public void onEvent(RowData event, long eventTimestamp, WatermarkOutput output) {
             try {
                 Long watermark = innerWatermarkGenerator.currentWatermark(event);
-                if (watermark != null) {
+                if (watermark != null && watermark > currentWatermark) {
                     currentWatermark = watermark;
                     if (watermarkEmitStrategy.isOnEvent()) {
                         output.emitWatermark(new Watermark(currentWatermark));
                     }
                 }
             } catch (Exception e) {
-                throw new RuntimeException(
-                        String.format(
-                                "Generated WatermarkGenerator fails to generate for row: %s.",
-                                event),
-                        e);
+                throw new TableRuntimeException(
+                        String.format("Unable to generate a watermark for row: %s.", event), e);
             }
         }
 

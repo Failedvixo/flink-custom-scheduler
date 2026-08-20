@@ -21,11 +21,12 @@ package org.apache.flink.runtime.operators.coordination;
 import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutorServiceAdapter;
 import org.apache.flink.runtime.messages.Acknowledge;
 import org.apache.flink.runtime.operators.coordination.EventReceivingTasks.EventWithSubtask;
+import org.apache.flink.runtime.operators.coordination.EventReceivingTasks.TestSubtaskAccess;
 import org.apache.flink.runtime.operators.coordination.util.IncompleteFuturesTracker;
 import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.Preconditions;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -36,10 +37,10 @@ import java.util.concurrent.CompletableFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit tests for the {@link SubtaskGatewayImpl}. */
-public class SubtaskGatewayImplTest {
+class SubtaskGatewayImplTest {
 
     @Test
-    public void eventsPassThroughOpenGateway() {
+    void eventsPassThroughOpenGateway() {
         final EventReceivingTasks receiver = EventReceivingTasks.createForRunningTasks();
         final SubtaskGatewayImpl gateway =
                 new SubtaskGatewayImpl(
@@ -55,7 +56,7 @@ public class SubtaskGatewayImplTest {
     }
 
     @Test
-    public void closingMarkedGateway() {
+    void closingMarkedGateway() {
         final EventReceivingTasks receiver = EventReceivingTasks.createForRunningTasks();
         final SubtaskGatewayImpl gateway =
                 new SubtaskGatewayImpl(
@@ -70,7 +71,7 @@ public class SubtaskGatewayImplTest {
     }
 
     @Test
-    public void notClosingUnmarkedGateway() {
+    void notClosingUnmarkedGateway() {
         final EventReceivingTasks receiver = EventReceivingTasks.createForRunningTasks();
         final SubtaskGatewayImpl gateway =
                 new SubtaskGatewayImpl(
@@ -84,7 +85,7 @@ public class SubtaskGatewayImplTest {
     }
 
     @Test
-    public void notClosingGatewayForOtherMark() {
+    void notClosingGatewayForOtherMark() {
         final EventReceivingTasks receiver = EventReceivingTasks.createForRunningTasks();
         final SubtaskGatewayImpl gateway =
                 new SubtaskGatewayImpl(
@@ -99,7 +100,7 @@ public class SubtaskGatewayImplTest {
     }
 
     @Test
-    public void eventsBlockedByClosedGateway() {
+    void eventsBlockedByClosedGateway() {
         final EventReceivingTasks receiver = EventReceivingTasks.createForRunningTasks();
         final SubtaskGatewayImpl gateway =
                 new SubtaskGatewayImpl(
@@ -117,7 +118,7 @@ public class SubtaskGatewayImplTest {
     }
 
     @Test
-    public void eventsReleasedAfterOpeningGateway() {
+    void eventsReleasedAfterOpeningGateway() {
         final EventReceivingTasks receiver = EventReceivingTasks.createForRunningTasks();
         final SubtaskGatewayImpl gateway0 =
                 new SubtaskGatewayImpl(
@@ -148,7 +149,7 @@ public class SubtaskGatewayImplTest {
     }
 
     @Test
-    public void releasedEventsForwardSendFailures() {
+    void releasedEventsForwardSendFailures() {
         final EventReceivingTasks receiver =
                 EventReceivingTasks.createForRunningTasksFailingRpcs(new FlinkException("test"));
         final SubtaskGatewayImpl gateway =
@@ -164,6 +165,30 @@ public class SubtaskGatewayImplTest {
         gateway.openGatewayAndUnmarkAllCheckpoint();
 
         assertThat(future).isCompletedExceptionally();
+    }
+
+    @Test
+    void optionalEventsIgnoreTaskNotRunning() {
+        final EventReceivingTasks receiver =
+                EventReceivingTasks.createForRunningTasksFailingRpcs(
+                        new FlinkException(new TaskNotRunningException("test")));
+        TestSubtaskAccess subtaskAccess =
+                (TestSubtaskAccess) getUniqueElement(receiver.getAccessesForSubtask(10));
+        final SubtaskGatewayImpl gateway =
+                new SubtaskGatewayImpl(
+                        subtaskAccess,
+                        ComponentMainThreadExecutorServiceAdapter.forMainThread(),
+                        new IncompleteFuturesTracker());
+
+        gateway.markForCheckpoint(17L);
+        gateway.tryCloseGateway(17L);
+
+        final CompletableFuture<Acknowledge> future =
+                gateway.sendEvent(new TestOperatorEvent(42, true));
+        gateway.openGatewayAndUnmarkAllCheckpoint();
+
+        assertThat(future).isCompletedExceptionally();
+        assertThat(subtaskAccess.getTaskFailoverReasons()).isEmpty();
     }
 
     private static <T> T getUniqueElement(Collection<T> collection) {

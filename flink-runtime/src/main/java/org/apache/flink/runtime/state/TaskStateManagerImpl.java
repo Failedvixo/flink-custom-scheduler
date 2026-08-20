@@ -26,9 +26,11 @@ import org.apache.flink.runtime.checkpoint.InflightDataRescalingDescriptor;
 import org.apache.flink.runtime.checkpoint.JobManagerTaskRestore;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
 import org.apache.flink.runtime.checkpoint.PrioritizedOperatorSubtaskState;
+import org.apache.flink.runtime.checkpoint.SubTaskInitializationMetrics;
 import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.checkpoint.channel.SequentialChannelStateReader;
 import org.apache.flink.runtime.checkpoint.channel.SequentialChannelStateReaderImpl;
+import org.apache.flink.runtime.checkpoint.filemerging.FileMergingSnapshotManager;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
 import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.state.changelog.ChangelogStateHandle;
@@ -77,6 +79,9 @@ public class TaskStateManagerImpl implements TaskStateManager {
     /** The local state store to which this manager reports local state snapshots. */
     private final TaskLocalStateStore localStateStore;
 
+    /** The file merging snapshot manager */
+    @Nullable private final FileMergingSnapshotManagerClosableWrapper fileMergingSnapshotManager;
+
     /** The changelog storage where the manager reads and writes the changelog */
     @Nullable private final StateChangelogStorage<?> stateChangelogStorage;
 
@@ -91,6 +96,7 @@ public class TaskStateManagerImpl implements TaskStateManager {
             @Nonnull JobID jobId,
             @Nonnull ExecutionAttemptID executionAttemptID,
             @Nonnull TaskLocalStateStore localStateStore,
+            @Nullable FileMergingSnapshotManagerClosableWrapper fileMergingSnapshotManager,
             @Nullable StateChangelogStorage<?> stateChangelogStorage,
             @Nonnull TaskExecutorStateChangelogStoragesManager changelogStoragesManager,
             @Nullable JobManagerTaskRestore jobManagerTaskRestore,
@@ -99,6 +105,7 @@ public class TaskStateManagerImpl implements TaskStateManager {
                 jobId,
                 executionAttemptID,
                 localStateStore,
+                fileMergingSnapshotManager,
                 stateChangelogStorage,
                 changelogStoragesManager,
                 jobManagerTaskRestore,
@@ -113,6 +120,7 @@ public class TaskStateManagerImpl implements TaskStateManager {
             @Nonnull JobID jobId,
             @Nonnull ExecutionAttemptID executionAttemptID,
             @Nonnull TaskLocalStateStore localStateStore,
+            @Nullable FileMergingSnapshotManagerClosableWrapper fileMergingSnapshotManager,
             @Nullable StateChangelogStorage<?> stateChangelogStorage,
             @Nonnull TaskExecutorStateChangelogStoragesManager changelogStoragesManager,
             @Nullable JobManagerTaskRestore jobManagerTaskRestore,
@@ -120,12 +128,20 @@ public class TaskStateManagerImpl implements TaskStateManager {
             @Nonnull SequentialChannelStateReaderImpl sequentialChannelStateReader) {
         this.jobId = jobId;
         this.localStateStore = localStateStore;
+        this.fileMergingSnapshotManager = fileMergingSnapshotManager;
         this.stateChangelogStorage = stateChangelogStorage;
         this.changelogStoragesManager = changelogStoragesManager;
         this.jobManagerTaskRestore = jobManagerTaskRestore;
         this.executionAttemptID = executionAttemptID;
         this.checkpointResponder = checkpointResponder;
         this.sequentialChannelStateReader = sequentialChannelStateReader;
+    }
+
+    @Override
+    public void reportInitializationMetrics(
+            SubTaskInitializationMetrics subTaskInitializationMetrics) {
+        checkpointResponder.reportInitializationMetrics(
+                jobId, executionAttemptID, subTaskInitializationMetrics);
     }
 
     @Override
@@ -238,6 +254,17 @@ public class TaskStateManagerImpl implements TaskStateManager {
         return builder.build();
     }
 
+    public Optional<OperatorSubtaskState> getSubtaskJobManagerRestoredState(OperatorID operatorID) {
+        if (jobManagerTaskRestore == null) {
+            return Optional.empty();
+        }
+        OperatorSubtaskState state =
+                jobManagerTaskRestore
+                        .getTaskStateSnapshot()
+                        .getSubtaskStateByOperatorID(operatorID);
+        return (state == null) ? Optional.empty() : Optional.of(state);
+    }
+
     @Nonnull
     @Override
     public LocalRecoveryConfig createLocalRecoveryConfig() {
@@ -270,6 +297,12 @@ public class TaskStateManagerImpl implements TaskStateManager {
         return storageView;
     }
 
+    @Nullable
+    @Override
+    public FileMergingSnapshotManager getFileMergingSnapshotManager() {
+        return fileMergingSnapshotManager == null ? null : fileMergingSnapshotManager.get();
+    }
+
     /** Tracking when local state can be confirmed and disposed. */
     @Override
     public void notifyCheckpointComplete(long checkpointId) throws Exception {
@@ -285,5 +318,8 @@ public class TaskStateManagerImpl implements TaskStateManager {
     @Override
     public void close() throws Exception {
         sequentialChannelStateReader.close();
+        if (fileMergingSnapshotManager != null) {
+            fileMergingSnapshotManager.close();
+        }
     }
 }

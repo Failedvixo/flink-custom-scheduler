@@ -42,14 +42,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test cases for the call statements for {@link SqlNodeToOperationConversion}. */
-public class SqlNodeToCallOperationTest extends SqlNodeToOperationConversionTestBase {
+class SqlNodeToCallOperationTest extends SqlNodeToOperationConversionTestBase {
 
     @BeforeEach
-    public void before() {
+    void before() {
         CatalogWithBuiltInProcedure procedureCatalog =
                 new CatalogWithBuiltInProcedure("procedure_catalog");
         catalogManager.registerCatalog("p1", procedureCatalog);
         catalogManager.setCurrentCatalog("p1");
+    }
+
+    @Test
+    void testWithNamedArguments() {
+        String sql = "call `system`.named_args(d=>'1',c=>'2')";
+        verifyCallOperation(
+                sql,
+                "CALL PROCEDURE:"
+                        + " (procedureIdentifier: [`p1`.`system`.`named_args`],"
+                        + " inputTypes: [STRING, STRING], outputTypes: [INT], arguments: [2, 1])");
     }
 
     @Test
@@ -120,7 +130,7 @@ public class SqlNodeToCallOperationTest extends SqlNodeToOperationConversionTest
                 "CALL PROCEDURE:"
                         + " (procedureIdentifier: [`p1`.`system`.`pojo_result`],"
                         + " inputTypes: [STRING, BIGINT NOT NULL],"
-                        + " outputTypes: [*org.apache.flink.table.planner.operations.SqlNodeToCallOperationTest$MyPojo<`name` STRING, `id` BIGINT NOT NULL>*],"
+                        + " outputTypes: [STRUCTURED<'org.apache.flink.table.planner.operations.SqlNodeToCallOperationTest$MyPojo', `name` STRING, `id` BIGINT NOT NULL>],"
                         + " arguments: [name, 1])");
 
         // test call the procedure with timestamp as arguments
@@ -143,9 +153,14 @@ public class SqlNodeToCallOperationTest extends SqlNodeToOperationConversionTest
 
         // should throw exception when the expression argument can't be reduced
         // to literal
-        assertThatThrownBy(() -> parse("call `system`.row_result(cast((1.2 + 2.4) as decimal))"))
+        assertThatThrownBy(
+                        () ->
+                                parse(
+                                        "call `system`.row_result(cast((1.2 + nullif(3, 2.4)) as decimal))"))
                 .hasMessageContaining(
-                        "The argument at position 0 CAST(CAST(1.2 + 2.4 AS DECIMAL) AS DECIMAL(10, 2)) for calling procedure can't be converted to literal.");
+                        "The argument at position 0 "
+                                + "CAST(CAST(1.2 + CASE WHEN 3 = 2.4 THEN NULL ELSE 3 END AS DECIMAL) AS DECIMAL(10, 2)) "
+                                + "for calling procedure can't be converted to literal.");
     }
 
     private void verifyCallOperation(String sql, String expectSummary) {
@@ -171,6 +186,8 @@ public class SqlNodeToCallOperationTest extends SqlNodeToOperationConversionTest
                     ObjectPath.fromString("system.pojo_result"), new PojoResultProcedure());
             PROCEDURE_MAP.put(
                     ObjectPath.fromString("system.timestamp_arg"), new TimeStampArgProcedure());
+            PROCEDURE_MAP.put(
+                    ObjectPath.fromString("system.named_args"), new ProcedureWithNamedArguments());
         }
 
         public CatalogWithBuiltInProcedure(String name) {
@@ -190,6 +207,17 @@ public class SqlNodeToCallOperationTest extends SqlNodeToOperationConversionTest
 
     private static class ProcedureWithPrimitiveArg implements Procedure {
         public int[] call(ProcedureContext context, int arg1, long arg2) {
+            return null;
+        }
+    }
+
+    private static class ProcedureWithNamedArguments implements Procedure {
+
+        @ProcedureHint(
+                input = {@DataTypeHint("STRING"), @DataTypeHint("STRING")},
+                output = @DataTypeHint("INT"),
+                argumentNames = {"c", "d"})
+        public int[] call(ProcedureContext context, String arg3, String arg4) {
             return null;
         }
     }

@@ -160,8 +160,7 @@ class BatchPhysicalWindowAggregateRule
     // TODO aggregate include projection now, so do not provide new trait will be safe
     val aggProvidedTraitSet = input.getTraitSet.replace(FlinkConventions.BATCH_PHYSICAL)
 
-    val inputTimeFieldIndex =
-      AggregateUtil.timeFieldIndex(input.getRowType, call.builder(), window.timeAttribute)
+    val inputTimeFieldIndex = window.timeAttribute.getFieldIndex
     val inputTimeFieldType = agg.getInput.getRowType.getFieldList.get(inputTimeFieldIndex).getType
     val inputTimeIsDate = inputTimeFieldType.getSqlTypeName == SqlTypeName.DATE
     // local-agg output order: groupSet | assignTs | auxGroupSet | aggCalls
@@ -398,7 +397,7 @@ class BatchPhysicalWindowAggregateRule
       case (udf, aggIndex) =>
         aggBufferFieldNames(aggIndex) = udf match {
           case _: AggregateFunction[_, _] =>
-            Array(aggNames(aggIndex))
+            Array(aggNames(aggIndex + auxGroupSet.length))
           case agf: DeclarativeAggregateFunction =>
             agf.aggBufferAttributes.map {
               attr =>

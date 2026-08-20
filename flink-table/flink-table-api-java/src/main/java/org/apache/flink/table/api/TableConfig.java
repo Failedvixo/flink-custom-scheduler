@@ -20,7 +20,6 @@ package org.apache.flink.table.api;
 
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.PublicEvolving;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.PipelineOptions;
@@ -50,7 +49,7 @@ import static org.apache.flink.table.api.internal.TableConfigValidation.validate
  * configuration can be set in any of the following layers (in the given order):
  *
  * <ol>
- *   <li>{@code flink-conf.yaml},
+ *   <li>{@code config.yaml},
  *   <li>CLI parameters,
  *   <li>{@code StreamExecutionEnvironment} when bridging to DataStream API,
  *   <li>{@link EnvironmentSettings.Builder#withConfiguration(Configuration)} / {@link
@@ -83,7 +82,7 @@ import static org.apache.flink.table.api.internal.TableConfigValidation.validate
  *          new Configuration()
  *              .set(CoreOptions.DEFAULT_PARALLELISM, 128)
  *              .set(PipelineOptions.AUTO_WATERMARK_INTERVAL, Duration.ofMillis(800))
- *              .set(ExecutionCheckpointingOptions.CHECKPOINTING_INTERVAL, Duration.ofSeconds(30))
+ *              .set(CheckpointingOptions.CHECKPOINTING_INTERVAL, Duration.ofSeconds(30))
  *      );
  * }</pre>
  *
@@ -97,13 +96,12 @@ import static org.apache.flink.table.api.internal.TableConfigValidation.validate
 @PublicEvolving
 public final class TableConfig implements WritableConfig, ReadableConfig {
 
-    /** Please use {@link TableConfig#getDefault()} instead. */
-    @Deprecated
-    public TableConfig() {}
+    /** Please use {@link TableConfig#getDefault()} to get the default {@link TableConfig}. */
+    private TableConfig() {}
 
     // Note to implementers:
     // TableConfig is a ReadableConfig which is built once the TableEnvironment is created and
-    // contains both the configuration defined in the execution context (flink-conf.yaml + CLI
+    // contains both the configuration defined in the execution context (config.yaml + CLI
     // params), stored in rootConfiguration, but also any extra configuration defined by the user in
     // the application, which has precedence over the execution configuration.
     //
@@ -198,6 +196,15 @@ public final class TableConfig implements WritableConfig, ReadableConfig {
         return rootConfiguration.getOptional(option);
     }
 
+    @Internal
+    @Override
+    public Map<String, String> toMap() {
+        Map<String, String> rootConfigMap = rootConfiguration.toMap();
+        Map<String, String> configMap = configuration.toMap();
+        rootConfigMap.putAll(configMap);
+        return rootConfigMap;
+    }
+
     /**
      * Gives direct access to the underlying application-specific key-value map for advanced
      * configuration.
@@ -243,7 +250,7 @@ public final class TableConfig implements WritableConfig, ReadableConfig {
      * @see org.apache.flink.table.types.logical.LocalZonedTimestampType
      */
     public ZoneId getLocalTimeZone() {
-        final String zone = configuration.getString(TableConfigOptions.LOCAL_TIME_ZONE);
+        final String zone = configuration.get(TableConfigOptions.LOCAL_TIME_ZONE);
         if (TableConfigOptions.LOCAL_TIME_ZONE.defaultValue().equals(zone)) {
             return ZoneId.systemDefault();
         }
@@ -308,7 +315,7 @@ public final class TableConfig implements WritableConfig, ReadableConfig {
         }
         validateTimeZone(zone);
 
-        configuration.setString(TableConfigOptions.LOCAL_TIME_ZONE, zone);
+        configuration.set(TableConfigOptions.LOCAL_TIME_ZONE, zone);
     }
 
     /** Returns the current configuration of Planner for Table API and SQL queries. */
@@ -333,7 +340,7 @@ public final class TableConfig implements WritableConfig, ReadableConfig {
      * more than 8K byte code.
      */
     public Integer getMaxGeneratedCodeLength() {
-        return this.configuration.getInteger(TableConfigOptions.MAX_LENGTH_GENERATED_CODE);
+        return this.configuration.get(TableConfigOptions.MAX_LENGTH_GENERATED_CODE);
     }
 
     /**
@@ -344,45 +351,8 @@ public final class TableConfig implements WritableConfig, ReadableConfig {
      * more than 8K byte code.
      */
     public void setMaxGeneratedCodeLength(Integer maxGeneratedCodeLength) {
-        this.configuration.setInteger(
+        this.configuration.set(
                 TableConfigOptions.MAX_LENGTH_GENERATED_CODE, maxGeneratedCodeLength);
-    }
-
-    /**
-     * Specifies a minimum and a maximum time interval for how long idle state, i.e., state which
-     * was not updated, will be retained. State will never be cleared until it was idle for less
-     * than the minimum time and will never be kept if it was idle for more than the maximum time.
-     *
-     * <p>When new data arrives for previously cleaned-up state, the new data will be handled as if
-     * it was the first data. This can result in previous results being overwritten.
-     *
-     * <p>Set to 0 (zero) to never clean-up the state.
-     *
-     * <p>NOTE: Cleaning up state requires additional bookkeeping which becomes less expensive for
-     * larger differences of minTime and maxTime. The difference between minTime and maxTime must be
-     * at least 5 minutes.
-     *
-     * <p>NOTE: Currently maxTime will be ignored and it will automatically derived from minTime as
-     * 1.5 x minTime.
-     *
-     * @param minTime The minimum time interval for which idle state is retained. Set to 0 (zero) to
-     *     never clean-up the state.
-     * @param maxTime The maximum time interval for which idle state is retained. Must be at least 5
-     *     minutes greater than minTime. Set to 0 (zero) to never clean-up the state.
-     * @deprecated use {@link #setIdleStateRetention(Duration)} instead.
-     */
-    @Deprecated
-    public void setIdleStateRetentionTime(Time minTime, Time maxTime) {
-        if (maxTime.toMilliseconds() - minTime.toMilliseconds() < 300000
-                && !(maxTime.toMilliseconds() == 0 && minTime.toMilliseconds() == 0)) {
-            throw new IllegalArgumentException(
-                    "Difference between minTime: "
-                            + minTime
-                            + " and maxTime: "
-                            + maxTime
-                            + " should be at least 5 minutes.");
-        }
-        setIdleStateRetention(Duration.ofMillis(minTime.toMilliseconds()));
     }
 
     /**
@@ -404,34 +374,8 @@ public final class TableConfig implements WritableConfig, ReadableConfig {
     }
 
     /**
-     * NOTE: Currently the concept of min/max idle state retention has been deprecated and only idle
-     * state retention time is supported. The min idle state retention is regarded as idle state
-     * retention and the max idle state retention is derived from idle state retention as 1.5 x idle
-     * state retention.
-     *
-     * @return The minimum time until state which was not updated will be retained.
-     * @deprecated use{@link getIdleStateRetention} instead.
+     * @return The duration until state which was not updated will be retained.
      */
-    @Deprecated
-    public long getMinIdleStateRetentionTime() {
-        return configuration.get(ExecutionConfigOptions.IDLE_STATE_RETENTION).toMillis();
-    }
-
-    /**
-     * NOTE: Currently the concept of min/max idle state retention has been deprecated and only idle
-     * state retention time is supported. The min idle state retention is regarded as idle state
-     * retention and the max idle state retention is derived from idle state retention as 1.5 x idle
-     * state retention.
-     *
-     * @return The maximum time until state which was not updated will be retained.
-     * @deprecated use{@link getIdleStateRetention} instead.
-     */
-    @Deprecated
-    public long getMaxIdleStateRetentionTime() {
-        return getMinIdleStateRetentionTime() * 3 / 2;
-    }
-
-    /** @return The duration until state which was not updated will be retained. */
     public Duration getIdleStateRetention() {
         return configuration.get(ExecutionConfigOptions.IDLE_STATE_RETENTION);
     }

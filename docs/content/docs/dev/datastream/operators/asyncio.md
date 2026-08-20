@@ -46,7 +46,7 @@ makes up the vast majority of the function's time.
 
 Asynchronous interaction with the database means that a single parallel function instance can handle many requests concurrently and
 receive the responses concurrently. That way, the waiting time can be overlaid with sending other requests and
-receiving responses. At the very least, the waiting time is amortized over multiple requests. This leads in most cased to much higher
+receiving responses. At the very least, the waiting time is amortized over multiple requests. This leads in most cases to much higher
 streaming throughput.
 
 {{< img src="/fig/async_io.svg" width="50%" >}}
@@ -69,19 +69,20 @@ efficient than a proper asynchronous client.
 ## Async I/O API
 
 Flink's Async I/O API allows users to use asynchronous request clients with data streams. The API handles the integration with
-data streams, well as handling order, event time, fault tolerance, retry support, etc.
+data streams, as well as handling order, event time, fault tolerance, retry support, etc.
 
 Assuming one has an asynchronous client for the target database, three parts are needed to implement a stream transformation
 with asynchronous I/O against the database:
 
   - An implementation of `AsyncFunction` that dispatches the requests
-  - A *callback* that takes the result of the operation and hands it to the `ResultFuture`
+  - A *callback* that takes the result of the operation and hands it to the `ResultFuture` in Java API or await the result of the operation in Python API
   - Applying the async I/O operation on a DataStream as a transformation with or without retry
 
 The following code example illustrates the basic pattern:
 
-{{< tabs "78d60118-0274-4729-97a0-158694683685" >}}
+{{< tabs "6c8c009c-4c12-4338-9eeb-3be83cfa9e36" >}}
 {{< tab "Java" >}}
+
 ```java
 // This example implements the asynchronous request and callback with Futures that have the
 // interface of Java 8's futures (which is the same one followed by Flink's Future)
@@ -95,7 +96,7 @@ class AsyncDatabaseRequest extends RichAsyncFunction<String, Tuple2<String, Stri
     private transient DatabaseClient client;
 
     @Override
-    public void open(Configuration parameters) throws Exception {
+    public void open(OpenContext openContext) throws Exception {
         client = new DatabaseClient(host, post, credentials);
     }
 
@@ -148,82 +149,104 @@ AsyncRetryStrategy asyncRetryStrategy =
 DataStream<Tuple2<String, String>> resultStream =
 	AsyncDataStream.unorderedWaitWithRetry(stream, new AsyncDatabaseRequest(), 1000, TimeUnit.MILLISECONDS, 100, asyncRetryStrategy);
 ```
+
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-/**
- * An implementation of the 'AsyncFunction' that sends requests and sets the callback.
- */
-class AsyncDatabaseRequest extends AsyncFunction[String, (String, String)] {
+{{< tab "Python" >}}
 
-    /** The database specific client that can issue concurrent requests with callbacks */
-    lazy val client: DatabaseClient = new DatabaseClient(host, post, credentials)
+```python
+from typing import List
 
-    /** The context used for the future callbacks */
-    implicit lazy val executor: ExecutionContext = ExecutionContext.fromExecutor(Executors.directExecutor())
+from pyflink.common import Time, Types
+from pyflink.datastream import AsyncFunction, AsyncDataStream, async_retry_predicates
+from pyflink.datastream.functions import RuntimeContext, AsyncRetryStrategy
 
 
-    override def asyncInvoke(str: String, resultFuture: ResultFuture[(String, String)]): Unit = {
+class AsyncDatabaseRequest(AsyncFunction[str, (str, str)]):
 
-        // issue the asynchronous request, receive a future for the result
-        val resultFutureRequested: Future[String] = client.query(str)
+    def __init__(self, host, port, credentials):
+        self._host = host
+        self._port = port
+        self._credentials = credentials
 
-        // set the callback to be executed once the request by the client is complete
-        // the callback simply forwards the result to the result future
-        resultFutureRequested.onSuccess {
-            case result: String => resultFuture.complete(Iterable((str, result)))
-        }
-    }
-}
+    def open(self, runtime_context: RuntimeContext):
+        # The database specific client that can issue concurrent requests with callbacks
+        self._client = DatabaseClient(self._host, self._port, self._credentials)
 
-// create the original stream
-val stream: DataStream[String] = ...
+    def close(self):
+        if self._client:
+            self._client.close()
 
-// apply the async I/O transformation without retry
-val resultStream: DataStream[(String, String)] =
-    AsyncDataStream.unorderedWait(stream, new AsyncDatabaseRequest(), 1000, TimeUnit.MILLISECONDS, 100)
+    async def async_invoke(self, value: str) -> List[(str, str)]:
+        try:
+            # issue the asynchronous request
+            result = await self._client.query(value)
+            return [(value, str(result))]
+        except Exception:
+            return [(value, None)]
 
-// apply the async I/O transformation with retry
-// create an AsyncRetryStrategy
-val asyncRetryStrategy: AsyncRetryStrategy[String] =
-  new AsyncRetryStrategies.FixedDelayRetryStrategyBuilder(3, 100L) // maxAttempts=3, fixedDelay=100ms
-    .ifResult(RetryPredicates.EMPTY_RESULT_PREDICATE)
-    .ifException(RetryPredicates.HAS_EXCEPTION_PREDICATE)
-    .build();
 
-// apply the async I/O transformation with retry
-val resultStream: DataStream[(String, String)] =
-  AsyncDataStream.unorderedWaitWithRetry(stream, new AsyncDatabaseRequest(), 1000, TimeUnit.MILLISECONDS, 100, asyncRetryStrategy)
+# create the original stream
+stream = ...
 
+# apply the async I/O transformation without retry
+result_stream = AsyncDataStream.unordered_wait(
+    data_stream=stream,
+    async_function=AsyncDatabaseRequest("127.0.0.1", "1234", None),
+    timeout=Time.seconds(10),
+    capacity=100,
+    output_type=Types.TUPLE([Types.STRING(), Types.STRING()]))
+
+# or apply the async I/O transformation with retry
+# create an async retry strategy via utility class or a user defined strategy
+async_retry_strategy = AsyncRetryStrategy.fixed_delay(
+    max_attempts=3,
+    backoff_time_millis=100,
+    result_predicate=async_retry_predicates.empty_result_predicate,
+    exception_predicate=async_retry_predicates.has_exception_predicate)
+
+# apply the async I/O transformation with retry
+result_stream_with_retry = AsyncDataStream.unordered_wait_with_retry(
+    data_stream=stream,
+    async_function=AsyncDatabaseRequest("127.0.0.1", "1234", None),
+    timeout=Time.seconds(10),
+    async_retry_strategy=async_retry_strategy,
+    capacity=1000,
+    output_type=Types.TUPLE([Types.STRING(), Types.STRING()]))
 ```
+
 {{< /tab >}}
 {{< /tabs >}}
 
-**Important note**: The `ResultFuture` is completed with the first call of `ResultFuture.complete`.
+**Important note**: The `ResultFuture` is completed with the first call of `ResultFuture.complete` in the Java API.
 All subsequent `complete` calls will be ignored.
 
 The following three parameters control the asynchronous operations:
 
-  - **Timeout**: The timeout defines how long an asynchronous operation take before it is finally considered failed,
-    may include multiple retry requests if retry enabled. This parameter guards against dead/failed requests.
+  - **Timeout**: The timeout defines the maximum duration from the first invocation to the final completion of an asynchronous operation,
+    This duration may include multiple retry attempts (if retries are enabled) and determines when the operation is ultimately considered complete.
+    This parameter guards against dead/failed requests.
 
-  - **Capacity**: This parameter defines how many asynchronous requests may be in progress at the same time.
+  - **Capacity**: This parameter defines how many asynchronous requests may be in progress per parallel instance (subtask) of the async operator at the same time.
     Even though the async I/O approach leads typically to much better throughput, the operator can still be the bottleneck in
     the streaming application. Limiting the number of concurrent requests ensures that the operator will not
     accumulate an ever-growing backlog of pending requests, but that it will trigger backpressure once the capacity
     is exhausted.
 
-  - **AsyncRetryStrategy**: The asyncRetryStrategy defines what conditions will trigger a delayed retry and the delay strategy,
+  - **AsyncRetryStrategy**: This parameter defines what conditions will trigger a delayed retry and the delay strategy,
     e.g., fixed-delay, exponential-backoff-delay, custom implementation, etc.
 
 ### Timeout Handling
 
 When an async I/O request times out, by default an exception is thrown and job is restarted.
 If you want to handle timeouts, you can override the `AsyncFunction#timeout` method.
-Make sure you call `ResultFuture.complete()` or `ResultFuture.completeExceptionally()` when overriding
+
+In the Java API, make sure you call `ResultFuture.complete()` or `ResultFuture.completeExceptionally()` when overriding
 in order to indicate to Flink that the processing of this input record has completed. You can call 
 `ResultFuture.complete(Collections.emptyList())` if you do not want to emit any record when timeouts happen.
 
+In the Python API, you can return a collection of results or raise an exception when overriding
+in order to indicate to Flink that the processing of this input record has completed. You can return
+empty list by calling `return []` if you do not want to emit any record when timeouts happen.
 
 ### Order of Results
 
@@ -233,14 +256,14 @@ To control in which order the resulting records are emitted, Flink offers two mo
   - **Unordered**: Result records are emitted as soon as the asynchronous request finishes.
     The order of the records in the stream is different after the async I/O operator than before.
     This mode has the lowest latency and lowest overhead, when used with *processing time* as the basic time characteristic.
-    Use `AsyncDataStream.unorderedWait(...)` for this mode.
+    Use `AsyncDataStream.unorderedWait(...)` or `AsyncDataStream.unordered_wait(...)` for this mode.
 
   - **Ordered**: In that case, the stream order is preserved. Result records are emitted in the same order as the asynchronous
     requests are triggered (the order of the operators input records). To achieve that, the operator buffers a result record
     until all its preceding records are emitted (or timed out).
     This usually introduces some amount of extra latency and some overhead in checkpointing, because records or results are maintained
     in the checkpointed state for a longer time, compared to the unordered mode.
-    Use `AsyncDataStream.orderedWait(...)` for this mode.
+    Use `AsyncDataStream.orderedWait(...)` or `AsyncDataStream.ordered_wait(...)` for this mode.
 
 
 ### Event Time
@@ -283,7 +306,7 @@ The retry support introduces a built-in mechanism for async operator which being
 
 ### Implementation Tips
 
-For implementations with *Futures* that have an *Executor* (or *ExecutionContext* in Scala) for callbacks, we suggest using a `DirectExecutor`, because the
+For implementations with *Futures* that have an *Executor* for callbacks, we suggest using a `DirectExecutor`, because the
 callback typically does minimal work, and a `DirectExecutor` avoids an additional thread-to-thread handover overhead. The callback typically only hands
 the result to the `ResultFuture`, which adds it to the output buffer. From there, the heavy logic that includes record emission and interaction
 with the checkpoint bookkeeping happens in a dedicated thread-pool anyways.
@@ -291,6 +314,7 @@ with the checkpoint bookkeeping happens in a dedicated thread-pool anyways.
 A `DirectExecutor` can be obtained via `org.apache.flink.util.concurrent.Executors.directExecutor()` or
 `com.google.common.util.concurrent.MoreExecutors.directExecutor()`.
 
+**NOTE:** This only applies for the Java API. In the Python API, you could just await the asynchronous result.
 
 ### Caveats
 

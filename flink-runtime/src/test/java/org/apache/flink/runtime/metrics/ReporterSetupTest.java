@@ -24,28 +24,21 @@ import org.apache.flink.configuration.MetricOptions;
 import org.apache.flink.metrics.MetricConfig;
 import org.apache.flink.metrics.reporter.MetricReporter;
 import org.apache.flink.metrics.reporter.MetricReporterFactory;
+import org.apache.flink.runtime.metrics.filter.DefaultReporterFilters;
 import org.apache.flink.runtime.metrics.scope.ScopeFormat;
 import org.apache.flink.runtime.metrics.util.TestReporter;
 import org.apache.flink.testutils.junit.extensions.ContextClassLoaderExtension;
-import org.apache.flink.util.TestLoggerExtension;
 
-import org.junit.Assert;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.Properties;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.collection.IsMapContaining.hasEntry;
-import static org.hamcrest.core.IsCollectionContaining.hasItems;
-import static org.hamcrest.core.IsInstanceOf.instanceOf;
-import static org.junit.Assert.assertEquals;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for the {@link ReporterSetup}. */
-@ExtendWith(TestLoggerExtension.class)
 class ReporterSetupTest {
 
     @RegisterExtension
@@ -76,9 +69,11 @@ class ReporterSetupTest {
 
         configureReporter1(config);
 
-        final List<ReporterSetup> reporterSetups = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterSetup> reporterSetups =
+                ReporterSetupBuilder.METRIC_SETUP_BUILDER.fromConfiguration(
+                        config, DefaultReporterFilters::metricsFromConfiguration, null);
 
-        Assert.assertEquals(1, reporterSetups.size());
+        assertThat(reporterSetups).hasSize(1);
 
         final ReporterSetup reporterSetup = reporterSetups.get(0);
         assertReporter1Configured(reporterSetup);
@@ -94,20 +89,22 @@ class ReporterSetupTest {
         configureReporter1(config);
         configureReporter2(config);
 
-        final List<ReporterSetup> reporterSetups = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterSetup> reporterSetups =
+                ReporterSetupBuilder.METRIC_SETUP_BUILDER.fromConfiguration(
+                        config, DefaultReporterFilters::metricsFromConfiguration, null);
 
-        Assert.assertEquals(2, reporterSetups.size());
+        assertThat(reporterSetups).hasSize(2);
 
         final Optional<ReporterSetup> reporter1Config =
                 reporterSetups.stream().filter(c -> "reporter1".equals(c.getName())).findFirst();
 
-        Assert.assertTrue(reporter1Config.isPresent());
+        assertThat(reporter1Config).isPresent();
         assertReporter1Configured(reporter1Config.get());
 
         final Optional<ReporterSetup> reporter2Config =
                 reporterSetups.stream().filter(c -> "reporter2".equals(c.getName())).findFirst();
 
-        Assert.assertTrue(reporter2Config.isPresent());
+        assertThat(reporter2Config).isPresent();
         assertReporter2Configured(reporter2Config.get());
     }
 
@@ -122,11 +119,13 @@ class ReporterSetupTest {
         configureReporter1(config);
         configureReporter2(config);
 
-        config.setString(MetricOptions.REPORTERS_LIST, "reporter2");
+        config.set(MetricOptions.REPORTERS_LIST, "reporter2");
 
-        final List<ReporterSetup> reporterSetups = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterSetup> reporterSetups =
+                ReporterSetupBuilder.METRIC_SETUP_BUILDER.fromConfiguration(
+                        config, DefaultReporterFilters::metricsFromConfiguration, null);
 
-        Assert.assertEquals(1, reporterSetups.size());
+        assertThat(reporterSetups).hasSize(1);
 
         final ReporterSetup setup = reporterSetups.get(0);
         assertReporter2Configured(setup);
@@ -139,13 +138,15 @@ class ReporterSetupTest {
         MetricOptions.forReporter(config, "reporter1")
                 .set(MetricOptions.REPORTER_FACTORY_CLASS, TestReporter1.class.getName());
 
-        final List<ReporterSetup> reporterSetups = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterSetup> reporterSetups =
+                ReporterSetupBuilder.METRIC_SETUP_BUILDER.fromConfiguration(
+                        config, DefaultReporterFilters::metricsFromConfiguration, null);
 
-        Assert.assertEquals(1, reporterSetups.size());
+        assertThat(reporterSetups).hasSize(1);
 
         final ReporterSetup reporterSetup = reporterSetups.get(0);
         final MetricReporter metricReporter = reporterSetup.getReporter();
-        Assert.assertThat(metricReporter, instanceOf(TestReporter1.class));
+        assertThat(metricReporter).isInstanceOf(TestReporter1.class);
     }
 
     /** Verifies that multiple reporters are instantiated correctly. */
@@ -160,13 +161,15 @@ class ReporterSetupTest {
         MetricOptions.forReporter(config, "test3")
                 .set(MetricOptions.REPORTER_FACTORY_CLASS, TestReporter13.class.getName());
 
-        List<ReporterSetup> reporterSetups = ReporterSetup.fromConfiguration(config, null);
+        List<ReporterSetup> reporterSetups =
+                ReporterSetupBuilder.METRIC_SETUP_BUILDER.fromConfiguration(
+                        config, DefaultReporterFilters::metricsFromConfiguration, null);
 
-        assertEquals(3, reporterSetups.size());
+        assertThat(reporterSetups).hasSize(3);
 
-        Assert.assertTrue(TestReporter11.wasOpened);
-        Assert.assertTrue(TestReporter12.wasOpened);
-        Assert.assertTrue(TestReporter13.wasOpened);
+        assertThat(TestReporter11.wasOpened).isTrue();
+        assertThat(TestReporter12.wasOpened).isTrue();
+        assertThat(TestReporter13.wasOpened).isTrue();
     }
 
     /** Reporter that exposes whether open() was called. */
@@ -208,13 +211,13 @@ class ReporterSetupTest {
     }
 
     private static void assertReporter1Configured(ReporterSetup setup) {
-        Assert.assertEquals("reporter1", setup.getName());
-        Assert.assertEquals("value1", setup.getConfiguration().getString("arg1", ""));
-        Assert.assertEquals("value2", setup.getConfiguration().getString("arg2", ""));
-        Assert.assertEquals(
-                ReporterSetupTest.TestReporter1.class.getName(),
-                setup.getConfiguration()
-                        .getString(MetricOptions.REPORTER_FACTORY_CLASS.key(), null));
+        assertThat(setup.getName()).isEqualTo("reporter1");
+        assertThat(setup.getConfiguration().getString("arg1", "")).isEqualTo("value1");
+        assertThat(setup.getConfiguration().getString("arg2", "")).isEqualTo("value2");
+        assertThat(
+                        setup.getConfiguration()
+                                .getString(MetricOptions.REPORTER_FACTORY_CLASS.key(), null))
+                .isEqualTo(ReporterSetupTest.TestReporter1.class.getName());
     }
 
     private static void configureReporter2(Configuration config) {
@@ -226,13 +229,13 @@ class ReporterSetupTest {
     }
 
     private static void assertReporter2Configured(ReporterSetup setup) {
-        Assert.assertEquals("reporter2", setup.getName());
-        Assert.assertEquals("value1", setup.getConfiguration().getString("arg1", null));
-        Assert.assertEquals("value3", setup.getConfiguration().getString("arg3", null));
-        Assert.assertEquals(
-                TestReporter2.class.getName(),
-                setup.getConfiguration()
-                        .getString(MetricOptions.REPORTER_FACTORY_CLASS.key(), null));
+        assertThat(setup.getName()).isEqualTo("reporter2");
+        assertThat(setup.getConfiguration().getString("arg1", null)).isEqualTo("value1");
+        assertThat(setup.getConfiguration().getString("arg3", null)).isEqualTo("value3");
+        assertThat(
+                        setup.getConfiguration()
+                                .getString(MetricOptions.REPORTER_FACTORY_CLASS.key(), null))
+                .isEqualTo(TestReporter2.class.getName());
     }
 
     @Test
@@ -246,17 +249,18 @@ class ReporterSetupTest {
                         MetricOptions.REPORTER_EXCLUDED_VARIABLES,
                         excludedVariable1 + ";" + excludedVariable2);
 
-        final List<ReporterSetup> reporterSetups = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterSetup> reporterSetups =
+                ReporterSetupBuilder.METRIC_SETUP_BUILDER.fromConfiguration(
+                        config, DefaultReporterFilters::metricsFromConfiguration, null);
 
-        assertEquals(1, reporterSetups.size());
+        assertThat(reporterSetups).hasSize(1);
 
         final ReporterSetup reporterSetup = reporterSetups.get(0);
 
-        assertThat(
-                reporterSetup.getExcludedVariables(),
-                hasItems(
+        assertThat(reporterSetup.getExcludedVariables())
+                .containsAnyOf(
                         ScopeFormat.asVariable(excludedVariable1),
-                        ScopeFormat.asVariable(excludedVariable2)));
+                        ScopeFormat.asVariable(excludedVariable2));
     }
 
     /** Verifies that a factory configuration is correctly parsed. */
@@ -266,13 +270,15 @@ class ReporterSetupTest {
         MetricOptions.forReporter(config, "test")
                 .set(MetricOptions.REPORTER_FACTORY_CLASS, TestReporterFactory.class.getName());
 
-        final List<ReporterSetup> reporterSetups = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterSetup> reporterSetups =
+                ReporterSetupBuilder.METRIC_SETUP_BUILDER.fromConfiguration(
+                        config, DefaultReporterFilters::metricsFromConfiguration, null);
 
-        assertEquals(1, reporterSetups.size());
+        assertThat(reporterSetups).hasSize(1);
 
         final ReporterSetup reporterSetup = reporterSetups.get(0);
 
-        assertEquals(TestReporterFactory.REPORTER, reporterSetup.getReporter());
+        assertThat(reporterSetup.getReporter()).isEqualTo(TestReporterFactory.REPORTER);
     }
 
     /** Verifies that an error thrown by a factory does not affect the setup of other reporters. */
@@ -290,9 +296,11 @@ class ReporterSetupTest {
                         + MetricOptions.REPORTER_FACTORY_CLASS.key(),
                 FailingFactory.class.getName());
 
-        final List<ReporterSetup> reporterSetups = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterSetup> reporterSetups =
+                ReporterSetupBuilder.METRIC_SETUP_BUILDER.fromConfiguration(
+                        config, DefaultReporterFilters::metricsFromConfiguration, null);
 
-        assertEquals(1, reporterSetups.size());
+        assertThat(reporterSetups).hasSize(1);
     }
 
     @Test
@@ -305,10 +313,11 @@ class ReporterSetupTest {
                 ConfigExposingReporterFactory.class.getName());
         config.setString(ConfigConstants.METRICS_REPORTER_PREFIX + "test.arg", "hello");
 
-        ReporterSetup.fromConfiguration(config, null);
+        ReporterSetupBuilder.METRIC_SETUP_BUILDER.fromConfiguration(
+                config, DefaultReporterFilters::metricsFromConfiguration, null);
 
         Properties passedConfig = ConfigExposingReporterFactory.lastConfig;
-        assertEquals("hello", passedConfig.getProperty("arg"));
+        assertThat(passedConfig.getProperty("arg")).isEqualTo("hello");
     }
 
     @Test
@@ -325,19 +334,19 @@ class ReporterSetupTest {
                         MetricOptions.REPORTER_ADDITIONAL_VARIABLES.key(),
                         String.join(",", tag1 + ":" + tagValue1, tag2 + ":" + tagValue2));
 
-        final List<ReporterSetup> reporterSetups = ReporterSetup.fromConfiguration(config, null);
+        final List<ReporterSetup> reporterSetups =
+                ReporterSetupBuilder.METRIC_SETUP_BUILDER.fromConfiguration(
+                        config, DefaultReporterFilters::metricsFromConfiguration, null);
 
-        assertEquals(1, reporterSetups.size());
+        assertThat(reporterSetups).hasSize(1);
 
         final ReporterSetup reporterSetup = reporterSetups.get(0);
 
-        assertThat(
-                reporterSetup.getAdditionalVariables(),
-                hasEntry(ScopeFormat.asVariable(tag1), tagValue1));
+        assertThat(reporterSetup.getAdditionalVariables())
+                .containsEntry(ScopeFormat.asVariable(tag1), tagValue1);
 
-        assertThat(
-                reporterSetup.getAdditionalVariables(),
-                hasEntry(ScopeFormat.asVariable(tag2), tagValue2));
+        assertThat(reporterSetup.getAdditionalVariables())
+                .containsEntry(ScopeFormat.asVariable(tag2), tagValue2);
     }
 
     /** Factory that exposed the last provided metric config. */

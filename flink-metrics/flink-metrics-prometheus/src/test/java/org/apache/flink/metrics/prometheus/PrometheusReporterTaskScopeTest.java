@@ -25,13 +25,13 @@ import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.metrics.SimpleCounter;
 import org.apache.flink.metrics.util.TestHistogram;
 import org.apache.flink.metrics.util.TestMeter;
-import org.apache.flink.util.NetUtils;
+import org.apache.flink.util.PortRange;
 
-import com.mashape.unirest.http.exceptions.UnirestException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.util.Arrays;
 
 import static org.apache.flink.metrics.prometheus.PrometheusReporterTest.pollMetrics;
@@ -59,7 +59,7 @@ class PrometheusReporterTaskScopeTest {
 
     @BeforeEach
     void setupReporter() {
-        reporter = new PrometheusReporter(NetUtils.getPortRangeFromString("9400-9500"));
+        reporter = new PrometheusReporter(new PortRange("9400-9500"));
     }
 
     @AfterEach
@@ -126,7 +126,8 @@ class PrometheusReporterTaskScopeTest {
     }
 
     @Test
-    void histogramsCanBeAddedSeveralTimesIfTheyDifferInLabels() throws UnirestException {
+    void histogramsCanBeAddedSeveralTimesIfTheyDifferInLabels()
+            throws IOException, InterruptedException {
         TestHistogram histogram1 = new TestHistogram();
         histogram1.setCount(1);
         TestHistogram histogram2 = new TestHistogram();
@@ -135,7 +136,7 @@ class PrometheusReporterTaskScopeTest {
         reporter.notifyOfAddedMetric(histogram1, METRIC_NAME, metricGroup1);
         reporter.notifyOfAddedMetric(histogram2, METRIC_NAME, metricGroup2);
 
-        final String exportedMetrics = pollMetrics(reporter.getPort()).getBody();
+        final String exportedMetrics = pollMetrics(reporter.getPort()).body();
         assertThat(exportedMetrics).contains("label2=\"value1_2\",} 1.0");
         assertThat(exportedMetrics).contains("label2=\"value2_2\",} 2.0");
 

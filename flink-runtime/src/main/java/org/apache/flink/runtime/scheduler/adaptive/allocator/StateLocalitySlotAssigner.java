@@ -20,9 +20,10 @@ package org.apache.flink.runtime.scheduler.adaptive.allocator;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.runtime.clusterframework.types.AllocationID;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
-import org.apache.flink.runtime.jobmanager.scheduler.SlotSharingGroup;
 import org.apache.flink.runtime.jobmaster.SlotInfo;
+import org.apache.flink.runtime.jobmaster.slotpool.PhysicalSlot;
 import org.apache.flink.runtime.scheduler.adaptive.JobSchedulingPlan.SlotAssignment;
+import org.apache.flink.runtime.scheduler.adaptive.allocator.JobAllocationsInformation.VertexAllocationInformation;
 import org.apache.flink.runtime.scheduler.adaptive.allocator.SlotSharingSlotAllocator.ExecutionSlotSharingGroup;
 import org.apache.flink.runtime.scheduler.strategy.ExecutionVertexID;
 import org.apache.flink.runtime.state.KeyGroupRange;
@@ -35,14 +36,13 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.stream.Collectors;
 
 import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.toMap;
-import static org.apache.flink.runtime.scheduler.adaptive.allocator.DefaultSlotAssigner.createExecutionSlotSharingGroups;
+import static org.apache.flink.runtime.scheduler.adaptive.allocator.AllocatorUtil.checkMinimumRequiredSlots;
 import static org.apache.flink.util.Preconditions.checkState;
 
 /** A {@link SlotAssigner} that assigns slots based on the number of local key groups. */
@@ -88,22 +88,24 @@ public class StateLocalitySlotAssigner implements SlotAssigner {
         }
     }
 
+    private final SlotSharingResolver slotSharingResolver;
+
+    StateLocalitySlotAssigner(SlotSharingResolver slotSharingResolver) {
+        this.slotSharingResolver = slotSharingResolver;
+    }
+
     @Override
     public Collection<SlotAssignment> assignSlots(
             JobInformation jobInformation,
-            Collection<? extends SlotInfo> freeSlots,
+            Collection<PhysicalSlot> freeSlots,
             VertexParallelism vertexParallelism,
             JobAllocationsInformation previousAllocations) {
-        checkState(
-                freeSlots.size() >= jobInformation.getSlotSharingGroups().size(),
-                "Not enough slots to allocate all the slot sharing groups (have: %s, need: %s)",
-                freeSlots.size(),
-                jobInformation.getSlotSharingGroups().size());
+        checkMinimumRequiredSlots(jobInformation, freeSlots);
 
-        final List<ExecutionSlotSharingGroup> allGroups = new ArrayList<>();
-        for (SlotSharingGroup slotSharingGroup : jobInformation.getSlotSharingGroups()) {
-            allGroups.addAll(createExecutionSlotSharingGroups(vertexParallelism, slotSharingGroup));
-        }
+        final Collection<ExecutionSlotSharingGroup> allGroups =
+                slotSharingResolver.getExecutionSlotSharingGroups(
+                        jobInformation, vertexParallelism);
+
         final Map<JobVertexID, Integer> parallelism = getParallelism(allGroups);
         final PriorityQueue<AllocationScore> scores =
                 calculateScores(jobInformation, previousAllocations, allGroups, parallelism);
@@ -142,7 +144,7 @@ public class StateLocalitySlotAssigner implements SlotAssigner {
     private PriorityQueue<AllocationScore> calculateScores(
             JobInformation jobInformation,
             JobAllocationsInformation previousAllocations,
-            List<ExecutionSlotSharingGroup> allGroups,
+            Collection<ExecutionSlotSharingGroup> allGroups,
             Map<JobVertexID, Integer> parallelism) {
         // PQ orders the pairs (allocationID, groupID) by score, decreasing
         // the score is computed as the potential amount of state that would reside locally
@@ -155,7 +157,7 @@ public class StateLocalitySlotAssigner implements SlotAssigner {
     }
 
     private static Map<JobVertexID, Integer> getParallelism(
-            List<ExecutionSlotSharingGroup> groups) {
+            Collection<ExecutionSlotSharingGroup> groups) {
         final Map<JobVertexID, Integer> parallelism = new HashMap<>();
         for (ExecutionSlotSharingGroup group : groups) {
             for (ExecutionVertexID evi : group.getContainedExecutionVertices()) {
@@ -183,11 +185,7 @@ public class StateLocalitySlotAssigner implements SlotAssigner {
                     .getAllocations(evi.getJobVertexId())
                     .forEach(
                             allocation -> {
-                                long value =
-                                        allocation
-                                                .getKeyGroupRange()
-                                                .getIntersection(kgr)
-                                                .getNumberOfKeyGroups();
+                                long value = estimateSize(kgr, allocation);
                                 if (value > 0) {
                                     score.merge(allocation.getAllocationID(), value, Long::sum);
                                 }
@@ -197,5 +195,21 @@ public class StateLocalitySlotAssigner implements SlotAssigner {
         return score.entrySet().stream()
                 .map(e -> new AllocationScore(group.getId(), e.getKey(), e.getValue()))
                 .collect(Collectors.toList());
+    }
+
+    private static long estimateSize(
+            KeyGroupRange newRange, VertexAllocationInformation allocation) {
+        KeyGroupRange oldRange = allocation.getKeyGroupRange();
+        int numberOfKeyGroups = oldRange.getIntersection(newRange).getNumberOfKeyGroups();
+        if (allocation.stateSizeInBytes * oldRange.getNumberOfKeyGroups() == 0) {
+            // As we want to maintain same allocation for local recovery, we should give positive
+            // score to allocations with the same key group range even when we have no state.
+            return numberOfKeyGroups > 0 ? 1 : 0;
+        }
+        // round up to 1
+        long keyGroupSize =
+                allocation.stateSizeInBytes
+                        / Math.min(allocation.stateSizeInBytes, oldRange.getNumberOfKeyGroups());
+        return numberOfKeyGroups * keyGroupSize;
     }
 }

@@ -22,14 +22,14 @@ import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.python.util.CompressionUtils;
 import org.apache.flink.python.util.PythonEnvironmentManagerUtils;
+import org.apache.flink.util.CompressionUtils;
 import org.apache.flink.util.FileUtils;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.ShutdownHookUtil;
 import org.apache.flink.util.function.FunctionWithException;
 
-import org.apache.flink.shaded.guava31.com.google.common.base.Strings;
+import org.apache.flink.shaded.guava33.com.google.common.base.Strings;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -123,9 +123,16 @@ public abstract class AbstractPythonEnvironmentManager implements PythonEnvironm
                                         "Could not create the base directory: " + baseDirectory);
                             }
 
-                            Map<String, String> env = constructEnvironmentVariables(baseDirectory);
-                            installRequirements(baseDirectory, env);
-                            return Tuple2.of(baseDirectory, env);
+                            try {
+                                Map<String, String> env =
+                                        constructEnvironmentVariables(baseDirectory);
+                                installRequirements(baseDirectory, env);
+                                return Tuple2.of(baseDirectory, env);
+                            } catch (Throwable e) {
+                                deleteBaseDirectory(baseDirectory);
+                                LOG.warn("Failed to create resource.", e);
+                                throw e;
+                            }
                         });
         shutdownHook =
                 ShutdownHookUtil.addShutdownHook(
@@ -213,6 +220,32 @@ public abstract class AbstractPythonEnvironmentManager implements PythonEnvironm
                         + "' for storing the generated files of python dependency.");
     }
 
+    private static void deleteBaseDirectory(String baseDirectory) {
+        int retries = 0;
+        while (true) {
+            try {
+                FileUtils.deleteDirectory(new File(baseDirectory));
+                break;
+            } catch (Throwable t) {
+                retries++;
+                if (retries <= CHECK_TIMEOUT / CHECK_INTERVAL) {
+                    LOG.warn(
+                            String.format(
+                                    "Failed to delete the working directory %s of the Python UDF worker. Retrying...",
+                                    baseDirectory),
+                            t);
+                } else {
+                    LOG.warn(
+                            String.format(
+                                    "Failed to delete the working directory %s of the Python UDF worker.",
+                                    baseDirectory),
+                            t);
+                    break;
+                }
+            }
+        }
+    }
+
     private void installRequirements(String baseDirectory, Map<String, String> env)
             throws IOException {
         // Directory for storing the installation result of the requirements file.
@@ -276,20 +309,19 @@ public abstract class AbstractPythonEnvironmentManager implements PythonEnvironm
                 // If the python file is file with suffix .py, add the parent directory to
                 // PYTHONPATH.
                 pythonPath = String.join(File.separator, filesDirectory, distributedCacheFileName);
-            } else if (pythonFile.isFile() && originFileName.endsWith(".zip")) {
-                // Expand the zip file and add the root directory to PYTHONPATH
-                // as not all zip files are importable
+            } else if (pythonFile.isFile() && CompressionUtils.isCompressedFile(originFileName)) {
+                // Expand the compressed file and add the root directory to PYTHONPATH
+                // as not all compressed files are importable
                 org.apache.flink.core.fs.Path targetDirectory =
                         new org.apache.flink.core.fs.Path(
                                 filesDirectory,
                                 String.join(
                                         File.separator,
                                         distributedCacheFileName,
-                                        originFileName.substring(
-                                                0, originFileName.lastIndexOf("."))));
-                FileUtils.expandDirectory(
-                        new org.apache.flink.core.fs.Path(pythonFile.getAbsolutePath()),
-                        targetDirectory);
+                                        CompressionUtils.getBaseNameWithoutExtension(
+                                                originFileName)));
+                CompressionUtils.extractFile(
+                        pythonFile.getAbsolutePath(), targetDirectory.toString(), originFileName);
                 pythonPath = targetDirectory.toString();
             } else {
                 pythonPath =
@@ -475,29 +507,7 @@ public abstract class AbstractPythonEnvironmentManager implements PythonEnvironm
 
         @Override
         public void close() throws Exception {
-            int retries = 0;
-            while (true) {
-                try {
-                    FileUtils.deleteDirectory(new File(baseDirectory));
-                    break;
-                } catch (Throwable t) {
-                    retries++;
-                    if (retries <= CHECK_TIMEOUT / CHECK_INTERVAL) {
-                        LOG.warn(
-                                String.format(
-                                        "Failed to delete the working directory %s of the Python UDF worker. Retrying...",
-                                        baseDirectory),
-                                t);
-                    } else {
-                        LOG.warn(
-                                String.format(
-                                        "Failed to delete the working directory %s of the Python UDF worker.",
-                                        baseDirectory),
-                                t);
-                        break;
-                    }
-                }
-            }
+            deleteBaseDirectory(baseDirectory);
         }
     }
 }

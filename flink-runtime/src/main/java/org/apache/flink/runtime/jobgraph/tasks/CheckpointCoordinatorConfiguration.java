@@ -25,6 +25,7 @@ import org.apache.flink.util.Preconditions;
 
 import java.io.Serializable;
 import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Configuration settings for the {@link CheckpointCoordinator}. This includes the checkpoint
@@ -41,6 +42,8 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
     private static final long serialVersionUID = 2L;
 
     private final long checkpointInterval;
+
+    private final long checkpointIntervalDuringBacklog;
 
     private final long checkpointTimeout;
 
@@ -69,7 +72,13 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
 
     private final boolean enableCheckpointsAfterTasksFinish;
 
-    /** @deprecated use {@link #builder()}. */
+    private final boolean recoverOutputOnDownstreamTask;
+
+    private final boolean pauseSourcesUntilFirstCheckpoint;
+
+    /**
+     * @deprecated use {@link #builder()}.
+     */
     @Deprecated
     @VisibleForTesting
     public CheckpointCoordinatorConfiguration(
@@ -84,6 +93,7 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
             long checkpointIdOfIgnoredInFlightData) {
         this(
                 checkpointInterval,
+                checkpointInterval,
                 checkpointTimeout,
                 minPauseBetweenCheckpoints,
                 maxConcurrentCheckpoints,
@@ -93,11 +103,14 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
                 isUnalignedCheckpoint,
                 0,
                 checkpointIdOfIgnoredInFlightData,
+                false,
+                false,
                 false);
     }
 
     private CheckpointCoordinatorConfiguration(
             long checkpointInterval,
+            long checkpointIntervalDuringBacklog,
             long checkpointTimeout,
             long minPauseBetweenCheckpoints,
             int maxConcurrentCheckpoints,
@@ -107,7 +120,14 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
             boolean isUnalignedCheckpointsEnabled,
             long alignedCheckpointTimeout,
             long checkpointIdOfIgnoredInFlightData,
-            boolean enableCheckpointsAfterTasksFinish) {
+            boolean enableCheckpointsAfterTasksFinish,
+            boolean recoverOutputOnDownstreamTask,
+            boolean pauseSourcesUntilFirstCheckpoint) {
+
+        if (checkpointIntervalDuringBacklog < MINIMAL_CHECKPOINT_TIME) {
+            // interval of max value means disable periodic checkpoint
+            checkpointIntervalDuringBacklog = DISABLED_CHECKPOINT_INTERVAL;
+        }
 
         // sanity checks
         if (checkpointInterval < MINIMAL_CHECKPOINT_TIME
@@ -121,9 +141,19 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
                 !isUnalignedCheckpointsEnabled || maxConcurrentCheckpoints <= 1,
                 "maxConcurrentCheckpoints can't be > 1 if UnalignedCheckpoints enabled");
 
-        this.checkpointInterval = checkpointInterval;
-        this.checkpointTimeout = checkpointTimeout;
+        // max "in between duration" can be one year - this is to prevent numeric overflows
+        if (minPauseBetweenCheckpoints > 365L * 24 * 60 * 60 * 1_000) {
+            minPauseBetweenCheckpoints = 365L * 24 * 60 * 60 * 1_000;
+        }
         this.minPauseBetweenCheckpoints = minPauseBetweenCheckpoints;
+        // it does not make sense to schedule checkpoints more often then the desired
+        // time between checkpoints
+        if (checkpointInterval < minPauseBetweenCheckpoints) {
+            checkpointInterval = minPauseBetweenCheckpoints;
+        }
+        this.checkpointInterval = checkpointInterval;
+        this.checkpointIntervalDuringBacklog = checkpointIntervalDuringBacklog;
+        this.checkpointTimeout = checkpointTimeout;
         this.maxConcurrentCheckpoints = maxConcurrentCheckpoints;
         this.checkpointRetentionPolicy = Preconditions.checkNotNull(checkpointRetentionPolicy);
         this.isExactlyOnce = isExactlyOnce;
@@ -132,6 +162,8 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
         this.alignedCheckpointTimeout = alignedCheckpointTimeout;
         this.checkpointIdOfIgnoredInFlightData = checkpointIdOfIgnoredInFlightData;
         this.enableCheckpointsAfterTasksFinish = enableCheckpointsAfterTasksFinish;
+        this.recoverOutputOnDownstreamTask = recoverOutputOnDownstreamTask;
+        this.pauseSourcesUntilFirstCheckpoint = pauseSourcesUntilFirstCheckpoint;
     }
 
     public long getCheckpointInterval() {
@@ -140,6 +172,10 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
 
     public boolean isCheckpointingEnabled() {
         return checkpointInterval > 0 && checkpointInterval < DISABLED_CHECKPOINT_INTERVAL;
+    }
+
+    public long getCheckpointIntervalDuringBacklog() {
+        return checkpointIntervalDuringBacklog;
     }
 
     public long getCheckpointTimeout() {
@@ -182,6 +218,10 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
         return enableCheckpointsAfterTasksFinish;
     }
 
+    public boolean isRecoverOutputOnDownstreamTask() {
+        return recoverOutputOnDownstreamTask;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -201,7 +241,8 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
                 && checkpointRetentionPolicy == that.checkpointRetentionPolicy
                 && tolerableCheckpointFailureNumber == that.tolerableCheckpointFailureNumber
                 && checkpointIdOfIgnoredInFlightData == that.checkpointIdOfIgnoredInFlightData
-                && enableCheckpointsAfterTasksFinish == that.enableCheckpointsAfterTasksFinish;
+                && enableCheckpointsAfterTasksFinish == that.enableCheckpointsAfterTasksFinish
+                && recoverOutputOnDownstreamTask == that.recoverOutputOnDownstreamTask;
     }
 
     @Override
@@ -217,7 +258,8 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
                 alignedCheckpointTimeout,
                 tolerableCheckpointFailureNumber,
                 checkpointIdOfIgnoredInFlightData,
-                enableCheckpointsAfterTasksFinish);
+                enableCheckpointsAfterTasksFinish,
+                recoverOutputOnDownstreamTask);
     }
 
     @Override
@@ -245,6 +287,8 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
                 + checkpointIdOfIgnoredInFlightData
                 + ", enableCheckpointsAfterTasksFinish="
                 + enableCheckpointsAfterTasksFinish
+                + ", recoverOutputOnDownstreamTask="
+                + recoverOutputOnDownstreamTask
                 + '}';
     }
 
@@ -252,9 +296,29 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
         return new CheckpointCoordinatorConfigurationBuilder();
     }
 
+    public long getInitialTriggeringDelay() {
+        return pauseSourcesUntilFirstCheckpoint
+                // if sources a waiting for a checkpoint then trigger a checkpoint ASAP (not waiting
+                // for checkpoint interval) to unblock them; however, we still need to:
+                // 1. honor the min pause between checkpoints
+                // 2. avoid checkpointing all the jobs on this JM simultaneously (hence *2)
+                // 3. account for 0 configured min pause (hence +1)
+                ? ThreadLocalRandom.current()
+                        .nextLong(minPauseBetweenCheckpoints, minPauseBetweenCheckpoints * 2 + 1)
+                // otherwise, we can delay the first checkpoint by checkpoint interval
+                // additionally, increase the upper bound by 1 to avoid equal lower/upper bounds -
+                // unless it might cause an overflow
+                : ThreadLocalRandom.current()
+                        .nextLong(
+                                minPauseBetweenCheckpoints,
+                                checkpointInterval
+                                        + (checkpointInterval == Long.MAX_VALUE ? 0L : 1L));
+    }
+
     /** {@link CheckpointCoordinatorConfiguration} builder. */
     public static class CheckpointCoordinatorConfigurationBuilder {
         private long checkpointInterval = MINIMAL_CHECKPOINT_TIME;
+        private long checkpointIntervalDuringBacklog = MINIMAL_CHECKPOINT_TIME;
         private long checkpointTimeout = MINIMAL_CHECKPOINT_TIME;
         private long minPauseBetweenCheckpoints;
         private int maxConcurrentCheckpoints = 1;
@@ -266,10 +330,13 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
         private long alignedCheckpointTimeout = 0;
         private long checkpointIdOfIgnoredInFlightData;
         private boolean enableCheckpointsAfterTasksFinish;
+        private boolean recoverOutputOnDownstreamTask;
+        private boolean pauseSourcesUntilFirstCheckpoint;
 
         public CheckpointCoordinatorConfiguration build() {
             return new CheckpointCoordinatorConfiguration(
                     checkpointInterval,
+                    checkpointIntervalDuringBacklog,
                     checkpointTimeout,
                     minPauseBetweenCheckpoints,
                     maxConcurrentCheckpoints,
@@ -279,12 +346,20 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
                     isUnalignedCheckpointsEnabled,
                     alignedCheckpointTimeout,
                     checkpointIdOfIgnoredInFlightData,
-                    enableCheckpointsAfterTasksFinish);
+                    enableCheckpointsAfterTasksFinish,
+                    recoverOutputOnDownstreamTask,
+                    pauseSourcesUntilFirstCheckpoint);
         }
 
         public CheckpointCoordinatorConfigurationBuilder setCheckpointInterval(
                 long checkpointInterval) {
             this.checkpointInterval = checkpointInterval;
+            return this;
+        }
+
+        public CheckpointCoordinatorConfigurationBuilder setCheckpointIntervalDuringBacklog(
+                long checkpointIntervalDuringBacklog) {
+            this.checkpointIntervalDuringBacklog = checkpointIntervalDuringBacklog;
             return this;
         }
 
@@ -344,6 +419,18 @@ public class CheckpointCoordinatorConfiguration implements Serializable {
         public CheckpointCoordinatorConfigurationBuilder setEnableCheckpointsAfterTasksFinish(
                 boolean enableCheckpointsAfterTasksFinish) {
             this.enableCheckpointsAfterTasksFinish = enableCheckpointsAfterTasksFinish;
+            return this;
+        }
+
+        public CheckpointCoordinatorConfigurationBuilder setPauseSourcesUntilFirstCheckpoint(
+                boolean pauseSourcesUntilFirstCheckpoint1) {
+            pauseSourcesUntilFirstCheckpoint = pauseSourcesUntilFirstCheckpoint1;
+            return this;
+        }
+
+        public CheckpointCoordinatorConfigurationBuilder setRecoverOutputOnDownstreamTask(
+                boolean recoverOutputOnDownstreamTask) {
+            this.recoverOutputOnDownstreamTask = recoverOutputOnDownstreamTask;
             return this;
         }
     }

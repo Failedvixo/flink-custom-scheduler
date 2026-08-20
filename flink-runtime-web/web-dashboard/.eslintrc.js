@@ -1,3 +1,20 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 module.exports = {
   root: true,
   overrides: [
@@ -18,8 +35,15 @@ module.exports = {
         'plugin:prettier/recommended'
       ],
       rules: {
-        'jsdoc/newline-after-description': 1,
+        'jsdoc/tag-lines': [
+          'error',
+          'never',
+          {
+            "startLines": 1
+          }
+        ],
         '@angular-eslint/no-host-metadata-property': 'off',
+        '@angular-eslint/prefer-inject': 'off',
         '@typescript-eslint/no-explicit-any': 'error',
         '@typescript-eslint/no-non-null-assertion': 'off',
         '@typescript-eslint/array-type': [
@@ -28,26 +52,12 @@ module.exports = {
             default: 'array-simple'
           }
         ],
-        '@typescript-eslint/ban-types': [
+        '@typescript-eslint/no-wrapper-object-types': 'error',
+        '@typescript-eslint/no-unsafe-function-type': 'error',
+        '@typescript-eslint/no-empty-object-type': [
           'error',
           {
-            types: {
-              Object: {
-                message: 'Use {} instead.'
-              },
-              String: {
-                message: 'Use string instead.'
-              },
-              Number: {
-                message: 'Use number instead.'
-              },
-              Boolean: {
-                message: 'Use boolean instead.'
-              },
-              Function: {
-                message: 'Use specific callable interface instead.'
-              }
-            }
+              allowInterfaces: 'always' // flink-runtime-web/web-dashboard/src/app/interfaces/job-checkpoint.ts (PendingSubTaskCheckpointStatistics)
           }
         ],
         '@typescript-eslint/consistent-type-definitions': 'error',

@@ -21,10 +21,17 @@ package org.apache.flink.formats.protobuf;
 /** Keeps protobuf constants separately. */
 public class PbConstant {
     public static final String PB_METHOD_GET_DESCRIPTOR = "getDescriptor";
-    public static final String PB_METHOD_PARSE_FROM = "parseFrom";
+    public static final String PB_METHOD_PARSER = "parser";
     public static final String GENERATED_DECODE_METHOD = "decode";
     public static final String GENERATED_ENCODE_METHOD = "encode";
     public static final String PB_MAP_KEY_NAME = "key";
     public static final String PB_MAP_VALUE_NAME = "value";
     public static final String PB_OUTER_CLASS_SUFFIX = "OuterClass";
+
+    /**
+     * JIT optimizer threshold is 8K, unicode encode one char use 1byte, so use 4K as
+     * codegen_spilt_threshold，A conservative threshold is selected to prevent multiple element code
+     * segments in RowType from being combined to exceed 8K.
+     */
+    public static final int CODEGEN_SPLIT_THRESHOLD = 4000;
 }

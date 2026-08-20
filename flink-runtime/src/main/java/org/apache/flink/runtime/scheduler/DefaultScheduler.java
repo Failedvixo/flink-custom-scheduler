@@ -20,8 +20,8 @@
 package org.apache.flink.runtime.scheduler;
 
 import org.apache.flink.api.common.JobStatus;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.core.failure.FailureEnricher;
 import org.apache.flink.core.failure.FailureEnricher.Context;
 import org.apache.flink.runtime.checkpoint.CheckpointRecoveryFactory;
@@ -34,10 +34,10 @@ import org.apache.flink.runtime.executiongraph.Execution;
 import org.apache.flink.runtime.executiongraph.ExecutionJobVertex;
 import org.apache.flink.runtime.executiongraph.IOMetrics;
 import org.apache.flink.runtime.executiongraph.JobStatusListener;
-import org.apache.flink.runtime.executiongraph.failover.flip1.ExecutionFailureHandler;
-import org.apache.flink.runtime.executiongraph.failover.flip1.FailoverStrategy;
-import org.apache.flink.runtime.executiongraph.failover.flip1.FailureHandlingResult;
-import org.apache.flink.runtime.executiongraph.failover.flip1.RestartBackoffTimeStrategy;
+import org.apache.flink.runtime.executiongraph.failover.ExecutionFailureHandler;
+import org.apache.flink.runtime.executiongraph.failover.FailoverStrategy;
+import org.apache.flink.runtime.executiongraph.failover.FailureHandlingResult;
+import org.apache.flink.runtime.executiongraph.failover.RestartBackoffTimeStrategy;
 import org.apache.flink.runtime.failure.DefaultFailureEnricherContext;
 import org.apache.flink.runtime.io.network.partition.PartitionException;
 import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
@@ -46,6 +46,7 @@ import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobmanager.scheduler.CoLocationGroup;
 import org.apache.flink.runtime.jobmanager.scheduler.SlotSharingGroup;
 import org.apache.flink.runtime.metrics.groups.JobManagerJobMetricGroup;
+import org.apache.flink.runtime.scheduler.adaptivebatch.ExecutionPlanSchedulingContext;
 import org.apache.flink.runtime.scheduler.exceptionhistory.FailureHandlingResultSnapshot;
 import org.apache.flink.runtime.scheduler.strategy.ConsumedPartitionGroup;
 import org.apache.flink.runtime.scheduler.strategy.ExecutionVertexID;
@@ -61,6 +62,7 @@ import org.slf4j.Logger;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -92,13 +94,13 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
 
     private final ScheduledExecutor delayExecutor;
 
-    private final SchedulingStrategy schedulingStrategy;
+    protected final SchedulingStrategy schedulingStrategy;
 
     private final ExecutionOperations executionOperations;
 
     private final Set<ExecutionVertexID> verticesWaitingForRestart;
 
-    private final ShuffleMaster<?> shuffleMaster;
+    protected final ShuffleMaster<?> shuffleMaster;
 
     private final Map<AllocationID, Long> reservedAllocationRefCounters;
 
@@ -108,6 +110,8 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
     private final Map<ExecutionVertexID, AllocationID> reservedAllocationByExecutionVertex;
 
     protected final ExecutionDeployer executionDeployer;
+
+    protected final FailoverStrategy failoverStrategy;
 
     protected DefaultScheduler(
             final Logger log,
@@ -132,9 +136,10 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
             final Collection<FailureEnricher> failureEnrichers,
             final ExecutionGraphFactory executionGraphFactory,
             final ShuffleMaster<?> shuffleMaster,
-            final Time rpcTimeout,
+            final Duration rpcTimeout,
             final VertexParallelismStore vertexParallelismStore,
-            final ExecutionDeployer.Factory executionDeployerFactory)
+            final ExecutionDeployer.Factory executionDeployerFactory,
+            ExecutionPlanSchedulingContext executionPlanSchedulingContext)
             throws Exception {
 
         super(
@@ -150,7 +155,8 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
                 mainThreadExecutor,
                 jobStatusListener,
                 executionGraphFactory,
-                vertexParallelismStore);
+                vertexParallelismStore,
+                executionPlanSchedulingContext);
 
         this.log = log;
 
@@ -162,7 +168,7 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
         this.reservedAllocationRefCounters = new HashMap<>();
         this.reservedAllocationByExecutionVertex = new HashMap<>();
 
-        final FailoverStrategy failoverStrategy =
+        this.failoverStrategy =
                 failoverStrategyFactory.create(
                         getSchedulingTopology(), getResultPartitionAvailabilityChecker());
         log.info(
@@ -173,29 +179,23 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
 
         final Context taskFailureCtx =
                 DefaultFailureEnricherContext.forTaskFailure(
-                        jobGraph.getJobID(),
-                        jobGraph.getName(),
-                        jobManagerJobMetricGroup,
-                        ioExecutor,
-                        userCodeLoader);
+                        this.jobInfo, jobManagerJobMetricGroup, ioExecutor, userCodeLoader);
 
         final Context globalFailureCtx =
                 DefaultFailureEnricherContext.forGlobalFailure(
-                        jobGraph.getJobID(),
-                        jobGraph.getName(),
-                        jobManagerJobMetricGroup,
-                        ioExecutor,
-                        userCodeLoader);
+                        this.jobInfo, jobManagerJobMetricGroup, ioExecutor, userCodeLoader);
 
         this.executionFailureHandler =
                 new ExecutionFailureHandler(
+                        jobMasterConfiguration,
                         getSchedulingTopology(),
                         failoverStrategy,
                         restartBackoffTimeStrategy,
                         mainThreadExecutor,
                         failureEnrichers,
                         taskFailureCtx,
-                        globalFailureCtx);
+                        globalFailureCtx,
+                        jobManagerJobMetricGroup);
 
         this.schedulingStrategy =
                 schedulingStrategyFactory.createInstance(this, getSchedulingTopology());
@@ -228,10 +228,21 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
     }
 
     @Override
+    protected long getNumberOfRescales() {
+        // It is always 0 for DefaultScheduler.
+        return 0;
+    }
+
+    @Override
     protected void cancelAllPendingSlotRequestsInternal() {
         getSchedulingTopology()
                 .getVertices()
                 .forEach(ev -> cancelAllPendingSlotRequestsForVertex(ev.getId()));
+    }
+
+    @Override
+    public JobManagerOptions.SchedulerType getSchedulerType() {
+        return JobManagerOptions.SchedulerType.Default;
     }
 
     @Override
@@ -257,6 +268,10 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
         stopReserveAllocation(executionVertexId);
 
         schedulingStrategy.onExecutionStateChange(executionVertexId, ExecutionState.FINISHED);
+    }
+
+    protected ClassLoader getUserCodeLoader() {
+        return userCodeLoader;
     }
 
     @Override
@@ -307,7 +322,7 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
                 cause, Collections.singletonList(failedPartitionId.getIntermediateDataSetID()));
     }
 
-    private void notifyCoordinatorsAboutTaskFailure(
+    protected void notifyCoordinatorsAboutTaskFailure(
             final Execution execution, @Nullable final Throwable error) {
         final ExecutionJobVertex jobVertex = execution.getVertex().getJobVertex();
         final int subtaskIndex = execution.getParallelSubtaskIndex();
@@ -329,7 +344,7 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
         maybeRestartTasks(failureHandlingResult);
     }
 
-    private void maybeRestartTasks(final FailureHandlingResult failureHandlingResult) {
+    protected void maybeRestartTasks(final FailureHandlingResult failureHandlingResult) {
         if (failureHandlingResult.canRestart()) {
             restartTasksWithDelay(failureHandlingResult);
         } else {
@@ -367,17 +382,13 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
 
         final CompletableFuture<?> cancelFuture = cancelTasksAsync(verticesToRestart);
 
-        final FailureHandlingResultSnapshot failureHandlingResultSnapshot =
-                createFailureHandlingResultSnapshot(failureHandlingResult);
+        archiveFromFailureHandlingResult(
+                createFailureHandlingResultSnapshot(failureHandlingResult));
         delayExecutor.schedule(
                 () ->
                         FutureUtils.assertNoException(
                                 cancelFuture.thenRunAsync(
-                                        () -> {
-                                            archiveFromFailureHandlingResult(
-                                                    failureHandlingResultSnapshot);
-                                            restartTasks(executionVertexVersions, globalRecovery);
-                                        },
+                                        () -> restartTasks(executionVertexVersions, globalRecovery),
                                         getMainThreadExecutor())),
                 failureHandlingResult.getRestartDelayMS(),
                 TimeUnit.MILLISECONDS);

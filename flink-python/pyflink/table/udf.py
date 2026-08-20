@@ -25,21 +25,32 @@ from pyflink.metrics import MetricGroup
 from pyflink.table import Expression
 from pyflink.table.types import DataType, _to_java_data_type
 from pyflink.util import java_utils
+from pyflink.util.api_stability_decorators import PublicEvolving, Internal
 
 __all__ = ['FunctionContext', 'AggregateFunction', 'ScalarFunction', 'TableFunction',
-           'TableAggregateFunction', 'udf', 'udtf', 'udaf', 'udtaf']
+           'TableAggregateFunction', 'AsyncScalarFunction', 'udf', 'udtf', 'udaf', 'udtaf']
 
 
+@PublicEvolving()
 class FunctionContext(object):
     """
     Used to obtain global runtime information about the context in which the
     user-defined function is executed. The information includes the metric group,
-    and global job parameters, etc.
+    global job parameters, and runtime task information such as task name, parallelism, etc.
     """
 
-    def __init__(self, base_metric_group, job_parameters):
+    def __init__(self, base_metric_group, job_parameters,
+                 task_name=None, task_name_with_subtasks=None,
+                 number_of_parallel_subtasks=None, max_number_of_parallel_subtasks=None,
+                 index_of_this_subtask=None, attempt_number=None):
         self._base_metric_group = base_metric_group
         self._job_parameters = job_parameters
+        self._task_name = task_name
+        self._task_name_with_subtasks = task_name_with_subtasks
+        self._number_of_parallel_subtasks = number_of_parallel_subtasks
+        self._max_number_of_parallel_subtasks = max_number_of_parallel_subtasks
+        self._index_of_this_subtask = index_of_this_subtask
+        self._attempt_number = attempt_number
 
     def get_metric_group(self) -> MetricGroup:
         """
@@ -64,7 +75,59 @@ class FunctionContext(object):
         """
         return self._job_parameters[key] if key in self._job_parameters else default_value
 
+    def get_task_name(self) -> str:
+        """
+        Returns the name of the task in which the UDF runs, as assigned during plan construction.
 
+        .. versionadded:: 2.3.0
+        """
+        return self._task_name
+
+    def get_task_name_with_subtasks(self) -> str:
+        """
+        Returns the name of the task, appended with the subtask indicator, such as "MyTask (3/6)",
+        where 3 would be (:func:`get_index_of_this_subtask` + 1), and 6 would be
+        :func:`get_number_of_parallel_subtasks`.
+
+        .. versionadded:: 2.3.0
+        """
+        return self._task_name_with_subtasks
+
+    def get_number_of_parallel_subtasks(self) -> int:
+        """
+        Gets the parallelism with which the parallel task runs.
+
+        .. versionadded:: 2.3.0
+        """
+        return self._number_of_parallel_subtasks
+
+    def get_max_number_of_parallel_subtasks(self) -> int:
+        """
+        Gets the number of max-parallelism with which the parallel task runs.
+
+        .. versionadded:: 2.3.0
+        """
+        return self._max_number_of_parallel_subtasks
+
+    def get_index_of_this_subtask(self) -> int:
+        """
+        Gets the number of this parallel subtask. The numbering starts from 0 and goes up to
+        parallelism-1 (parallelism as returned by :func:`get_number_of_parallel_subtasks`).
+
+        .. versionadded:: 2.3.0
+        """
+        return self._index_of_this_subtask
+
+    def get_attempt_number(self) -> int:
+        """
+        Gets the attempt number of this parallel subtask. First attempt is numbered 0.
+
+        .. versionadded:: 2.3.0
+        """
+        return self._attempt_number
+
+
+@PublicEvolving()
 class UserDefinedFunction(abc.ABC):
     """
     Base interface for user-defined function.
@@ -102,6 +165,7 @@ class UserDefinedFunction(abc.ABC):
         return True
 
 
+@PublicEvolving()
 class ScalarFunction(UserDefinedFunction):
     """
     Base interface for user-defined scalar function. A user-defined scalar functions maps zero, one,
@@ -118,6 +182,40 @@ class ScalarFunction(UserDefinedFunction):
         pass
 
 
+@PublicEvolving()
+class AsyncScalarFunction(UserDefinedFunction):
+    """
+    Base interface for user-defined async scalar function. A user-defined async scalar function
+    maps zero, one, or multiple scalar values to a new scalar value asynchronously.
+
+    This function is similar to ScalarFunction but is executed asynchronously. It's useful when
+    interacting with external systems (e.g., databases, REST APIs) where I/O operations would
+    otherwise block.
+
+    The eval method should be an async coroutine function that returns the result asynchronously.
+
+    Example:
+        ::
+
+            >>> class AsyncLookupFunction(AsyncScalarFunction):
+            ...     async def eval(self, key):
+            ...         # Simulate async I/O operation
+            ...         await asyncio.sleep(0.1)
+            ...         return f"value_for_{key}"
+
+    .. versionadded:: 2.3.0
+    """
+
+    @abc.abstractmethod
+    async def eval(self, *args):
+        """
+        Async method which defines the logic of the async scalar function.
+        This method should be an async coroutine.
+        """
+        pass
+
+
+@PublicEvolving()
 class TableFunction(UserDefinedFunction):
     """
     Base interface for user-defined table function. A user-defined table function creates zero, one,
@@ -138,6 +236,7 @@ T = TypeVar('T')
 ACC = TypeVar('ACC')
 
 
+@PublicEvolving()
 class ImperativeAggregateFunction(UserDefinedFunction, Generic[T, ACC]):
     """
     Base interface for user-defined aggregate function and table aggregate function.
@@ -211,6 +310,7 @@ class ImperativeAggregateFunction(UserDefinedFunction, Generic[T, ACC]):
         raise RuntimeError("Method get_accumulator_type is not implemented")
 
 
+@PublicEvolving()
 class AggregateFunction(ImperativeAggregateFunction):
     """
     Base interface for user-defined aggregate function. A user-defined aggregate function maps
@@ -220,7 +320,7 @@ class AggregateFunction(ImperativeAggregateFunction):
     """
 
     @abc.abstractmethod
-    def get_value(self, accumulator: ACC) -> T:
+    def get_value(self, accumulator: ACC) -> T:  # type: ignore[type-var]
         """
         Called every time when an aggregation result should be materialized. The returned value
         could be either an early and incomplete result (periodically emitted as data arrives) or
@@ -232,6 +332,7 @@ class AggregateFunction(ImperativeAggregateFunction):
         pass
 
 
+@PublicEvolving()
 class TableAggregateFunction(ImperativeAggregateFunction):
     """
     Base class for a user-defined table aggregate function. A user-defined table aggregate function
@@ -255,6 +356,7 @@ class TableAggregateFunction(ImperativeAggregateFunction):
         pass
 
 
+@Internal()
 class DelegatingScalarFunction(ScalarFunction):
     """
     Helper scalar function implementation for lambda expression and python function. It's for
@@ -268,6 +370,21 @@ class DelegatingScalarFunction(ScalarFunction):
         return self.func(*args)
 
 
+@Internal()
+class DelegatingAsyncScalarFunction(AsyncScalarFunction):
+    """
+    Helper async scalar function implementation for async lambda expression and python async
+    function. It's for internal use only.
+    """
+
+    def __init__(self, func):
+        self.func = func
+
+    async def eval(self, *args):
+        return await self.func(*args)
+
+
+@Internal()
 class DelegationTableFunction(TableFunction):
     """
     Helper table function implementation for lambda expression and python function. It's for
@@ -281,6 +398,7 @@ class DelegationTableFunction(TableFunction):
         return self.func(*args)
 
 
+@Internal()
 class DelegatingPandasAggregateFunction(AggregateFunction):
     """
     Helper pandas aggregate function implementation for lambda expression and python function.
@@ -319,6 +437,7 @@ class PandasAggregateFunctionWrapper(object):
         self.func.close()
 
 
+@Internal()
 class UserDefinedFunctionWrapper(object):
     """
     Base Wrapper for Python user-defined function. It handles things like converting lambda
@@ -456,6 +575,45 @@ class UserDefinedScalarFunctionWrapper(UserDefinedFunctionWrapper):
         return DelegatingScalarFunction(self._func)
 
 
+class UserDefinedAsyncScalarFunctionWrapper(UserDefinedFunctionWrapper):
+    """
+    Wrapper for Python user-defined async scalar function.
+    """
+
+    def __init__(self, func, input_types, result_type, func_type, deterministic, name):
+        super(UserDefinedAsyncScalarFunctionWrapper, self).__init__(
+            func, input_types, func_type, deterministic, name)
+
+        if not isinstance(result_type, (DataType, str)):
+            raise TypeError(
+                "Invalid returnType: returnType should be DataType or str but is {}".format(
+                    result_type))
+        self._result_type = result_type
+        self._judf_placeholder = None
+
+    def _create_judf(self, serialized_func, j_input_types, j_function_kind):
+        gateway = get_gateway()
+        if isinstance(self._result_type, DataType):
+            j_result_type = _to_java_data_type(self._result_type)
+        else:
+            j_result_type = self._result_type
+        PythonAsyncScalarFunction = gateway.jvm \
+            .org.apache.flink.table.functions.python.PythonAsyncScalarFunction
+        j_async_scalar_function = PythonAsyncScalarFunction(
+            self._name,
+            bytearray(serialized_func),
+            j_input_types,
+            j_result_type,
+            j_function_kind,
+            self._deterministic,
+            self._takes_row_as_input,
+            _get_python_env())
+        return j_async_scalar_function
+
+    def _create_delegate_function(self) -> UserDefinedFunction:
+        return DelegatingAsyncScalarFunction(self._func)
+
+
 class UserDefinedTableFunctionWrapper(UserDefinedFunctionWrapper):
     """
     Wrapper for Python user-defined table function.
@@ -561,10 +719,6 @@ class UserDefinedAggregateFunctionWrapper(UserDefinedFunctionWrapper):
             else:
                 self._accumulator_type = 'ARRAY<{0}>'.format(self._result_type)
 
-        if j_input_types is not None:
-            gateway = get_gateway()
-            j_input_types = java_utils.to_jarray(
-                gateway.jvm.DataType, [_to_java_data_type(i) for i in self._input_types])
         if isinstance(self._result_type, DataType):
             j_result_type = _to_java_data_type(self._result_type)
         else:
@@ -606,8 +760,16 @@ def _get_python_env():
 
 
 def _create_udf(f, input_types, result_type, func_type, deterministic, name):
-    return UserDefinedScalarFunctionWrapper(
-        f, input_types, result_type, func_type, deterministic, name)
+    if isinstance(f, AsyncScalarFunction) or inspect.iscoroutinefunction(f):
+        if func_type == 'pandas':
+            raise ValueError(
+                "Async scalar functions do not support pandas func_type. "
+                "Please use func_type='general' (default) for async functions.")
+        return UserDefinedAsyncScalarFunctionWrapper(
+            f, input_types, result_type, func_type, deterministic, name)
+    else:
+        return UserDefinedScalarFunctionWrapper(
+            f, input_types, result_type, func_type, deterministic, name)
 
 
 def _create_udtf(f, input_types, result_types, deterministic, name):
@@ -624,13 +786,17 @@ def _create_udtaf(f, input_types, result_type, accumulator_type, func_type, dete
         f, input_types, result_type, accumulator_type, func_type, deterministic, name, True)
 
 
-def udf(f: Union[Callable, ScalarFunction, Type] = None,
+def udf(f: Union[Callable, ScalarFunction, AsyncScalarFunction, Type] = None,
         input_types: Union[List[DataType], DataType, str, List[str]] = None,
         result_type: Union[DataType, str] = None,
-        deterministic: bool = None, name: str = None, func_type: str = "general",
-        udf_type: str = None) -> Union[UserDefinedScalarFunctionWrapper, Callable]:
+        deterministic: bool = None, name: str = None, func_type: str = "general"
+        ) -> Union[
+        UserDefinedScalarFunctionWrapper, UserDefinedAsyncScalarFunctionWrapper, Callable]:
     """
-    Helper method for creating a user-defined function.
+    Helper method for creating a user-defined scalar function.
+
+    This decorator can automatically detect whether the function is async (defined with `async def`
+    or is an instance of AsyncScalarFunction).
 
     Example:
         ::
@@ -647,12 +813,25 @@ def udf(f: Union[Callable, ScalarFunction, Type] = None,
             ... def add(i, j):
             ...     return i + j
 
+            >>> # Async function will be automatically detected
+            >>> @udf(result_type=DataTypes.STRING())
+            ... async def async_lookup(key):
+            ...     await asyncio.sleep(0.1)
+            ...     return f"value_for_{key}"
+
             >>> class SubtractOne(ScalarFunction):
             ...     def eval(self, i):
             ...         return i - 1
             >>> subtract_one = udf(SubtractOne(), DataTypes.BIGINT(), DataTypes.BIGINT())
 
-    :param f: lambda function or user-defined function.
+            >>> # AsyncScalarFunction will be automatically detected
+            >>> class AsyncLookup(AsyncScalarFunction):
+            ...     async def eval(self, key):
+            ...         await asyncio.sleep(0.1)
+            ...         return f"value_for_{key}"
+            >>> async_lookup = udf(AsyncLookup(), result_type=DataTypes.STRING())
+
+    :param f: lambda function, user-defined function, or async function.
     :param input_types: optional, the input data types.
     :param result_type: the result data type.
     :param deterministic: the determinism of the function's results. True if and only if a call to
@@ -661,16 +840,10 @@ def udf(f: Union[Callable, ScalarFunction, Type] = None,
     :param name: the function name.
     :param func_type: the type of the python function, available value: general, pandas,
                      (default: general)
-    :param udf_type: the type of the python function, available value: general, pandas,
-                    (default: general)
-    :return: UserDefinedScalarFunctionWrapper or function.
+    :return: UserDefinedScalarFunctionWrapper, UserDefinedAsyncScalarFunctionWrapper, or function.
 
     .. versionadded:: 1.10.0
     """
-    if udf_type:
-        import warnings
-        warnings.warn("The param udf_type is deprecated in 1.12. Use func_type instead.")
-        func_type = udf_type
 
     if func_type not in ('general', 'pandas'):
         raise ValueError("The func_type must be one of 'general, pandas', got %s."

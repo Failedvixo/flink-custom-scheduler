@@ -34,8 +34,8 @@ import org.apache.calcite.sql.fun.{SqlCountAggFunction, SqlStdOperatorTable}
 import org.apache.calcite.sql.fun.SqlStdOperatorTable._
 import org.apache.calcite.sql.parser.SqlParserPos
 import org.apache.calcite.util.ImmutableBitSet
-import org.junit.Assert._
-import org.junit.Test
+import org.junit.jupiter.api.Assertions._
+import org.junit.jupiter.api.Test
 
 import java.util
 import java.util.Collections
@@ -495,6 +495,7 @@ class FlinkRelMdSelectivityTest extends FlinkRelMdHandlerTestBase {
         false,
         false,
         false,
+        ImmutableList.of[RexNode](),
         ImmutableList.of[Integer](),
         -1,
         null,
@@ -506,6 +507,7 @@ class FlinkRelMdSelectivityTest extends FlinkRelMdHandlerTestBase {
       false,
       false,
       false,
+      ImmutableList.of(),
       ImmutableList.of(Integer.valueOf(3)),
       -1,
       null,

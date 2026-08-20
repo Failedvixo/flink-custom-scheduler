@@ -166,7 +166,7 @@ class ExecutorImplITCase {
     private static RestClusterClient<?> clusterClient;
 
     // a generated UDF jar used for testing classloading of dependencies
-    private static URL udfDependency;
+    private static URI udfDependency;
 
     private final ThreadFactory threadFactory =
             new ExecutorThreadFactory("Executor Test Pool", IgnoreExceptionHandler.INSTANCE);
@@ -181,15 +181,15 @@ class ExecutorImplITCase {
                         "test-classloader-udf.jar",
                         GENERATED_LOWER_UDF_CLASS,
                         String.format(GENERATED_LOWER_UDF_CODE, GENERATED_LOWER_UDF_CLASS));
-        udfDependency = udfJar.toURI().toURL();
+        udfDependency = udfJar.toURI();
     }
 
     private static Configuration getConfig() {
         Configuration config = new Configuration();
         config.set(TaskManagerOptions.MANAGED_MEMORY_SIZE, MemorySize.parse("4m"));
-        config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, NUM_TMS);
-        config.setInteger(TaskManagerOptions.NUM_TASK_SLOTS, NUM_SLOTS_PER_TM);
-        config.setBoolean(WebOptions.SUBMIT_ENABLE, false);
+        config.set(TaskManagerOptions.MINI_CLUSTER_NUM_TASK_MANAGERS, NUM_TMS);
+        config.set(TaskManagerOptions.NUM_TASK_SLOTS, NUM_SLOTS_PER_TM);
+        config.set(WebOptions.SUBMIT_ENABLE, false);
         config.set(StateBackendOptions.STATE_BACKEND, "hashmap");
         config.set(CheckpointingOptions.CHECKPOINT_STORAGE, "filesystem");
         config.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, tempFolder.toURI().toString());
@@ -662,7 +662,7 @@ class ExecutorImplITCase {
     }
 
     private Executor createRestServiceExecutor(
-            List<URL> dependencies, Configuration configuration) {
+            List<URI> dependencies, Configuration configuration) {
         return createExecutor(
                 dependencies,
                 configuration,
@@ -681,7 +681,7 @@ class ExecutorImplITCase {
     }
 
     private Executor createExecutor(
-            List<URL> dependencies, Configuration configuration, InetSocketAddress address) {
+            List<URI> dependencies, Configuration configuration, InetSocketAddress address) {
         configuration.addAll(clusterClient.getFlinkConfiguration());
         DefaultContext defaultContext = new DefaultContext(configuration, dependencies);
         // frequently trigger heartbeat

@@ -190,9 +190,12 @@ public class FunctionCatalogOperatorTable implements SqlOperatorTable {
 
         final FunctionKind kind = definition.getKind();
 
-        if (kind == FunctionKind.TABLE) {
+        if (kind == FunctionKind.TABLE
+                || kind == FunctionKind.ASYNC_TABLE
+                || kind == FunctionKind.PROCESS_TABLE) {
             return true;
         } else if (kind == FunctionKind.SCALAR
+                || kind == FunctionKind.ASYNC_SCALAR
                 || kind == FunctionKind.AGGREGATE
                 || kind == FunctionKind.TABLE_AGGREGATE) {
             if (category != null && category.isTableFunction()) {

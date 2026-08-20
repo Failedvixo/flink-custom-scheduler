@@ -20,8 +20,8 @@ package org.apache.flink.runtime.dispatcher.cleanup;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobStatus;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.core.execution.RecoveryClaimMode;
 import org.apache.flink.core.testutils.OneShotLatch;
 import org.apache.flink.runtime.checkpoint.CheckpointIDCounter;
 import org.apache.flink.runtime.checkpoint.CheckpointRecoveryFactory;
@@ -29,15 +29,14 @@ import org.apache.flink.runtime.checkpoint.CompletedCheckpointStore;
 import org.apache.flink.runtime.checkpoint.TestingCheckpointIDCounter;
 import org.apache.flink.runtime.checkpoint.TestingCheckpointRecoveryFactory;
 import org.apache.flink.runtime.checkpoint.TestingCompletedCheckpointStore;
-import org.apache.flink.runtime.clusterframework.ApplicationStatus;
 import org.apache.flink.runtime.dispatcher.UnavailableDispatcherOperationException;
 import org.apache.flink.runtime.executiongraph.AccessExecutionGraph;
-import org.apache.flink.runtime.jobgraph.RestoreMode;
 import org.apache.flink.runtime.jobmaster.JobManagerRunnerResult;
 import org.apache.flink.runtime.jobmaster.JobResult;
 import org.apache.flink.runtime.scheduler.ExecutionGraphInfo;
 import org.apache.flink.runtime.state.SharedStateRegistry;
 import org.apache.flink.runtime.state.SharedStateRegistryFactory;
+import org.apache.flink.testutils.executor.TestExecutorExtension;
 import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.SerializedThrowable;
@@ -45,12 +44,14 @@ import org.apache.flink.util.concurrent.Executors;
 import org.apache.flink.util.function.ThrowingConsumer;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ExecutorService;
 import java.util.function.Function;
 
 import static org.apache.flink.core.testutils.FlinkAssertions.assertThatFuture;
@@ -63,7 +64,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class CheckpointResourcesCleanupRunnerTest {
 
-    private static final Time TIMEOUT_FOR_REQUESTS = Time.milliseconds(0);
+    @RegisterExtension
+    private static final TestExecutorExtension<ExecutorService> EXECUTOR_EXTENSION =
+            new TestExecutorExtension<>(java.util.concurrent.Executors::newCachedThreadPool);
+
+    private static final Duration TIMEOUT_FOR_REQUESTS = Duration.ofMillis(0);
 
     private static final ThrowingConsumer<CheckpointResourcesCleanupRunner, ? extends Exception>
             BEFORE_START = ignored -> {};
@@ -120,7 +125,7 @@ class CheckpointResourcesCleanupRunnerTest {
         final CheckpointResourcesCleanupRunner testInstance =
                 new TestInstanceBuilder()
                         .withCheckpointRecoveryFactory(checkpointRecoveryFactory)
-                        .withExecutor(ForkJoinPool.commonPool())
+                        .withExecutor(EXECUTOR_EXTENSION.getExecutor())
                         .build();
         testInstance.start();
 
@@ -169,7 +174,7 @@ class CheckpointResourcesCleanupRunnerTest {
         final CheckpointResourcesCleanupRunner testInstance =
                 new TestInstanceBuilder()
                         .withCheckpointRecoveryFactory(checkpointRecoveryFactory)
-                        .withExecutor(ForkJoinPool.commonPool())
+                        .withExecutor(EXECUTOR_EXTENSION.getExecutor())
                         .build();
         testInstance.start();
 
@@ -214,7 +219,7 @@ class CheckpointResourcesCleanupRunnerTest {
         final CheckpointResourcesCleanupRunner testInstance =
                 new TestInstanceBuilder()
                         .withCheckpointRecoveryFactory(checkpointRecoveryFactory)
-                        .withExecutor(ForkJoinPool.commonPool())
+                        .withExecutor(EXECUTOR_EXTENSION.getExecutor())
                         .build();
         testInstance.start();
 
@@ -242,7 +247,7 @@ class CheckpointResourcesCleanupRunnerTest {
     @Test
     void testCancellationBeforeStart() throws Exception {
         final CheckpointResourcesCleanupRunner testInstance =
-                new TestInstanceBuilder().withExecutor(ForkJoinPool.commonPool()).build();
+                new TestInstanceBuilder().withExecutor(EXECUTOR_EXTENSION.getExecutor()).build();
 
         assertThatFuture(testInstance.cancel(TIMEOUT_FOR_REQUESTS))
                 .eventuallyFailsWith(ExecutionException.class)
@@ -262,7 +267,7 @@ class CheckpointResourcesCleanupRunnerTest {
         final CheckpointResourcesCleanupRunner testInstance =
                 new TestInstanceBuilder()
                         .withCheckpointRecoveryFactory(checkpointRecoveryFactory)
-                        .withExecutor(ForkJoinPool.commonPool())
+                        .withExecutor(EXECUTOR_EXTENSION.getExecutor())
                         .build();
         AFTER_START.accept(testInstance);
         assertThatFuture(testInstance.cancel(TIMEOUT_FOR_REQUESTS))
@@ -278,7 +283,7 @@ class CheckpointResourcesCleanupRunnerTest {
     @Test
     void testCancellationAfterClose() throws Exception {
         final CheckpointResourcesCleanupRunner testInstance =
-                new TestInstanceBuilder().withExecutor(ForkJoinPool.commonPool()).build();
+                new TestInstanceBuilder().withExecutor(EXECUTOR_EXTENSION.getExecutor()).build();
         AFTER_CLOSE.accept(testInstance);
         assertThatFuture(testInstance.cancel(TIMEOUT_FOR_REQUESTS))
                 .eventuallyFailsWith(ExecutionException.class)
@@ -380,7 +385,7 @@ class CheckpointResourcesCleanupRunnerTest {
         final JobID jobId = new JobID();
         final CheckpointResourcesCleanupRunner testInstance =
                 new TestInstanceBuilder()
-                        .withJobResult(createJobResult(jobId, ApplicationStatus.CANCELED))
+                        .withJobResult(createJobResult(jobId, JobStatus.CANCELED))
                         .build();
         assertThat(testInstance.getJobID()).isEqualTo(jobId);
     }
@@ -448,7 +453,7 @@ class CheckpointResourcesCleanupRunnerTest {
                 actualExecutionGraph ->
                         actualExecutionGraph
                                 .getState()
-                                .equals(jobResult.getApplicationStatus().deriveJobStatus()));
+                                .equals(jobResult.getJobStatus().orElseThrow()));
     }
 
     @Test
@@ -503,24 +508,20 @@ class CheckpointResourcesCleanupRunnerTest {
     }
 
     private static JobResult createDummySuccessJobResult() {
-        return createJobResult(new JobID(), ApplicationStatus.SUCCEEDED);
+        return createJobResult(new JobID(), JobStatus.FINISHED);
     }
 
     private static JobResult createJobResultWithFailure(SerializedThrowable throwable) {
         return new JobResult.Builder()
                 .jobId(new JobID())
-                .applicationStatus(ApplicationStatus.FAILED)
+                .jobStatus(JobStatus.FAILED)
                 .serializedThrowable(throwable)
                 .netRuntime(1)
                 .build();
     }
 
-    private static JobResult createJobResult(JobID jobId, ApplicationStatus applicationStatus) {
-        return new JobResult.Builder()
-                .jobId(jobId)
-                .applicationStatus(applicationStatus)
-                .netRuntime(1)
-                .build();
+    private static JobResult createJobResult(JobID jobId, JobStatus jobStatus) {
+        return new JobResult.Builder().jobId(jobId).jobStatus(jobStatus).netRuntime(1).build();
     }
 
     private static CheckpointRecoveryFactory createCheckpointRecoveryFactory() {
@@ -617,7 +618,7 @@ class CheckpointResourcesCleanupRunnerTest {
                 int maxNumberOfCheckpointsToRetain,
                 SharedStateRegistryFactory sharedStateRegistryFactory,
                 Executor ioExecutor,
-                RestoreMode restoreMode)
+                RecoveryClaimMode recoveryClaimMode)
                 throws Exception {
             creationLatch.await();
             return completedCheckpointStore;

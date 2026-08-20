@@ -18,7 +18,7 @@
 
 package org.apache.flink.table.runtime.typeutils;
 
-import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.serialization.SerializerConfigImpl;
 import org.apache.flink.api.common.typeutils.SerializerTestInstance;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.typeutils.runtime.kryo.KryoSerializer;
@@ -33,15 +33,25 @@ import org.apache.flink.table.data.binary.BinaryRowData;
 import org.apache.flink.table.data.writer.BinaryArrayWriter;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.ArrayType;
+import org.apache.flink.table.types.logical.BigIntType;
+import org.apache.flink.table.types.logical.BinaryType;
+import org.apache.flink.table.types.logical.CharType;
+import org.apache.flink.table.types.logical.DateType;
+import org.apache.flink.table.types.logical.DayTimeIntervalType;
+import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.DoubleType;
+import org.apache.flink.table.types.logical.FloatType;
 import org.apache.flink.table.types.logical.IntType;
+import org.apache.flink.table.types.logical.LocalZonedTimestampType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RawType;
+import org.apache.flink.table.types.logical.SmallIntType;
+import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.testutils.DeeplyEqualsChecker;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.Objects;
 
@@ -348,7 +358,7 @@ abstract class RowDataSerializerTest extends SerializerTestInstance<RowData> {
         private static RowDataSerializer getRowSerializer() {
             RawValueDataSerializer<WrappedString> rawValueSerializer =
                     new RawValueDataSerializer<>(
-                            new KryoSerializer<>(WrappedString.class, new ExecutionConfig()));
+                            new KryoSerializer<>(WrappedString.class, new SerializerConfigImpl()));
             return new RowDataSerializer(
                     new LogicalType[] {new RawType(RawValueData.class, rawValueSerializer)},
                     new TypeSerializer[] {rawValueSerializer});
@@ -396,6 +406,56 @@ abstract class RowDataSerializerTest extends SerializerTestInstance<RowData> {
         private static RowDataSerializer getRowSerializer() {
             return (RowDataSerializer)
                     InternalSerializers.<RowData>create(NESTED_DATA_TYPE.getLogicalType());
+        }
+    }
+
+    /**
+     * Converters and serializers always support nullability. The NOT NULL constraint is only
+     * considered on SQL semantic level but not data transfer. E.g. partial deletes (i.e. key-only
+     * upserts) set all non-key fields to null, regardless of logical type.
+     */
+    static final class RowDataSerializerWithNullForNotNullTypeTest extends RowDataSerializerTest {
+        public RowDataSerializerWithNullForNotNullTypeTest() {
+            super(getRowSerializer(), getData());
+        }
+
+        private static RowData[] getData() {
+            GenericRowData row = new GenericRowData(13);
+            row.setField(0, 2);
+            row.setField(1, null);
+            row.setField(3, null);
+            row.setField(4, null);
+            row.setField(5, null);
+            row.setField(6, null);
+            row.setField(7, null);
+            row.setField(8, null);
+            row.setField(9, null);
+            row.setField(10, null);
+            row.setField(11, null);
+            row.setField(12, null);
+
+            return new RowData[] {row};
+        }
+
+        private static RowDataSerializer getRowSerializer() {
+            InternalTypeInfo<RowData> typeInfo =
+                    InternalTypeInfo.ofFields(
+                            new IntType(false),
+                            new SmallIntType(false),
+                            new BigIntType(false),
+                            new VarCharType(false, VarCharType.MAX_LENGTH),
+                            new CharType(false, CharType.MAX_LENGTH),
+                            new BinaryType(false, BinaryType.MAX_LENGTH),
+                            new VarBinaryType(false, VarBinaryType.MAX_LENGTH),
+                            new DateType(false),
+                            new DayTimeIntervalType(
+                                    false, DayTimeIntervalType.DayTimeResolution.DAY, 1, 6),
+                            new DecimalType(false, 10, 2),
+                            new FloatType(false),
+                            new DoubleType(false),
+                            new LocalZonedTimestampType(false, 3));
+
+            return typeInfo.toRowSerializer();
         }
     }
 }

@@ -57,7 +57,7 @@ class InternalServiceDecoratorTest extends KubernetesJobManagerTestBase {
         assertThat(resources).hasSize(1);
 
         assertThat(InternalServiceDecorator.getNamespacedInternalServiceName(CLUSTER_ID, NAMESPACE))
-                .isEqualTo(this.flinkConfig.getString(JobManagerOptions.ADDRESS));
+                .isEqualTo(this.flinkConfig.get(JobManagerOptions.ADDRESS));
 
         final Service internalService = (Service) resources.get(0);
 
@@ -67,7 +67,10 @@ class InternalServiceDecoratorTest extends KubernetesJobManagerTestBase {
                 .isEqualTo(InternalServiceDecorator.getInternalServiceName(CLUSTER_ID));
 
         final Map<String, String> expectedLabels = getCommonLabels();
+        expectedLabels.putAll(userLabels);
         assertThat(internalService.getMetadata().getLabels()).isEqualTo(expectedLabels);
+
+        assertThat(internalService.getMetadata().getAnnotations()).isEqualTo(userAnnotations);
 
         assertThat(internalService.getSpec().getType()).isNull();
         assertThat(internalService.getSpec().getClusterIP()).isEqualTo("None");
@@ -84,13 +87,14 @@ class InternalServiceDecoratorTest extends KubernetesJobManagerTestBase {
                                 .build());
         assertThat(internalService.getSpec().getPorts()).isEqualTo(expectedServicePorts);
 
-        expectedLabels.put(Constants.LABEL_COMPONENT_KEY, Constants.LABEL_COMPONENT_JOB_MANAGER);
-        assertThat(internalService.getSpec().getSelector()).isEqualTo(expectedLabels);
+        final Map<String, String> expectedSelectors = getCommonLabels();
+        expectedSelectors.put(Constants.LABEL_COMPONENT_KEY, Constants.LABEL_COMPONENT_JOB_MANAGER);
+        assertThat(internalService.getSpec().getSelector()).isEqualTo(expectedSelectors);
     }
 
     @Test
     void testDisableInternalService() throws IOException {
-        this.flinkConfig.setString(
+        this.flinkConfig.set(
                 HighAvailabilityOptions.HA_MODE, HighAvailabilityMode.ZOOKEEPER.name());
 
         final List<HasMetadata> resources =

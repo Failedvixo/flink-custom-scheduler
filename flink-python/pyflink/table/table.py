@@ -17,7 +17,10 @@
 ################################################################################
 
 from py4j.java_gateway import get_method
-from typing import Union
+from typing import Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pandas
 
 from pyflink.java_gateway import get_gateway
 from pyflink.table import ExplainDetail
@@ -25,13 +28,17 @@ from pyflink.table.expression import Expression, _get_java_expression
 from pyflink.table.expressions import col, with_columns, without_columns
 from pyflink.table.serializers import ArrowSerializer
 from pyflink.table.table_descriptor import TableDescriptor
+from pyflink.table.table_pipeline import TablePipeline
 from pyflink.table.table_result import TableResult
 from pyflink.table.table_schema import TableSchema
+from pyflink.table.catalog import ResolvedSchema
 from pyflink.table.types import create_arrow_schema
 from pyflink.table.udf import UserDefinedScalarFunctionWrapper, \
     UserDefinedAggregateFunctionWrapper, UserDefinedTableFunctionWrapper
 from pyflink.table.utils import tz_convert_from_internal, to_expression_jarray
 from pyflink.table.window import OverWindow, GroupWindow
+
+from pyflink.util.api_stability_decorators import Deprecated, PublicEvolving
 
 from pyflink.util.java_utils import to_jarray
 from pyflink.util.java_utils import to_j_explain_detail_arr
@@ -39,6 +46,7 @@ from pyflink.util.java_utils import to_j_explain_detail_arr
 __all__ = ['Table', 'GroupedTable', 'GroupWindowedTable', 'OverWindowedTable', 'WindowGroupedTable']
 
 
+@PublicEvolving()
 class Table(object):
     """
     A :class:`~pyflink.table.Table` object is the core abstraction of the Table API.
@@ -912,7 +920,7 @@ class Table(object):
                 func = func(with_columns(col("*")))
             return FlatAggregateTable(self._j_table.flatAggregate(func._j_expr), self._t_env)
 
-    def to_pandas(self):
+    def to_pandas(self) -> 'pandas.DataFrame':
         """
         Converts the table to a pandas DataFrame. It will collect the content of the table to
         the client side and so please make sure that the content of the table could fit in memory
@@ -957,6 +965,7 @@ class Table(object):
             import pandas as pd
             return pd.DataFrame.from_records([], columns=self.get_schema().get_field_names())
 
+    @Deprecated(since="2.1.0", detail="Use :func:`Table.get_resolved_schema` instead.")
     def get_schema(self) -> TableSchema:
         """
         Returns the :class:`~pyflink.table.TableSchema` of this table.
@@ -964,6 +973,14 @@ class Table(object):
         :return: The schema of this table.
         """
         return TableSchema(j_table_schema=self._j_table.getSchema())
+
+    def get_resolved_schema(self) -> ResolvedSchema:
+        """
+        Returns the :class:`~pyflink.table.catalog.ResolvedSchema` of this table.
+
+        :return: the resolved schema of this table.
+        """
+        return ResolvedSchema(j_resolved_schema=self._j_table.getResolvedSchema())
 
     def print_schema(self):
         """
@@ -975,7 +992,7 @@ class Table(object):
                        table_path_or_descriptor: Union[str, TableDescriptor],
                        overwrite: bool = False) -> TableResult:
         """
-        1. When target_path_or_descriptor is a tale path:
+        1. When target_path_or_descriptor is a table path:
 
             Writes the :class:`~pyflink.table.Table` to a :class:`~pyflink.table.TableSink` that was
             registered under the specified name, and then execute the insert operation. For the path
@@ -1077,7 +1094,170 @@ class Table(object):
         j_extra_details = to_j_explain_detail_arr(extra_details)
         return self._j_table.explain(TEXT, j_extra_details)
 
+    def print_explain(self, *extra_details: ExplainDetail):
+        """
+        Like :func:`~pyflink.table.Table.explain`, but prints the result to the client
+        console.
 
+        .. versionadded:: 2.1.0
+        """
+        print(self.explain(*extra_details))
+
+    def insert_into(
+        self, table_path_or_descriptor: Union[str, TableDescriptor], overwrite: bool = False
+    ) -> TablePipeline:
+        """
+        When ``target_path_or_descriptor`` is a table path:
+
+            Declares that the pipeline defined by the given :class:`Table` should be written to a
+            table (backed by a DynamicTableSink) that was registered under the specified path.
+
+            See the documentation of
+            :func:`pyflink.table.table_environment.TableEnvironment.use_database` or
+            :func:`pyflink.table.table_environment.TableEnvironment.use_catalog` for the rules on
+            the path resolution.
+
+            Example:
+            ::
+
+                >>> table = table_env.sql_query("SELECT * FROM MyTable")
+                >>> table_pipeline = table.insert_into("MySinkTable", True)
+                >>> table_result = table_pipeline.execute().wait()
+
+        When ``target_path_or_descriptor`` is a  :class:`~pyflink.table.TableDescriptor` :
+
+            Declares that the pipeline defined by the given :class:`Table` object should be written
+            to a table (backed by a DynamicTableSink) expressed via the given
+            :class:`~pyflink.table.TableDescriptor`.
+
+            The descriptor won't be registered in the catalog, but it will be propagated directly
+            in the operation tree. Note that calling this method multiple times, even with the same
+            descriptor, results in multiple sink tables instances.
+
+            A :class:`~pyflink.table.Schema` can be associated with the sink descriptor, which
+            asserts a structure on the described table, and can be used to:
+
+            - overwrite automatically derived columns with a custom
+              :class:`~pyflink.table.types.DataType`
+            - add metadata columns next to the physical columns
+            - declare a primary key
+
+            It is possible to declare a schema without physical/regular columns. In this case, those
+            columns will be automatically derived and implicitly put at the beginning of the schema
+            declaration.
+
+            Examples:
+            ::
+
+                >>> schema = Schema.new_builder()
+                ...      .column("f0", DataTypes.STRING())
+                ...      .build()
+                >>> table = table_env.from_descriptor(TableDescriptor.for_connector("datagen")
+                ...      .schema(schema)
+                ...      .build())
+                >>> table.insert_into(TableDescriptor.for_connector("blackhole")
+                ...      .schema(schema)
+                ...      .build(), True)
+
+        One can execute the returned :class:`~pyflink.table.TablePipeline` using
+        :func:`~pyflink.table.TablePipeline.execute`.
+
+        If multiple pipelines should insert data into one or more sink tables as part of a single
+        execution, use a :class:`~pyflink.table.StatementSet` (see
+        :func:`~pyflink.table.TableEnvironment.create_statement_set()`).
+
+        :param table_path_or_descriptor: The path of the registered
+            :class:`~pyflink.table.TableSink` or the descriptor describing the sink table into which
+            data should be inserted.
+        :param overwrite: Indicates whether existing data should be overwritten.
+        :return: The complete pipeline from one or more source tables to a sink table.
+
+        .. versionadded:: 2.1.0
+        """
+        if isinstance(table_path_or_descriptor, str):
+            return TablePipeline(
+                j_table_pipeline=self._j_table.insertInto(table_path_or_descriptor, overwrite),
+                t_env=self._t_env,
+            )
+        else:
+            return TablePipeline(
+                j_table_pipeline=self._j_table.insertInto(
+                    table_path_or_descriptor._j_table_descriptor, overwrite
+                ),
+                t_env=self._t_env,
+            )
+
+    def to_changelog(self, *arguments: Expression) -> 'Table':
+        """
+        Converts this table into an append-only table with an explicit operation code
+        column using the built-in ``TO_CHANGELOG`` process table function.
+
+        Each input row - regardless of its original change operation - is emitted as an
+        INSERT-only row with a string ``op`` column indicating the original operation
+        (INSERT, UPDATE_BEFORE, UPDATE_AFTER, DELETE).
+
+        Example:
+        ::
+
+            >>> from pyflink.table.expressions import descriptor, map_
+            >>> # Default: adds 'op' column with standard change operation names
+            >>> result = table.to_changelog()
+            >>> # Custom op column name and mapping
+            >>> result = table.to_changelog(
+            ...     descriptor("op_code").as_argument("op"),
+            ...     map_("INSERT", "I", "UPDATE_AFTER", "U").as_argument("op_mapping")
+            ... )
+            >>> # Deletion flag pattern
+            >>> result = table.to_changelog(
+            ...     descriptor("deleted").as_argument("op"),
+            ...     map_("INSERT, UPDATE_AFTER", "false",
+            ...          "DELETE", "true").as_argument("op_mapping")
+            ... )
+
+        :param arguments: Optional named arguments for ``op`` and ``op_mapping``.
+        :return: An append-only :class:`~pyflink.table.Table` with an ``op`` column prepended
+                 to the input columns.
+        """
+        return Table(self._j_table.toChangelog(to_expression_jarray(arguments)), self._t_env)
+
+    def from_changelog(self, *arguments: Expression) -> 'Table':
+        """
+        Converts this append-only table with an explicit operation code column into a
+        (potentially updating) dynamic table. Each input row is expected to have a string
+        column that indicates the change operation. The operation column is interpreted by
+        the engine and removed from the output.
+
+        The operation code column defaults to ``op``. By default, the codes ``INSERT``,
+        ``UPDATE_BEFORE``, ``UPDATE_AFTER``, and ``DELETE`` are recognized; pass
+        ``op_mapping`` to use custom codes.
+
+        Example:
+        ::
+
+            >>> from pyflink.table.expressions import descriptor, map_
+            >>> # Default: reads 'op' column with standard change operation names
+            >>> result = cdc_stream.from_changelog()
+            >>> # With custom op column name
+            >>> result = cdc_stream.from_changelog(
+            ...     descriptor("operation").as_argument("op")
+            ... )
+            >>> # With custom op_mapping
+            >>> result = cdc_stream.from_changelog(
+            ...     descriptor("op").as_argument("op"),
+            ...     map_("c, r", "INSERT",
+            ...          "ub", "UPDATE_BEFORE",
+            ...          "ua", "UPDATE_AFTER",
+            ...          "d", "DELETE").as_argument("op_mapping")
+            ... )
+
+        :param arguments: Optional named arguments for ``op`` and ``op_mapping``.
+        :return: A dynamic :class:`~pyflink.table.Table` with the ``op`` column removed and
+                 proper change operation semantics.
+        """
+        return Table(self._j_table.fromChangelog(to_expression_jarray(arguments)), self._t_env)
+
+
+@PublicEvolving()
 class GroupedTable(object):
     """
     A table that has been grouped on a set of grouping keys.
@@ -1202,6 +1382,7 @@ class GroupedTable(object):
             return FlatAggregateTable(self._j_table.flatAggregate(func._j_expr), self._t_env)
 
 
+@PublicEvolving()
 class GroupWindowedTable(object):
     """
     A table that has been windowed for :class:`~pyflink.table.GroupWindow`.
@@ -1241,6 +1422,7 @@ class GroupWindowedTable(object):
             self._j_table.groupBy(to_expression_jarray(fields)), self._t_env)
 
 
+@PublicEvolving()
 class WindowGroupedTable(object):
     """
     A table that has been windowed and grouped for :class:`~pyflink.table.window.GroupWindow`.
@@ -1326,6 +1508,7 @@ class WindowGroupedTable(object):
         return func_expression
 
 
+@PublicEvolving()
 class OverWindowedTable(object):
     """
     A table that has been windowed for :class:`~pyflink.table.window.OverWindow`.
@@ -1358,6 +1541,7 @@ class OverWindowedTable(object):
         return Table(self._j_table.select(to_expression_jarray(fields)), self._t_env)
 
 
+@PublicEvolving()
 class AggregatedTable(object):
     """
     A table that has been performed on the aggregate function.
@@ -1396,6 +1580,7 @@ class AggregatedTable(object):
         return Table(self._j_table.select(to_expression_jarray(fields)), self._t_env)
 
 
+@PublicEvolving()
 class FlatAggregateTable(object):
     """
     A table that performs flatAggregate on a :class:`~pyflink.table.Table`, a

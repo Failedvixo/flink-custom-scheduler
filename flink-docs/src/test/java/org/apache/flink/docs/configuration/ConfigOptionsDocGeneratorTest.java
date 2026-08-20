@@ -18,6 +18,10 @@
 
 package org.apache.flink.docs.configuration;
 
+import org.apache.flink.annotation.Experimental;
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.Public;
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.annotation.docs.ConfigGroup;
 import org.apache.flink.annotation.docs.ConfigGroups;
 import org.apache.flink.annotation.docs.Documentation;
@@ -45,7 +49,10 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.flink.configuration.description.TextElement.text;
+import static org.apache.flink.docs.util.Utils.getProjectRootDir;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatException;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 
 /** Tests for the {@link ConfigOptionsDocGenerator}. */
 @SuppressWarnings("unused")
@@ -361,9 +368,7 @@ class ConfigOptionsDocGeneratorTest {
                                 + "            <td>This is example description for the first option.</td>\n"
                                 + "        </tr>\n"
                                 + "    </tbody>\n"
-                                + "</table>\n");
-
-        assertThat(tablesConverted)
+                                + "</table>\n")
                 .containsEntry(
                         "secondGroup",
                         "<table class=\"configuration table table-bordered\">\n"
@@ -383,9 +388,7 @@ class ConfigOptionsDocGeneratorTest {
                                 + "            <td>This is long example description for the second option.</td>\n"
                                 + "        </tr>\n"
                                 + "    </tbody>\n"
-                                + "</table>\n");
-
-        assertThat(tablesConverted)
+                                + "</table>\n")
                 .containsEntry(
                         "default",
                         "<table class=\"configuration table table-bordered\">\n"
@@ -726,14 +729,44 @@ class ConfigOptionsDocGeneratorTest {
         assertThat(ConfigOptionsDocGenerator.toSnakeCase("DBOptions")).isEqualTo("db_options");
     }
 
-    static String getProjectRootDir() {
-        final String dirFromProperty = System.getProperty("rootDir");
-        if (dirFromProperty != null) {
-            return dirFromProperty;
-        }
+    @Public
+    static class PublicOptions {}
 
-        // to make this work in the IDE use a default fallback
-        final String currentDir = System.getProperty("user.dir");
-        return new File(currentDir).getParent();
+    @PublicEvolving
+    static class PublicEvolvingOptions {}
+
+    @Experimental
+    static class ExperimentalOptions {}
+
+    @Internal
+    static class InternalOptions {}
+
+    static class OptionsWithoutAnnotation {}
+
+    @Test
+    void testVerifyClassAnnotation() {
+        assertThatNoException()
+                .isThrownBy(
+                        () -> ConfigOptionsDocGenerator.verifyClassAnnotation(PublicOptions.class));
+        assertThatNoException()
+                .isThrownBy(
+                        () ->
+                                ConfigOptionsDocGenerator.verifyClassAnnotation(
+                                        PublicEvolvingOptions.class));
+        assertThatNoException()
+                .isThrownBy(
+                        () ->
+                                ConfigOptionsDocGenerator.verifyClassAnnotation(
+                                        ExperimentalOptions.class));
+        assertThatException()
+                .isThrownBy(
+                        () ->
+                                ConfigOptionsDocGenerator.verifyClassAnnotation(
+                                        OptionsWithoutAnnotation.class));
+        assertThatException()
+                .isThrownBy(
+                        () ->
+                                ConfigOptionsDocGenerator.verifyClassAnnotation(
+                                        InternalOptions.class));
     }
 }

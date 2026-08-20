@@ -58,7 +58,6 @@ import org.apache.flink.runtime.scheduler.TestingPhysicalSlot;
 import org.apache.flink.runtime.scheduler.TestingPhysicalSlotProvider;
 import org.apache.flink.runtime.scheduler.strategy.ConsumedPartitionGroup;
 import org.apache.flink.runtime.shuffle.ShuffleDescriptor;
-import org.apache.flink.runtime.taskexecutor.NoOpShuffleDescriptorsCache;
 import org.apache.flink.runtime.taskexecutor.TestingTaskExecutorGateway;
 import org.apache.flink.runtime.taskexecutor.TestingTaskExecutorGatewayBuilder;
 import org.apache.flink.runtime.taskmanager.LocalTaskManagerLocation;
@@ -66,6 +65,7 @@ import org.apache.flink.runtime.taskmanager.TaskExecutionState;
 import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
 import org.apache.flink.runtime.testtasks.NoOpInvokable;
 import org.apache.flink.runtime.testutils.DirectScheduledExecutorService;
+import org.apache.flink.runtime.util.NoOpGroupCache;
 import org.apache.flink.testutils.TestingUtils;
 import org.apache.flink.testutils.executor.TestExecutorExtension;
 import org.apache.flink.util.function.FunctionUtils;
@@ -85,6 +85,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 
+import static org.apache.flink.runtime.util.JobVertexConnectionUtils.connectNewDataSetAsInput;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link DefaultExecutionGraph} deployment. */
@@ -148,12 +149,12 @@ class DefaultExecutionGraphDeploymentTest {
         v3.setInvokableClass(BatchTask.class);
         v4.setInvokableClass(BatchTask.class);
 
-        v2.connectNewDataSetAsInput(
-                v1, DistributionPattern.ALL_TO_ALL, ResultPartitionType.PIPELINED);
-        v3.connectNewDataSetAsInput(
-                v2, DistributionPattern.ALL_TO_ALL, ResultPartitionType.PIPELINED);
-        v4.connectNewDataSetAsInput(
-                v2, DistributionPattern.ALL_TO_ALL, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(
+                v2, v1, DistributionPattern.ALL_TO_ALL, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(
+                v3, v2, DistributionPattern.ALL_TO_ALL, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(
+                v4, v2, DistributionPattern.ALL_TO_ALL, ResultPartitionType.PIPELINED);
 
         final JobGraph jobGraph = JobGraphTestUtils.batchJobGraph(v1, v2, v3, v4);
         final JobID jobId = jobGraph.getJobID();
@@ -180,7 +181,10 @@ class DefaultExecutionGraphDeploymentTest {
                 FunctionUtils.uncheckedConsumer(
                         taskDeploymentDescriptor -> {
                             taskDeploymentDescriptor.loadBigData(
-                                    blobCache, NoOpShuffleDescriptorsCache.INSTANCE);
+                                    blobCache,
+                                    new NoOpGroupCache<>(),
+                                    new NoOpGroupCache<>(),
+                                    new NoOpGroupCache<>());
                             tdd.complete(taskDeploymentDescriptor);
                         }));
 
@@ -203,10 +207,8 @@ class DefaultExecutionGraphDeploymentTest {
         TaskDeploymentDescriptor descr = tdd.get();
         assertThat(descr).isNotNull();
 
-        JobInformation jobInformation =
-                descr.getSerializedJobInformation().deserializeValue(getClass().getClassLoader());
-        TaskInformation taskInformation =
-                descr.getSerializedTaskInformation().deserializeValue(getClass().getClassLoader());
+        JobInformation jobInformation = descr.getJobInformation();
+        TaskInformation taskInformation = descr.getTaskInformation();
 
         assertThat(descr.getJobId()).isEqualTo(jobId);
         assertThat(jobInformation.getJobId()).isEqualTo(jobId);
@@ -220,8 +222,8 @@ class DefaultExecutionGraphDeploymentTest {
                 descr.getProducedPartitions();
         Collection<InputGateDeploymentDescriptor> consumedPartitions = descr.getInputGates();
 
-        assertThat(producedPartitions.size()).isEqualTo(2);
-        assertThat(consumedPartitions.size()).isEqualTo(1);
+        assertThat(producedPartitions).hasSize((2));
+        assertThat(consumedPartitions).hasSize(1);
 
         Iterator<ResultPartitionDeploymentDescriptor> iteratorProducedPartitions =
                 producedPartitions.iterator();
@@ -441,8 +443,8 @@ class DefaultExecutionGraphDeploymentTest {
         v1.setInvokableClass(BatchTask.class);
         v2.setInvokableClass(BatchTask.class);
 
-        v2.connectNewDataSetAsInput(
-                v1, DistributionPattern.POINTWISE, ResultPartitionType.BLOCKING);
+        connectNewDataSetAsInput(
+                v2, v1, DistributionPattern.POINTWISE, ResultPartitionType.BLOCKING);
 
         final JobGraph graph = JobGraphTestUtils.batchJobGraph(v1, v2);
 
@@ -528,7 +530,7 @@ class DefaultExecutionGraphDeploymentTest {
         scheduler.startScheduling();
 
         Map<ExecutionAttemptID, Execution> executions = eg.getRegisteredExecutions();
-        assertThat(executions.size()).isEqualTo(dop1 + dop2);
+        assertThat(executions).hasSize(dop1 + dop2);
 
         return scheduler;
     }
@@ -539,7 +541,7 @@ class DefaultExecutionGraphDeploymentTest {
         final int negativeMaxNumberOfCheckpointsToRetain = -10;
 
         final Configuration jobManagerConfig = new Configuration();
-        jobManagerConfig.setInteger(
+        jobManagerConfig.set(
                 CheckpointingOptions.MAX_RETAINED_CHECKPOINTS,
                 negativeMaxNumberOfCheckpointsToRetain);
 
@@ -572,8 +574,11 @@ class DefaultExecutionGraphDeploymentTest {
         sinkVertex.setInvokableClass(NoOpInvokable.class);
         sinkVertex.setParallelism(sinkParallelism);
 
-        sinkVertex.connectNewDataSetAsInput(
-                sourceVertex, DistributionPattern.POINTWISE, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(
+                sinkVertex,
+                sourceVertex,
+                DistributionPattern.POINTWISE,
+                ResultPartitionType.PIPELINED);
 
         final int numberTasks = sourceParallelism + sinkParallelism;
         final ArrayBlockingQueue<ExecutionAttemptID> submittedTasksQueue =

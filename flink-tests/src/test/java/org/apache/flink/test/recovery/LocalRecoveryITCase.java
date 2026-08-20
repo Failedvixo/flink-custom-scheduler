@@ -22,13 +22,14 @@ import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.accumulators.ListAccumulator;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
-import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.ClusterOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.HeartbeatManagerOptions;
 import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.configuration.RestOptions;
+import org.apache.flink.configuration.StateRecoveryOptions;
 import org.apache.flink.configuration.TaskManagerOptions;
+import org.apache.flink.core.execution.CheckpointingMode;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.runtime.entrypoint.StandaloneSessionClusterEntrypoint;
 import org.apache.flink.runtime.rest.RestClient;
@@ -39,11 +40,10 @@ import org.apache.flink.runtime.rest.messages.checkpoints.CheckpointingStatistic
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.runtime.testutils.CommonTestUtils;
-import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
-import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunction;
+import org.apache.flink.streaming.api.functions.sink.v2.DiscardingSink;
+import org.apache.flink.streaming.api.functions.source.legacy.RichParallelSourceFunction;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 import org.apache.flink.test.recovery.utils.TaskExecutorProcessEntryPoint;
 import org.apache.flink.test.util.TestProcessBuilder;
@@ -68,7 +68,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests local recovery by restarting Flink processes. */
 @ExtendWith(TestLoggerExtension.class)
@@ -79,16 +79,16 @@ class LocalRecoveryITCase {
     @TempDir private File tmpDirectory;
 
     @Test
-    public void testRecoverLocallyFromProcessCrashWithWorkingDirectory() throws Exception {
+    void testRecoverLocallyFromProcessCrashWithWorkingDirectory() throws Exception {
         final Configuration configuration = new Configuration();
         configuration.set(JobManagerOptions.ADDRESS, "localhost");
         configuration.set(JobManagerOptions.PORT, 0);
         configuration.set(RestOptions.BIND_PORT, "0");
-        configuration.set(HeartbeatManagerOptions.HEARTBEAT_TIMEOUT, 10000L);
-        configuration.set(HeartbeatManagerOptions.HEARTBEAT_INTERVAL, 1000L);
+        configuration.set(HeartbeatManagerOptions.HEARTBEAT_TIMEOUT, Duration.ofMillis(10000L));
+        configuration.set(HeartbeatManagerOptions.HEARTBEAT_INTERVAL, Duration.ofMillis(1000L));
         configuration.set(HeartbeatManagerOptions.HEARTBEAT_RPC_FAILURE_THRESHOLD, 1);
         configuration.set(ClusterOptions.PROCESS_WORKING_DIR_BASE, tmpDirectory.getAbsolutePath());
-        configuration.set(CheckpointingOptions.LOCAL_RECOVERY, true);
+        configuration.set(StateRecoveryOptions.LOCAL_RECOVERY, true);
         configuration.set(TaskManagerOptions.SLOT_TIMEOUT, Duration.ofSeconds(30L));
 
         final int parallelism = 3;
@@ -116,7 +116,7 @@ class LocalRecoveryITCase {
                             .getJobExecutionResult()
                             .get(waitingTimeInSeconds, TimeUnit.SECONDS)
                             .getAccumulatorResult(ALLOCATION_FAILURES_ACCUMULATOR_NAME);
-            assertTrue(allocFailures.isEmpty(), allocFailures.toString());
+            assertThat(allocFailures).withFailMessage(allocFailures.toString()).isEmpty();
 
             success = true;
         } finally {
@@ -253,7 +253,7 @@ class LocalRecoveryITCase {
 
         env.enableCheckpointing(100, CheckpointingMode.EXACTLY_ONCE);
 
-        env.addSource(new LocalRecoverySource()).keyBy(x -> x).addSink(new DiscardingSink<>());
+        env.addSource(new LocalRecoverySource()).keyBy(x -> x).sinkTo(new DiscardingSink<>());
         final JobClient jobClient = env.executeAsync();
         return jobClient;
     }
@@ -288,7 +288,7 @@ class LocalRecoveryITCase {
             StreamingRuntimeContext runtimeContext = (StreamingRuntimeContext) getRuntimeContext();
             String allocationId = runtimeContext.getAllocationIDAsString();
             // Pattern of the name: "Flat Map -> Sink: Unnamed (4/4)#0". Remove "#0" part:
-            String myName = runtimeContext.getTaskNameWithSubtasks().split("#")[0];
+            String myName = runtimeContext.getTaskInfo().getTaskNameWithSubtasks().split("#")[0];
 
             ListStateDescriptor<TaskNameAllocationID> previousAllocationsStateDescriptor =
                     new ListStateDescriptor<>("sourceState", TaskNameAllocationID.class);
@@ -330,8 +330,8 @@ class LocalRecoveryITCase {
                 running = false;
             }
 
-            previousAllocations.clear();
-            previousAllocations.add(new TaskNameAllocationID(myName, allocationId));
+            previousAllocations.update(
+                    Collections.singletonList(new TaskNameAllocationID(myName, allocationId)));
         }
     }
 

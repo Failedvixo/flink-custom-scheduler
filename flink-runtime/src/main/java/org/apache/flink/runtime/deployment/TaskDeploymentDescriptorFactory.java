@@ -30,7 +30,6 @@ import org.apache.flink.runtime.deployment.TaskDeploymentDescriptor.MaybeOffload
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.executiongraph.Execution;
 import org.apache.flink.runtime.executiongraph.ExecutionVertex;
-import org.apache.flink.runtime.executiongraph.IndexRange;
 import org.apache.flink.runtime.executiongraph.IntermediateResult;
 import org.apache.flink.runtime.executiongraph.IntermediateResultPartition;
 import org.apache.flink.runtime.executiongraph.InternalExecutionGraphAccessor;
@@ -113,7 +112,7 @@ public class TaskDeploymentDescriptorFactory {
     public TaskDeploymentDescriptor createDeploymentDescriptor(
             Execution execution,
             AllocationID allocationID,
-            @Nullable JobManagerTaskRestore taskRestore,
+            @Nullable Either<SerializedValue<JobManagerTaskRestore>, PermanentBlobKey> taskRestore,
             Collection<ResultPartitionDeploymentDescriptor> producedPartitions)
             throws IOException, ClusterDatasetCorruptedException {
         final ExecutionVertex executionVertex = execution.getVertex();
@@ -125,7 +124,7 @@ public class TaskDeploymentDescriptorFactory {
                         executionVertex.getJobVertex().getTaskInformationOrBlobKey()),
                 execution.getAttemptId(),
                 allocationID,
-                taskRestore,
+                taskRestore != null ? getSerializedTaskRestore(taskRestore) : null,
                 new ArrayList<>(producedPartitions),
                 createInputGateDeploymentDescriptors(executionVertex));
     }
@@ -151,16 +150,18 @@ public class TaskDeploymentDescriptorFactory {
 
             IntermediateDataSetID resultId = consumedIntermediateResult.getId();
             ResultPartitionType partitionType = consumedIntermediateResult.getResultType();
-            IndexRange subpartitionRange =
-                    executionVertex
-                            .getExecutionVertexInputInfo(resultId)
-                            .getSubpartitionIndexRange();
+            IntermediateResultPartition[] partitions = consumedIntermediateResult.getPartitions();
 
             inputGates.add(
                     new InputGateDeploymentDescriptor(
                             resultId,
                             partitionType,
-                            subpartitionRange,
+                            ConsumedSubpartitionContext.buildConsumedSubpartitionContext(
+                                    executionVertex
+                                            .getExecutionVertexInputInfo(resultId)
+                                            .getConsumedSubpartitionGroups(),
+                                    consumedPartitionGroup,
+                                    index -> partitions[index].getPartitionId()),
                             consumedPartitionGroup.size(),
                             getConsumedPartitionShuffleDescriptors(
                                     consumedIntermediateResult,
@@ -292,6 +293,13 @@ public class TaskDeploymentDescriptorFactory {
         return taskInfo.isLeft()
                 ? new TaskDeploymentDescriptor.NonOffloaded<>(taskInfo.left())
                 : new TaskDeploymentDescriptor.Offloaded<>(taskInfo.right());
+    }
+
+    private static MaybeOffloaded<JobManagerTaskRestore> getSerializedTaskRestore(
+            Either<SerializedValue<JobManagerTaskRestore>, PermanentBlobKey> either) {
+        return either.isLeft()
+                ? new TaskDeploymentDescriptor.NonOffloaded<>(either.left())
+                : new TaskDeploymentDescriptor.Offloaded<>(either.right());
     }
 
     public static ShuffleDescriptor getConsumedPartitionShuffleDescriptor(

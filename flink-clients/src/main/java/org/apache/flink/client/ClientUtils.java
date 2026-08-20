@@ -18,10 +18,12 @@
 
 package org.apache.flink.client;
 
+import org.apache.flink.api.common.ApplicationID;
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.JobInfo;
 import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.client.cli.ClientOptions;
-import org.apache.flink.client.program.ContextEnvironment;
+import org.apache.flink.client.program.JarInfo;
 import org.apache.flink.client.program.PackagedProgram;
 import org.apache.flink.client.program.ProgramInvocationException;
 import org.apache.flink.client.program.StreamContextEnvironment;
@@ -31,8 +33,10 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.DeploymentOptions;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.core.execution.PipelineExecutorServiceLoader;
+import org.apache.flink.datastream.impl.ExecutionContextEnvironment;
 import org.apache.flink.runtime.client.JobInitializationException;
 import org.apache.flink.runtime.jobmaster.JobResult;
+import org.apache.flink.runtime.rest.HttpHeader;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkUserCodeClassLoaders;
 import org.apache.flink.util.SerializedThrowable;
@@ -41,8 +45,13 @@ import org.apache.flink.util.function.SupplierWithException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
@@ -77,6 +86,29 @@ public enum ClientUtils {
             boolean enforceSingleJobExecution,
             boolean suppressSysout)
             throws ProgramInvocationException {
+        executeProgram(
+                executorServiceLoader,
+                configuration,
+                program,
+                enforceSingleJobExecution ? 1 : Integer.MAX_VALUE,
+                enforceSingleJobExecution ? 1 : Integer.MAX_VALUE,
+                suppressSysout,
+                null,
+                null,
+                Collections.emptyList());
+    }
+
+    public static void executeProgram(
+            PipelineExecutorServiceLoader executorServiceLoader,
+            Configuration configuration,
+            PackagedProgram program,
+            int jobCountLimit,
+            int streamingJobCountLimit,
+            boolean suppressSysout,
+            @Nullable ApplicationID applicationId,
+            @Nullable JarInfo userJarInfo,
+            Collection<JobInfo> allRecoveredJobInfos)
+            throws ProgramInvocationException {
         checkNotNull(executorServiceLoader);
         final ClassLoader userCodeClassLoader = program.getUserCodeClassLoader();
         final ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
@@ -85,27 +117,29 @@ public enum ClientUtils {
 
             LOG.info(
                     "Starting program (detached: {})",
-                    !configuration.getBoolean(DeploymentOptions.ATTACHED));
-
-            ContextEnvironment.setAsContext(
-                    executorServiceLoader,
-                    configuration,
-                    userCodeClassLoader,
-                    enforceSingleJobExecution,
-                    suppressSysout);
+                    !configuration.get(DeploymentOptions.ATTACHED));
 
             StreamContextEnvironment.setAsContext(
                     executorServiceLoader,
                     configuration,
                     userCodeClassLoader,
-                    enforceSingleJobExecution,
-                    suppressSysout);
+                    jobCountLimit,
+                    streamingJobCountLimit,
+                    suppressSysout,
+                    applicationId,
+                    userJarInfo,
+                    allRecoveredJobInfos);
+
+            // For DataStream v2.
+            ExecutionContextEnvironment.setAsContext(
+                    executorServiceLoader, configuration, userCodeClassLoader);
 
             try {
                 program.invokeInteractiveModeForExecution();
             } finally {
-                ContextEnvironment.unsetAsContext();
                 StreamContextEnvironment.unsetAsContext();
+                // For DataStream v2.
+                ExecutionContextEnvironment.unsetAsContext();
             }
         } finally {
             Thread.currentThread().setContextClassLoader(contextClassLoader);
@@ -184,5 +218,25 @@ public enum ClientUtils {
                 interval,
                 TimeUnit.MILLISECONDS);
         return scheduledExecutor;
+    }
+
+    public static Collection<HttpHeader> readHeadersFromEnvironmentVariable(String envVarName) {
+        List<HttpHeader> headers = new ArrayList<>();
+        String rawHeaders = System.getenv(envVarName);
+
+        if (rawHeaders != null) {
+            String[] lines = rawHeaders.split("\n");
+            for (String line : lines) {
+                String[] keyValue = line.split(":", 2);
+                if (keyValue.length == 2) {
+                    headers.add(new HttpHeader(keyValue[0], keyValue[1]));
+                } else {
+                    LOG.info(
+                            "Skipped a malformed header {} from FLINK_REST_CLIENT_HEADERS env variable. Expecting newline-separated headers in format header_name:header_value.",
+                            line);
+                }
+            }
+        }
+        return headers;
     }
 }

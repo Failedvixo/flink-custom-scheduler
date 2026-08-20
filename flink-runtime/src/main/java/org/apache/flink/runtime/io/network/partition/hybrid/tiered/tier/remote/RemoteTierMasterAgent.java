@@ -18,12 +18,25 @@
 
 package org.apache.flink.runtime.io.network.partition.hybrid.tiered.tier.remote;
 
+import org.apache.flink.api.common.JobID;
+import org.apache.flink.runtime.io.network.partition.ResultPartitionID;
 import org.apache.flink.runtime.io.network.partition.hybrid.tiered.common.TieredStoragePartitionId;
 import org.apache.flink.runtime.io.network.partition.hybrid.tiered.storage.TieredStorageResourceRegistry;
 import org.apache.flink.runtime.io.network.partition.hybrid.tiered.tier.TierMasterAgent;
+import org.apache.flink.runtime.io.network.partition.hybrid.tiered.tier.TierShuffleDescriptor;
+import org.apache.flink.runtime.io.network.partition.hybrid.tiered.tier.TierShuffleHandler;
+import org.apache.flink.runtime.shuffle.ShuffleMetrics;
 
+import java.time.Duration;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+
+import static org.apache.flink.runtime.io.network.partition.hybrid.tiered.common.TieredStorageIdMappingUtils.convertId;
 import static org.apache.flink.runtime.io.network.partition.hybrid.tiered.file.SegmentPartitionFile.deletePathQuietly;
 import static org.apache.flink.runtime.io.network.partition.hybrid.tiered.file.SegmentPartitionFile.getPartitionPath;
+import static org.apache.flink.util.Preconditions.checkState;
 
 /** The implementation of {@link TierMasterAgent} for the remote tier. */
 public class RemoteTierMasterAgent implements TierMasterAgent {
@@ -39,14 +52,47 @@ public class RemoteTierMasterAgent implements TierMasterAgent {
     }
 
     @Override
-    public void addPartition(TieredStoragePartitionId partitionID) {
-        resourceRegistry.registerResource(
-                partitionID,
-                () -> deletePathQuietly(getPartitionPath(partitionID, remoteStorageBasePath)));
+    public void registerJob(JobID jobID, TierShuffleHandler tierShuffleHandler) {
+        // noop
     }
 
     @Override
-    public void releasePartition(TieredStoragePartitionId partitionID) {
-        resourceRegistry.clearResourceFor(partitionID);
+    public void unregisterJob(JobID jobID) {
+        // noop
+    }
+
+    @Override
+    public TierShuffleDescriptor addPartitionAndGetShuffleDescriptor(
+            JobID jobID, int numSubpartitions, ResultPartitionID resultPartitionID) {
+        TieredStoragePartitionId partitionId = convertId(resultPartitionID);
+        resourceRegistry.registerResource(
+                partitionId,
+                () -> deletePathQuietly(getPartitionPath(partitionId, remoteStorageBasePath)));
+        return new RemoteTierShuffleDescriptor(partitionId);
+    }
+
+    @Override
+    public CompletableFuture<Map<ResultPartitionID, ShuffleMetrics>> getPartitionWithMetrics(
+            JobID jobId, Duration timeout, Set<ResultPartitionID> expectedPartitions) {
+        // TODO we could list the remote path to get all result partitions. Currently, this method
+        // only used for external tier, so it's safe to return empty map.
+        return CompletableFuture.completedFuture(Collections.emptyMap());
+    }
+
+    @Override
+    public void releasePartition(TierShuffleDescriptor shuffleDescriptor) {
+        checkState(shuffleDescriptor instanceof RemoteTierShuffleDescriptor);
+        resourceRegistry.clearResourceFor(
+                ((RemoteTierShuffleDescriptor) shuffleDescriptor).getPartitionId());
+    }
+
+    @Override
+    public void close() {
+        // noop
+    }
+
+    @Override
+    public boolean partitionInRemote() {
+        return true;
     }
 }

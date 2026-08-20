@@ -17,9 +17,9 @@
 
 package org.apache.flink.runtime.scheduler.adaptive.allocator;
 
+import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.runtime.clusterframework.types.AllocationID;
 import org.apache.flink.runtime.clusterframework.types.ResourceProfile;
-import org.apache.flink.runtime.instance.SlotSharingGroupId;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobmanager.scheduler.SlotSharingGroup;
 import org.apache.flink.runtime.jobmaster.LogicalSlot;
@@ -29,9 +29,14 @@ import org.apache.flink.runtime.jobmaster.slotpool.PhysicalSlot;
 import org.apache.flink.runtime.scheduler.adaptive.JobSchedulingPlan;
 import org.apache.flink.runtime.scheduler.adaptive.JobSchedulingPlan.SlotAssignment;
 import org.apache.flink.runtime.scheduler.strategy.ExecutionVertexID;
+import org.apache.flink.runtime.scheduler.taskexecload.DefaultTaskExecutionLoad;
+import org.apache.flink.runtime.scheduler.taskexecload.HasTaskExecutionLoad;
+import org.apache.flink.runtime.scheduler.taskexecload.TaskExecutionLoad;
 import org.apache.flink.runtime.util.ResourceCounter;
+import org.apache.flink.util.Preconditions;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -46,28 +51,55 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static org.apache.flink.runtime.scheduler.adaptive.allocator.AllocatorUtil.getMinimumRequiredSlots;
+import static org.apache.flink.runtime.scheduler.adaptive.allocator.AllocatorUtil.getSlotSharingGroupMetaInfos;
+
 /** {@link SlotAllocator} implementation that supports slot sharing. */
 public class SlotSharingSlotAllocator implements SlotAllocator {
 
     private final ReserveSlotFunction reserveSlotFunction;
     private final FreeSlotFunction freeSlotFunction;
     private final IsSlotAvailableAndFreeFunction isSlotAvailableAndFreeFunction;
+    private final boolean localRecoveryEnabled;
+    private final @Nullable String executionTarget;
+    private final boolean minimalTaskManagerPreferred;
+    private final SlotSharingResolver slotSharingResolver;
+    private final SlotMatchingResolver slotMatchingResolver;
 
     private SlotSharingSlotAllocator(
             ReserveSlotFunction reserveSlot,
             FreeSlotFunction freeSlotFunction,
-            IsSlotAvailableAndFreeFunction isSlotAvailableAndFreeFunction) {
+            IsSlotAvailableAndFreeFunction isSlotAvailableAndFreeFunction,
+            boolean localRecoveryEnabled,
+            @Nullable String executionTarget,
+            boolean minimalTaskManagerPreferred,
+            TaskManagerOptions.TaskManagerLoadBalanceMode taskManagerLoadBalanceMode) {
         this.reserveSlotFunction = reserveSlot;
         this.freeSlotFunction = freeSlotFunction;
         this.isSlotAvailableAndFreeFunction = isSlotAvailableAndFreeFunction;
+        this.localRecoveryEnabled = localRecoveryEnabled;
+        this.executionTarget = executionTarget;
+        this.minimalTaskManagerPreferred = minimalTaskManagerPreferred;
+        this.slotSharingResolver = getSlotSharingResolver(taskManagerLoadBalanceMode);
+        this.slotMatchingResolver = getSlotMatchingResolver(taskManagerLoadBalanceMode);
     }
 
     public static SlotSharingSlotAllocator createSlotSharingSlotAllocator(
             ReserveSlotFunction reserveSlot,
             FreeSlotFunction freeSlotFunction,
-            IsSlotAvailableAndFreeFunction isSlotAvailableAndFreeFunction) {
+            IsSlotAvailableAndFreeFunction isSlotAvailableAndFreeFunction,
+            boolean localRecoveryEnabled,
+            @Nullable String executionTarget,
+            boolean minimalTaskManagerPreferred,
+            TaskManagerOptions.TaskManagerLoadBalanceMode taskManagerLoadBalanceMode) {
         return new SlotSharingSlotAllocator(
-                reserveSlot, freeSlotFunction, isSlotAvailableAndFreeFunction);
+                reserveSlot,
+                freeSlotFunction,
+                isSlotAvailableAndFreeFunction,
+                localRecoveryEnabled,
+                executionTarget,
+                minimalTaskManagerPreferred,
+                taskManagerLoadBalanceMode);
     }
 
     @Override
@@ -85,19 +117,16 @@ public class SlotSharingSlotAllocator implements SlotAllocator {
     public Optional<VertexParallelism> determineParallelism(
             JobInformation jobInformation, Collection<? extends SlotInfo> freeSlots) {
 
-        final Map<SlotSharingGroupId, SlotSharingGroupMetaInfo> slotSharingGroupMetaInfo =
-                SlotSharingGroupMetaInfo.from(jobInformation.getVertices());
+        final Map<SlotSharingGroup, SlotSharingGroupMetaInfo> slotSharingGroupMetaInfo =
+                getSlotSharingGroupMetaInfos(jobInformation);
 
-        final int minimumRequiredSlots =
-                slotSharingGroupMetaInfo.values().stream()
-                        .map(SlotSharingGroupMetaInfo::getMinLowerBound)
-                        .reduce(0, Integer::sum);
+        final int minimumRequiredSlots = getMinimumRequiredSlots(slotSharingGroupMetaInfo);
 
         if (minimumRequiredSlots > freeSlots.size()) {
             return Optional.empty();
         }
 
-        final Map<SlotSharingGroupId, Integer> slotSharingGroupParallelism =
+        final Map<SlotSharingGroup, Integer> slotSharingGroupParallelism =
                 determineSlotsPerSharingGroup(
                         jobInformation,
                         freeSlots.size(),
@@ -115,8 +144,7 @@ public class SlotSharingSlotAllocator implements SlotAllocator {
             final Map<JobVertexID, Integer> vertexParallelism =
                     determineVertexParallelism(
                             containedJobVertices,
-                            slotSharingGroupParallelism.get(
-                                    slotSharingGroup.getSlotSharingGroupId()));
+                            slotSharingGroupParallelism.get(slotSharingGroup));
             allVertexParallelism.putAll(vertexParallelism);
         }
         return Optional.of(new VertexParallelism(allVertexParallelism));
@@ -125,21 +153,19 @@ public class SlotSharingSlotAllocator implements SlotAllocator {
     @Override
     public Optional<JobSchedulingPlan> determineParallelismAndCalculateAssignment(
             JobInformation jobInformation,
-            Collection<? extends SlotInfo> slots,
+            Collection<PhysicalSlot> slots,
             JobAllocationsInformation jobAllocationsInformation) {
         return determineParallelism(jobInformation, slots)
                 .map(
                         parallelism -> {
-                            final SlotAssigner slotAssigner;
-                            if (ThesisSlotAssigner.isEnabled()) {
-                                // Thesis fork: route placement through the custom assigner when
-                                // enabled via THESIS_SLOT_ASSIGNER; otherwise keep default behaviour.
-                                slotAssigner = new ThesisSlotAssigner();
-                            } else if (jobAllocationsInformation.isEmpty()) {
-                                slotAssigner = new DefaultSlotAssigner();
-                            } else {
-                                slotAssigner = new StateLocalitySlotAssigner();
-                            }
+                            SlotAssigner slotAssigner =
+                                    localRecoveryEnabled && !jobAllocationsInformation.isEmpty()
+                                            ? new StateLocalitySlotAssigner(slotSharingResolver)
+                                            : new DefaultSlotAssigner(
+                                                    executionTarget,
+                                                    minimalTaskManagerPreferred,
+                                                    slotSharingResolver,
+                                                    slotMatchingResolver);
                             return new JobSchedulingPlan(
                                     parallelism,
                                     slotAssigner.assignSlots(
@@ -150,27 +176,62 @@ public class SlotSharingSlotAllocator implements SlotAllocator {
                         });
     }
 
+    private SlotSharingResolver getSlotSharingResolver(
+            TaskManagerOptions.TaskManagerLoadBalanceMode taskManagerLoadBalanceMode) {
+        switch (taskManagerLoadBalanceMode) {
+            case NONE:
+            case MIN_RESOURCES:
+            case SLOTS:
+                return DefaultSlotSharingResolver.INSTANCE;
+            case TASKS:
+                return TaskBalancedSlotSharingResolver.INSTANCE;
+            default:
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "Unsupported task manager load balance mode: %s when initializing slot sharing resolver.",
+                                taskManagerLoadBalanceMode));
+        }
+    }
+
+    private SlotMatchingResolver getSlotMatchingResolver(
+            TaskManagerOptions.TaskManagerLoadBalanceMode taskManagerLoadBalanceMode) {
+        switch (taskManagerLoadBalanceMode) {
+            case NONE:
+            case MIN_RESOURCES:
+                return SimpleSlotMatchingResolver.INSTANCE;
+            case SLOTS:
+                return SlotsBalancedSlotMatchingResolver.INSTANCE;
+            case TASKS:
+                return TasksBalancedSlotMatchingResolver.INSTANCE;
+            default:
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "Unsupported task manager load balance mode: %s when initializing slot matching resolver",
+                                taskManagerLoadBalanceMode));
+        }
+    }
+
     /**
      * Distributes free slots across the slot-sharing groups of the job. Slots are distributed as
      * evenly as possible. If a group requires less than an even share of slots the remainder is
      * distributed over the remaining groups.
      */
-    private static Map<SlotSharingGroupId, Integer> determineSlotsPerSharingGroup(
+    private static Map<SlotSharingGroup, Integer> determineSlotsPerSharingGroup(
             JobInformation jobInformation,
             int freeSlots,
             int minRequiredSlots,
-            Map<SlotSharingGroupId, SlotSharingGroupMetaInfo> slotSharingGroupMetaInfo) {
+            Map<SlotSharingGroup, SlotSharingGroupMetaInfo> slotSharingGroupMetaInfo) {
 
         int numUnassignedSlots = freeSlots;
         int numUnassignedSlotSharingGroups = jobInformation.getSlotSharingGroups().size();
         int numMinSlotsRequiredByRemainingGroups = minRequiredSlots;
 
-        final Map<SlotSharingGroupId, Integer> slotSharingGroupParallelism = new HashMap<>();
+        final Map<SlotSharingGroup, Integer> slotSharingGroupParallelism = new HashMap<>();
 
-        for (SlotSharingGroupId slotSharingGroup :
+        for (SlotSharingGroup slotSharingGroup :
                 sortSlotSharingGroupsByHighestParallelismRange(slotSharingGroupMetaInfo)) {
             final int minParallelism =
-                    slotSharingGroupMetaInfo.get(slotSharingGroup).getMinLowerBound();
+                    slotSharingGroupMetaInfo.get(slotSharingGroup).getMaxLowerBound();
 
             // if we reached this point we know we have more slots than we need to fulfill the
             // minimum requirements for each slot sharing group.
@@ -200,8 +261,8 @@ public class SlotSharingSlotAllocator implements SlotAllocator {
         return slotSharingGroupParallelism;
     }
 
-    private static List<SlotSharingGroupId> sortSlotSharingGroupsByHighestParallelismRange(
-            Map<SlotSharingGroupId, SlotSharingGroupMetaInfo> slotSharingGroupMetaInfo) {
+    private static List<SlotSharingGroup> sortSlotSharingGroupsByHighestParallelismRange(
+            Map<SlotSharingGroup, SlotSharingGroupMetaInfo> slotSharingGroupMetaInfo) {
 
         return slotSharingGroupMetaInfo.entrySet().stream()
                 .sorted(
@@ -282,44 +343,68 @@ public class SlotSharingSlotAllocator implements SlotAllocator {
                                 slotInfo.getAllocationId(), null, System.currentTimeMillis()));
     }
 
-    static class ExecutionSlotSharingGroup {
+    /** The execution slot sharing group for adaptive scheduler. */
+    public static class ExecutionSlotSharingGroup implements HasTaskExecutionLoad {
         private final String id;
+        private final SlotSharingGroup slotSharingGroup;
         private final Set<ExecutionVertexID> containedExecutionVertices;
 
-        public ExecutionSlotSharingGroup(Set<ExecutionVertexID> containedExecutionVertices) {
-            this(containedExecutionVertices, UUID.randomUUID().toString());
+        public ExecutionSlotSharingGroup(
+                SlotSharingGroup slotSharingGroup,
+                Set<ExecutionVertexID> containedExecutionVertices) {
+            this(UUID.randomUUID().toString(), slotSharingGroup, containedExecutionVertices);
         }
 
         public ExecutionSlotSharingGroup(
-                Set<ExecutionVertexID> containedExecutionVertices, String id) {
-            this.containedExecutionVertices = containedExecutionVertices;
+                String id,
+                SlotSharingGroup slotSharingGroup,
+                Set<ExecutionVertexID> containedExecutionVertices) {
             this.id = id;
+            this.slotSharingGroup = Preconditions.checkNotNull(slotSharingGroup);
+            this.containedExecutionVertices = containedExecutionVertices;
+        }
+
+        public SlotSharingGroup getSlotSharingGroup() {
+            return slotSharingGroup;
         }
 
         public String getId() {
             return id;
         }
 
+        public ResourceProfile getResourceProfile() {
+            return slotSharingGroup.getResourceProfile();
+        }
+
         public Collection<ExecutionVertexID> getContainedExecutionVertices() {
             return containedExecutionVertices;
         }
+
+        @Nonnull
+        @Override
+        public TaskExecutionLoad getTaskExecutionLoad() {
+            return new DefaultTaskExecutionLoad(containedExecutionVertices.size());
+        }
     }
 
-    private static class SlotSharingGroupMetaInfo {
+    public static class SlotSharingGroupMetaInfo {
 
         private final int minLowerBound;
+        private final int maxLowerBound;
         private final int maxUpperBound;
-        private final int maxLowerUpperBoundRange;
 
-        private SlotSharingGroupMetaInfo(
-                int minLowerBound, int maxUpperBound, int maxLowerUpperBoundRange) {
+        private SlotSharingGroupMetaInfo(int minLowerBound, int maxLowerBound, int maxUpperBound) {
             this.minLowerBound = minLowerBound;
+            this.maxLowerBound = maxLowerBound;
             this.maxUpperBound = maxUpperBound;
-            this.maxLowerUpperBoundRange = maxLowerUpperBoundRange;
         }
 
         public int getMinLowerBound() {
             return minLowerBound;
+        }
+
+        public int getMaxLowerBound() {
+            return maxLowerBound;
         }
 
         public int getMaxUpperBound() {
@@ -327,10 +412,10 @@ public class SlotSharingSlotAllocator implements SlotAllocator {
         }
 
         public int getMaxLowerUpperBoundRange() {
-            return maxLowerUpperBoundRange;
+            return maxUpperBound - maxLowerBound;
         }
 
-        public static Map<SlotSharingGroupId, SlotSharingGroupMetaInfo> from(
+        public static Map<SlotSharingGroup, SlotSharingGroupMetaInfo> from(
                 Iterable<JobInformation.VertexInformation> vertices) {
 
             return getPerSlotSharingGroups(
@@ -338,29 +423,30 @@ public class SlotSharingSlotAllocator implements SlotAllocator {
                     vertexInformation ->
                             new SlotSharingGroupMetaInfo(
                                     vertexInformation.getMinParallelism(),
-                                    vertexInformation.getParallelism(),
-                                    vertexInformation.getParallelism()
-                                            - vertexInformation.getMinParallelism()),
+                                    vertexInformation.getMinParallelism(),
+                                    vertexInformation.getParallelism()),
                     (metaInfo1, metaInfo2) ->
                             new SlotSharingGroupMetaInfo(
-                                    Math.min(metaInfo1.getMinLowerBound(), metaInfo2.minLowerBound),
+                                    Math.min(
+                                            metaInfo1.getMinLowerBound(),
+                                            metaInfo2.getMinLowerBound()),
+                                    Math.max(
+                                            metaInfo1.getMaxLowerBound(),
+                                            metaInfo2.getMaxLowerBound()),
                                     Math.max(
                                             metaInfo1.getMaxUpperBound(),
-                                            metaInfo2.getMaxUpperBound()),
-                                    Math.max(
-                                            metaInfo1.getMaxLowerUpperBoundRange(),
-                                            metaInfo2.getMaxLowerUpperBoundRange())));
+                                            metaInfo2.getMaxUpperBound())));
         }
 
-        private static <T> Map<SlotSharingGroupId, T> getPerSlotSharingGroups(
+        static <T> Map<SlotSharingGroup, T> getPerSlotSharingGroups(
                 Iterable<JobInformation.VertexInformation> vertices,
                 Function<JobInformation.VertexInformation, T> mapper,
                 BiFunction<T, T, T> reducer) {
-            final Map<SlotSharingGroupId, T> extractedPerSlotSharingGroups = new HashMap<>();
+            final Map<SlotSharingGroup, T> extractedPerSlotSharingGroups = new HashMap<>();
             for (JobInformation.VertexInformation vertex : vertices) {
                 extractedPerSlotSharingGroups.compute(
-                        vertex.getSlotSharingGroup().getSlotSharingGroupId(),
-                        (slotSharingGroupId, currentData) ->
+                        vertex.getSlotSharingGroup(),
+                        (ignored, currentData) ->
                                 currentData == null
                                         ? mapper.apply(vertex)
                                         : reducer.apply(currentData, mapper.apply(vertex)));

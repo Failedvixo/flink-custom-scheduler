@@ -63,6 +63,8 @@ public class PartitionDescriptor implements Serializable {
      */
     private final boolean isAllToAllDistribution;
 
+    private final boolean isNumberOfPartitionConsumerUndefined;
+
     @VisibleForTesting
     public PartitionDescriptor(
             IntermediateDataSetID resultId,
@@ -72,7 +74,8 @@ public class PartitionDescriptor implements Serializable {
             int numberOfSubpartitions,
             int connectionIndex,
             boolean isBroadcast,
-            boolean isAllToAllDistribution) {
+            boolean isAllToAllDistribution,
+            boolean isNumberOfPartitionConsumerUndefined) {
         this.resultId = checkNotNull(resultId);
         checkArgument(totalNumberOfPartitions >= 1);
         this.totalNumberOfPartitions = totalNumberOfPartitions;
@@ -83,6 +86,7 @@ public class PartitionDescriptor implements Serializable {
         this.connectionIndex = connectionIndex;
         this.isBroadcast = isBroadcast;
         this.isAllToAllDistribution = isAllToAllDistribution;
+        this.isNumberOfPartitionConsumerUndefined = isNumberOfPartitionConsumerUndefined;
     }
 
     public IntermediateDataSetID getResultId() {
@@ -103,6 +107,10 @@ public class PartitionDescriptor implements Serializable {
 
     public int getNumberOfSubpartitions() {
         return numberOfSubpartitions;
+    }
+
+    public boolean isNumberOfPartitionConsumerUndefined() {
+        return isNumberOfPartitionConsumerUndefined;
     }
 
     int getConnectionIndex() {
@@ -143,7 +151,8 @@ public class PartitionDescriptor implements Serializable {
                 result.getResultType(),
                 partition.getNumberOfSubpartitions(),
                 result.getConnectionIndex(),
-                result.isBroadcast(),
-                result.getConsumingDistributionPattern() == DistributionPattern.ALL_TO_ALL);
+                result.isSingleSubpartitionContainsAllData(),
+                result.getConsumingDistributionPattern() == DistributionPattern.ALL_TO_ALL,
+                partition.isNumberOfPartitionConsumersUndefined());
     }
 }

@@ -21,10 +21,10 @@ package org.apache.flink.runtime.jobmaster.factories;
 import org.apache.flink.core.failure.FailureEnricher;
 import org.apache.flink.runtime.blocklist.BlocklistUtils;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
+import org.apache.flink.runtime.executiongraph.JobStatusListener;
 import org.apache.flink.runtime.heartbeat.HeartbeatServices;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
 import org.apache.flink.runtime.io.network.partition.JobMasterPartitionTrackerImpl;
-import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobmanager.OnCompletionActions;
 import org.apache.flink.runtime.jobmaster.DefaultExecutionDeploymentReconciler;
 import org.apache.flink.runtime.jobmaster.DefaultExecutionDeploymentTracker;
@@ -37,6 +37,7 @@ import org.apache.flink.runtime.jobmaster.SlotPoolServiceSchedulerFactory;
 import org.apache.flink.runtime.rpc.FatalErrorHandler;
 import org.apache.flink.runtime.rpc.RpcService;
 import org.apache.flink.runtime.shuffle.ShuffleMaster;
+import org.apache.flink.streaming.api.graph.ExecutionPlan;
 import org.apache.flink.util.function.FunctionUtils;
 
 import java.util.Collection;
@@ -49,7 +50,7 @@ public class DefaultJobMasterServiceFactory implements JobMasterServiceFactory {
     private final Executor executor;
     private final RpcService rpcService;
     private final JobMasterConfiguration jobMasterConfiguration;
-    private final JobGraph jobGraph;
+    private ExecutionPlan executionPlan;
     private final HighAvailabilityServices haServices;
     private final SlotPoolServiceSchedulerFactory slotPoolServiceSchedulerFactory;
     private final JobManagerSharedServices jobManagerSharedServices;
@@ -59,13 +60,14 @@ public class DefaultJobMasterServiceFactory implements JobMasterServiceFactory {
     private final ClassLoader userCodeClassloader;
     private final ShuffleMaster<?> shuffleMaster;
     private final Collection<FailureEnricher> failureEnrichers;
+    private final JobStatusListener singleJobApplication;
     private final long initializationTimestamp;
 
     public DefaultJobMasterServiceFactory(
             Executor executor,
             RpcService rpcService,
             JobMasterConfiguration jobMasterConfiguration,
-            JobGraph jobGraph,
+            ExecutionPlan executionPlan,
             HighAvailabilityServices haServices,
             SlotPoolServiceSchedulerFactory slotPoolServiceSchedulerFactory,
             JobManagerSharedServices jobManagerSharedServices,
@@ -74,11 +76,12 @@ public class DefaultJobMasterServiceFactory implements JobMasterServiceFactory {
             FatalErrorHandler fatalErrorHandler,
             ClassLoader userCodeClassloader,
             Collection<FailureEnricher> failureEnrichers,
+            JobStatusListener singleJobApplication,
             long initializationTimestamp) {
         this.executor = executor;
         this.rpcService = rpcService;
         this.jobMasterConfiguration = jobMasterConfiguration;
-        this.jobGraph = jobGraph;
+        this.executionPlan = executionPlan;
         this.haServices = haServices;
         this.slotPoolServiceSchedulerFactory = slotPoolServiceSchedulerFactory;
         this.jobManagerSharedServices = jobManagerSharedServices;
@@ -88,6 +91,7 @@ public class DefaultJobMasterServiceFactory implements JobMasterServiceFactory {
         this.userCodeClassloader = userCodeClassloader;
         this.shuffleMaster = jobManagerSharedServices.getShuffleMaster();
         this.failureEnrichers = failureEnrichers;
+        this.singleJobApplication = singleJobApplication;
         this.initializationTimestamp = initializationTimestamp;
     }
 
@@ -110,7 +114,7 @@ public class DefaultJobMasterServiceFactory implements JobMasterServiceFactory {
                         JobMasterId.fromUuidOrNull(leaderSessionId),
                         jobMasterConfiguration,
                         ResourceID.generate(),
-                        jobGraph,
+                        executionPlan,
                         haServices,
                         slotPoolServiceSchedulerFactory,
                         jobManagerSharedServices,
@@ -122,12 +126,13 @@ public class DefaultJobMasterServiceFactory implements JobMasterServiceFactory {
                         shuffleMaster,
                         lookup ->
                                 new JobMasterPartitionTrackerImpl(
-                                        jobGraph.getJobID(), shuffleMaster, lookup),
+                                        executionPlan.getJobID(), shuffleMaster, lookup),
                         new DefaultExecutionDeploymentTracker(),
                         DefaultExecutionDeploymentReconciler::new,
                         BlocklistUtils.loadBlocklistHandlerFactory(
                                 jobMasterConfiguration.getConfiguration()),
                         failureEnrichers,
+                        singleJobApplication,
                         initializationTimestamp);
 
         jobMaster.start();

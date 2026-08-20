@@ -94,8 +94,9 @@ public class ExpressionResolver {
                 ResolverRules.LOOKUP_CALL_BY_NAME,
                 ResolverRules.FLATTEN_STAR_REFERENCE,
                 ResolverRules.EXPAND_COLUMN_FUNCTIONS,
+                ResolverRules.RESOLVE_TYPE,
                 ResolverRules.OVER_WINDOWS,
-                ResolverRules.FIELD_RESOLVE,
+                ResolverRules.RESOLVE_FIELD,
                 ResolverRules.QUALIFY_BUILT_IN_FUNCTIONS,
                 ResolverRules.RESOLVE_SQL_CALL,
                 ResolverRules.RESOLVE_CALL_BY_ARGUMENTS);
@@ -264,7 +265,7 @@ public class ExpressionResolver {
 
     private Expression resolveFieldsInSingleExpression(Expression expression) {
         List<Expression> expressions =
-                ResolverRules.FIELD_RESOLVE.apply(
+                ResolverRules.RESOLVE_FIELD.apply(
                         Collections.singletonList(expression), new ExpressionResolverContext());
 
         if (expressions.size() != 1) {
@@ -367,7 +368,7 @@ public class ExpressionResolver {
                 overWindow.getAlias(),
                 prepareExpressions(overWindow.getPartitioning()),
                 resolveFieldsInSingleExpression(overWindow.getOrder()),
-                resolveFieldsInSingleExpression(overWindow.getPreceding()),
+                overWindow.getPreceding().map(this::resolveFieldsInSingleExpression).orElse(null),
                 overWindow.getFollowing().map(this::resolveFieldsInSingleExpression).orElse(null));
     }
 
@@ -378,6 +379,7 @@ public class ExpressionResolver {
      * <p>Note: Further resolution or validation will not happen anymore, therefore the created
      * expressions must be valid.
      */
+    @Internal
     public class PostResolverFactory {
 
         public CallExpression as(ResolvedExpression expression, String alias) {
@@ -434,6 +436,7 @@ public class ExpressionResolver {
     }
 
     /** Builder for creating {@link ExpressionResolver}. */
+    @Internal
     public static class ExpressionResolverBuilder {
 
         private final TableConfig tableConfig;

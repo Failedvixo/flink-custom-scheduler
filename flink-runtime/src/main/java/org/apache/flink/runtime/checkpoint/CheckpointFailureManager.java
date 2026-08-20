@@ -76,7 +76,7 @@ public class CheckpointFailureManager {
      *   <li>all checkpoints - go against failure counter (failover might help and we want to notify
      *       users).
      *   <li>sync savepoints - we must always fail, otherwise we risk deadlock when the job
-     *       cancelation waiting for finishing savepoint which never happens.
+     *       cancellation waiting for finishing savepoint which never happens.
      *   <li>non sync savepoints - go against failure counter (failover might help solve the
      *       problem).
      * </ul>
@@ -230,7 +230,7 @@ public class CheckpointFailureManager {
             case CHECKPOINT_COORDINATOR_SHUTDOWN:
             case CHANNEL_STATE_SHARED_STREAM_EXCEPTION:
             case JOB_FAILOVER_REGION:
-                // for compatibility purposes with user job behavior
+            // for compatibility purposes with user job behavior
             case CHECKPOINT_DECLINED_TASK_NOT_READY:
             case CHECKPOINT_DECLINED_TASK_CLOSING:
             case CHECKPOINT_DECLINED_ON_CANCELLATION_BARRIER:
@@ -240,8 +240,9 @@ public class CheckpointFailureManager {
             case TASK_FAILURE:
             case TASK_CHECKPOINT_FAILURE:
             case UNKNOWN_TASK_CHECKPOINT_NOTIFICATION_FAILURE:
-                // there are some edge cases shouldn't be counted as a failure, e.g. shutdown
+            // there are some edge cases shouldn't be counted as a failure, e.g. shutdown
             case TRIGGER_CHECKPOINT_FAILURE:
+            case BLOCKING_OUTPUT_EXIST:
                 // ignore
                 break;
 

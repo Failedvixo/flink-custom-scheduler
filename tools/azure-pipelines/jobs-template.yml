@@ -95,10 +95,8 @@ jobs:
         module: python
       table:
         module: table
-      connect_1:
-        module: connect_1
-      connect_2:
-        module: connect_2
+      connect:
+        module: connect
       tests:
         module: tests
       misc:
@@ -109,6 +107,13 @@ jobs:
     target: host
     condition: not(eq('${{parameters.test_pool_definition.name}}', 'Default'))
     displayName: Free up disk space
+
+  # Ensure Python devel headers for Python tests
+  - script: |
+      sudo apt-get update
+      sudo apt-get install -y python3-dev
+    condition: eq(variables['module'], 'python')
+    displayName: Install Python development headers
 
   # download artifact from compile stage
   - task: DownloadPipelineArtifact@2

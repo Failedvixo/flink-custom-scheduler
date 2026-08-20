@@ -33,10 +33,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** The test of HyperLogLogPlusPlus is inspired from Apache Spark. */
-public class HyperLogLogPlusPlusTest {
+class HyperLogLogPlusPlusTest {
 
     @Test
-    public void testInvalidRelativeSD() {
+    void testInvalidRelativeSD() {
         assertThatThrownBy(() -> new HyperLogLogPlusPlus(0.4))
                 .satisfies(
                         anyCauseMatches(
@@ -45,7 +45,7 @@ public class HyperLogLogPlusPlusTest {
     }
 
     @Test
-    public void testInputAllNulls() {
+    void testInputAllNulls() {
         HyperLogLogPlusPlus hll = new HyperLogLogPlusPlus(0.01);
         HllBuffer buffer = createHllBuffer(hll);
         long estimate = hll.query(buffer);
@@ -53,7 +53,7 @@ public class HyperLogLogPlusPlusTest {
     }
 
     @Test
-    public void testDeterministicCardinalityEstimation() {
+    void testDeterministicCardinalityEstimation() {
         int repeats = 10;
         testCardinalityEstimates(
                 new double[] {0.1, 0.05, 0.025, 0.01, 0.001},
@@ -63,7 +63,7 @@ public class HyperLogLogPlusPlusTest {
     }
 
     @Test
-    public void testMerge() {
+    void testMerge() {
         HyperLogLogPlusPlus hll = new HyperLogLogPlusPlus(0.05);
         HllBuffer buffer1a = createHllBuffer(hll);
         HllBuffer buffer1b = createHllBuffer(hll);
@@ -98,7 +98,7 @@ public class HyperLogLogPlusPlusTest {
     }
 
     @Test
-    public void testRandomCardinalityEstimation() {
+    void testRandomCardinalityEstimation() {
         Random srng = new Random(323981238L);
         Set<Integer> seen = new HashSet<>();
         Function<Integer, Integer> update =
@@ -118,7 +118,7 @@ public class HyperLogLogPlusPlusTest {
     }
 
     @Test
-    public void testPositiveAndNegativeZero() {
+    void testPositiveAndNegativeZero() {
         HyperLogLogPlusPlus hll = new HyperLogLogPlusPlus(0.05);
         HllBuffer buffer = createHllBuffer(hll);
         hll.updateByHashcode(buffer, hashLong(Double.doubleToLongBits(0.0d), DEFAULT_SEED));
@@ -130,7 +130,7 @@ public class HyperLogLogPlusPlusTest {
     }
 
     @Test
-    public void testNaN() {
+    void testNaN() {
         HyperLogLogPlusPlus hll = new HyperLogLogPlusPlus(0.05);
         HllBuffer buffer = createHllBuffer(hll);
         hll.updateByHashcode(buffer, hashLong(Double.doubleToLongBits(Double.NaN), DEFAULT_SEED));
@@ -157,6 +157,36 @@ public class HyperLogLogPlusPlusTest {
                 assertThat(error < hll.trueRsd() * 3.0d).isTrue();
             }
         }
+    }
+
+    @Test
+    void testQueryWithRegisterValuesAbove32() {
+        // Directly construct an HLL buffer where every register holds value 35 (>= 32).
+        // Before the fix, "1 << mIdx" used int shift which wraps for mIdx >= 32
+        // (1 << 35 == 1 << 3 == 8), producing incorrect estimates.
+        // The fix uses "1L << mIdx" (long shift) so 1L << 35 == 34359738368.
+        int registerValue = 35;
+        HyperLogLogPlusPlus hll = new HyperLogLogPlusPlus(0.01);
+        HllBuffer buffer = createHllBuffer(hll);
+
+        // Pack each word with 10 registers (6 bits each) all set to registerValue.
+        for (int w = 0; w < hll.getNumWords(); w++) {
+            long word = 0L;
+            for (int r = 0; r < 10; r++) {
+                word |= ((long) registerValue) << (r * 6);
+            }
+            buffer.array[w] = word;
+        }
+
+        long estimate = hll.query(buffer);
+
+        // With correct long shift, the estimate should be astronomically large
+        // (on the order of alpha * m * 2^35 ~ 4e14).
+        // With the buggy int shift, the estimate would be around 95K.
+        // Assert the estimate is at least 1e12 to catch the int-shift bug.
+        assertThat(estimate)
+                .as("Estimate should reflect long-shift math for register values >= 32")
+                .isGreaterThan(1_000_000_000_000L);
     }
 
     public HllBuffer createHllBuffer(HyperLogLogPlusPlus hll) {

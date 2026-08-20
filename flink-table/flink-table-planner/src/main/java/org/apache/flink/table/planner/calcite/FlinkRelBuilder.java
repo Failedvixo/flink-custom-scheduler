@@ -19,12 +19,10 @@
 package org.apache.flink.table.planner.calcite;
 
 import org.apache.flink.annotation.Internal;
-import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.operations.QueryOperation;
 import org.apache.flink.table.planner.calcite.FlinkRelFactories.ExpandFactory;
 import org.apache.flink.table.planner.calcite.FlinkRelFactories.RankFactory;
 import org.apache.flink.table.planner.functions.bridging.BridgingSqlFunction;
-import org.apache.flink.table.planner.hint.FlinkHints;
 import org.apache.flink.table.planner.plan.QueryOperationConverter;
 import org.apache.flink.table.planner.plan.logical.LogicalWindow;
 import org.apache.flink.table.planner.plan.nodes.calcite.LogicalTableAggregate;
@@ -37,19 +35,13 @@ import org.apache.flink.table.runtime.operators.rank.RankType;
 import org.apache.flink.util.CollectionUtil;
 import org.apache.flink.util.Preconditions;
 
-import org.apache.flink.shaded.guava31.com.google.common.collect.ImmutableList;
-
 import org.apache.calcite.plan.Context;
 import org.apache.calcite.plan.Contexts;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.RelOptSchema;
-import org.apache.calcite.plan.RelOptTable.ToRelContext;
-import org.apache.calcite.plan.ViewExpanders;
 import org.apache.calcite.rel.RelCollation;
 import org.apache.calcite.rel.RelNode;
-import org.apache.calcite.rel.core.AggregateCall;
-import org.apache.calcite.rel.hint.RelHint;
 import org.apache.calcite.rel.logical.LogicalAggregate;
 import org.apache.calcite.rel.logical.LogicalTableFunctionScan;
 import org.apache.calcite.rel.type.RelDataType;
@@ -57,18 +49,15 @@ import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexNode;
-import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlOperator;
 import org.apache.calcite.tools.RelBuilder;
 import org.apache.calcite.tools.RelBuilderFactory;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.Util;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Map;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
@@ -80,7 +69,7 @@ import static org.apache.flink.table.planner.utils.ShortcutUtils.unwrapContext;
 public final class FlinkRelBuilder extends RelBuilder {
 
     public static final RelBuilder.Config FLINK_REL_BUILDER_CONFIG =
-            Config.DEFAULT.withSimplifyValues(false);
+            Config.DEFAULT.withSimplifyValues(false).withConvertCorrelateToJoin(false);
     private final QueryOperationConverter toRelNodeConverter;
 
     private final ExpandFactory expandFactory;
@@ -196,7 +185,7 @@ public final class FlinkRelBuilder extends RelBuilder {
     /** Build non-window aggregate for either aggregate or table aggregate. */
     @Override
     public RelBuilder aggregate(
-            RelBuilder.GroupKey groupKey, Iterable<RelBuilder.AggCall> aggCalls) {
+            RelBuilder.GroupKey groupKey, Iterable<? extends RelBuilder.AggCall> aggCalls) {
         // build a relNode, the build() may also return a project
         RelNode relNode = super.aggregate(groupKey, aggCalls).build();
 
@@ -204,12 +193,6 @@ public final class FlinkRelBuilder extends RelBuilder {
             final LogicalAggregate logicalAggregate = (LogicalAggregate) relNode;
             if (isTableAggregate(logicalAggregate.getAggCallList())) {
                 relNode = LogicalTableAggregate.create(logicalAggregate);
-            } else if (isCountStarAgg(logicalAggregate)) {
-                final RelNode newAggInput =
-                        push(logicalAggregate.getInput(0)).project(literal(0)).build();
-                relNode =
-                        logicalAggregate.copy(
-                                logicalAggregate.getTraitSet(), ImmutableList.of(newAggInput));
             }
         }
 
@@ -253,22 +236,13 @@ public final class FlinkRelBuilder extends RelBuilder {
     public RelBuilder watermark(int rowtimeFieldIndex, RexNode watermarkExpr) {
         final RelNode input = build();
         final RelNode relNode =
-                LogicalWatermarkAssigner.create(cluster, input, rowtimeFieldIndex, watermarkExpr);
+                LogicalWatermarkAssigner.create(
+                        cluster, input, Collections.emptyList(), rowtimeFieldIndex, watermarkExpr);
         return push(relNode);
     }
 
     public RelBuilder queryOperation(QueryOperation queryOperation) {
         final RelNode relNode = queryOperation.accept(toRelNodeConverter);
-        return push(relNode);
-    }
-
-    public RelBuilder scan(ObjectIdentifier identifier, Map<String, String> dynamicOptions) {
-        final List<RelHint> hints = new ArrayList<>();
-        hints.add(
-                RelHint.builder(FlinkHints.HINT_NAME_OPTIONS).hintOptions(dynamicOptions).build());
-        final ToRelContext toRelContext = ViewExpanders.simpleContext(cluster, hints);
-        final RelNode relNode =
-                relOptSchema.getTableForMember(identifier.toList()).toRel(toRelContext);
         return push(relNode);
     }
 
@@ -285,15 +259,5 @@ public final class FlinkRelBuilder extends RelBuilder {
                         transform.apply(FLINK_REL_BUILDER_CONFIG),
                         cluster.getPlanner().getContext());
         return FlinkRelBuilder.of(mergedContext, cluster, relOptSchema);
-    }
-
-    private static boolean isCountStarAgg(LogicalAggregate agg) {
-        if (agg.getGroupCount() != 0 || agg.getAggCallList().size() != 1) {
-            return false;
-        }
-        final AggregateCall call = agg.getAggCallList().get(0);
-        return call.getAggregation().getKind() == SqlKind.COUNT
-                && call.filterArg == -1
-                && call.getArgList().isEmpty();
     }
 }

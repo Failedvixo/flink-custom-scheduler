@@ -31,7 +31,7 @@ performance.
 
 Depending on the requirements of a table program, it might be necessary to adjust
 certain parameters for optimization. For example, unbounded streaming programs may need to ensure
-that the required state size is capped (see [streaming concepts]({{< ref "docs/dev/table/concepts/overview" >}})).
+that the required state size is capped (see [streaming concepts]({{< ref "docs/concepts/sql-table-concepts/overview" >}})).
 
 ### Overview
 
@@ -125,8 +125,8 @@ Flink SQL> SET 'table.exec.mini-batch.size' = '5000';
 {{< /tabs >}}
 
 {{< hint info >}}
-**Note:** All of the following configuration options can also be set globally in 
-`conf/flink-conf.yaml` (see [configuration]({{< ref "docs/deployment/config" >}}) and can be later
+**Note:** All of the following configuration options can also be set globally in
+[Flink configuration file]({{< ref "docs/deployment/config#flink-configuration-file" >}}) and can be later
 on overridden in the application, through `EnvironmentSettings`, before instantiating
 the `TableEnvironment`, or through the `TableConfig` of the `TableEnvironment`.
 {{< /hint >}}
@@ -148,6 +148,12 @@ The following options can be used to adjust the behavior of the query optimizer 
 The following options can be used to adjust the behavior of the table planner.
 
 {{< generated/table_config_configuration >}}
+
+### Materialized Table Options
+
+The following options can be used to adjust the behavior of the materialized table.
+
+{{< generated/materialized_table_config_configuration >}}
 
 ### SQL Client Options
 

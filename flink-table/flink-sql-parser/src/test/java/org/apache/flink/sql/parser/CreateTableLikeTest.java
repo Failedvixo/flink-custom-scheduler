@@ -18,11 +18,11 @@
 
 package org.apache.flink.sql.parser;
 
-import org.apache.flink.sql.parser.ddl.SqlCreateTableLike;
-import org.apache.flink.sql.parser.ddl.SqlTableLike;
-import org.apache.flink.sql.parser.ddl.SqlTableLike.FeatureOption;
-import org.apache.flink.sql.parser.ddl.SqlTableLike.MergingStrategy;
-import org.apache.flink.sql.parser.ddl.SqlTableLike.SqlTableLikeOption;
+import org.apache.flink.sql.parser.ddl.table.SqlCreateTableLike;
+import org.apache.flink.sql.parser.ddl.table.SqlTableLike;
+import org.apache.flink.sql.parser.ddl.table.SqlTableLike.FeatureOption;
+import org.apache.flink.sql.parser.ddl.table.SqlTableLike.MergingStrategy;
+import org.apache.flink.sql.parser.ddl.table.SqlTableLike.SqlTableLikeOption;
 import org.apache.flink.sql.parser.error.SqlValidateException;
 import org.apache.flink.sql.parser.impl.FlinkSqlParserImpl;
 
@@ -67,6 +67,7 @@ class CreateTableLikeTest {
                                         + "LIKE b (\n"
                                         + "   EXCLUDING PARTITIONS\n"
                                         + "   EXCLUDING CONSTRAINTS\n"
+                                        + "   EXCLUDING DISTRIBUTION\n"
                                         + "   EXCLUDING WATERMARKS\n"
                                         + "   OVERWRITING GENERATED\n"
                                         + "   OVERWRITING OPTIONS\n"
@@ -86,6 +87,9 @@ class CreateTableLikeTest {
                                                         option(
                                                                 MergingStrategy.EXCLUDING,
                                                                 FeatureOption.CONSTRAINTS),
+                                                        option(
+                                                                MergingStrategy.EXCLUDING,
+                                                                FeatureOption.DISTRIBUTION),
                                                         option(
                                                                 MergingStrategy.EXCLUDING,
                                                                 FeatureOption.WATERMARKS),
@@ -150,6 +154,25 @@ class CreateTableLikeTest {
         assertThatThrownBy(extendedSqlNode::validate)
                 .isInstanceOf(SqlValidateException.class)
                 .hasMessage("Illegal merging strategy 'OVERWRITING' for 'ALL' option.");
+    }
+
+    @Test
+    void testInvalidOverwritingForDistribution() throws Exception {
+        ExtendedSqlNode extendedSqlNode =
+                (ExtendedSqlNode)
+                        createFlinkParser(
+                                        "CREATE TABLE t (\n"
+                                                + "   a STRING\n"
+                                                + ")\n"
+                                                + "LIKE b (\n"
+                                                + "   OVERWRITING DISTRIBUTION"
+                                                + ")")
+                                .parseStmt();
+
+        assertThatThrownBy(extendedSqlNode::validate)
+                .isInstanceOf(SqlValidateException.class)
+                .hasMessageContaining(
+                        "Illegal merging strategy 'OVERWRITING' for 'DISTRIBUTION' option.");
     }
 
     @Test

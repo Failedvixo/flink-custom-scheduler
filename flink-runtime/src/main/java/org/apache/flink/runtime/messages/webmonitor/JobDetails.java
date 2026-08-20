@@ -21,13 +21,16 @@ package org.apache.flink.runtime.messages.webmonitor;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobStatus;
+import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.executiongraph.AccessExecution;
 import org.apache.flink.runtime.executiongraph.AccessExecutionGraph;
 import org.apache.flink.runtime.executiongraph.AccessExecutionJobVertex;
 import org.apache.flink.runtime.executiongraph.AccessExecutionVertex;
+import org.apache.flink.runtime.jobgraph.JobType;
 import org.apache.flink.runtime.rest.messages.json.JobIDDeserializer;
 import org.apache.flink.runtime.rest.messages.json.JobIDSerializer;
+import org.apache.flink.runtime.scheduler.ExecutionGraphInfo;
 import org.apache.flink.util.Preconditions;
 
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonCreator;
@@ -36,12 +39,15 @@ import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonPro
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
+import javax.annotation.Nullable;
+
 import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -54,6 +60,8 @@ public class JobDetails implements Serializable {
 
     private static final String FIELD_NAME_JOB_ID = "jid";
     private static final String FIELD_NAME_JOB_NAME = "name";
+    private static final String FIELD_NAME_JOB_TYPE = "jobType";
+    private static final String FIELD_NAME_JOB_SCHEDULER = "schedulerType";
     private static final String FIELD_NAME_START_TIME = "start-time";
     private static final String FIELD_NAME_END_TIME = "end-time";
     private static final String FIELD_NAME_DURATION = "duration";
@@ -61,10 +69,14 @@ public class JobDetails implements Serializable {
     private static final String FIELD_NAME_LAST_MODIFICATION = "last-modification";
     private static final String FIELD_NAME_TOTAL_NUMBER_TASKS = "total";
     private static final String FIELD_NAME_TASKS = "tasks";
+    private static final String FIELD_NAME_PENDING_OPERATORS = "pending-operators";
 
     private final JobID jobId;
 
     private final String jobName;
+
+    @Nullable private final JobType jobType;
+    @Nullable private final JobManagerOptions.SchedulerType schedulerType;
 
     private final long startTime;
 
@@ -82,6 +94,8 @@ public class JobDetails implements Serializable {
 
     private transient Map<String, Integer> lazyTaskInfo = null;
 
+    private final int pendingOperators;
+
     /**
      * The map holds the attempt number of the current execution attempt in the Execution, which is
      * considered as the representing execution for the subtask of the vertex. The keys and values
@@ -97,22 +111,30 @@ public class JobDetails implements Serializable {
             @JsonProperty(FIELD_NAME_JOB_ID) @JsonDeserialize(using = JobIDDeserializer.class)
                     JobID jobId,
             @JsonProperty(FIELD_NAME_JOB_NAME) String jobName,
+            @Nullable @JsonProperty(FIELD_NAME_JOB_TYPE) JobType jobType,
+            @Nullable @JsonProperty(FIELD_NAME_JOB_SCHEDULER)
+                    JobManagerOptions.SchedulerType schedulerType,
             @JsonProperty(FIELD_NAME_START_TIME) long startTime,
             @JsonProperty(FIELD_NAME_END_TIME) long endTime,
             @JsonProperty(FIELD_NAME_DURATION) long duration,
             @JsonProperty(FIELD_NAME_STATUS) JobStatus status,
             @JsonProperty(FIELD_NAME_LAST_MODIFICATION) long lastUpdateTime,
-            @JsonProperty(FIELD_NAME_TASKS) Map<String, Integer> taskInfo) {
+            @JsonProperty(FIELD_NAME_TASKS) Map<String, Integer> taskInfo,
+            @JsonProperty(FIELD_NAME_PENDING_OPERATORS) int pendingOperators) {
         this(
                 jobId,
                 jobName,
+                jobType,
+                schedulerType,
                 startTime,
                 endTime,
                 duration,
                 status,
                 lastUpdateTime,
                 extractNumTasksPerState(taskInfo),
-                taskInfo.get(FIELD_NAME_TOTAL_NUMBER_TASKS));
+                taskInfo.get(FIELD_NAME_TOTAL_NUMBER_TASKS),
+                new HashMap<>(),
+                pendingOperators);
     }
 
     @VisibleForTesting
@@ -150,8 +172,40 @@ public class JobDetails implements Serializable {
             int[] tasksPerState,
             int numTasks,
             Map<String, Map<Integer, CurrentAttempts>> currentExecutionAttempts) {
+        this(
+                jobId,
+                jobName,
+                null,
+                null,
+                startTime,
+                endTime,
+                duration,
+                status,
+                lastUpdateTime,
+                tasksPerState,
+                numTasks,
+                currentExecutionAttempts,
+                0);
+    }
+
+    public JobDetails(
+            JobID jobId,
+            String jobName,
+            @Nullable JobType jobType,
+            @Nullable JobManagerOptions.SchedulerType schedulerType,
+            long startTime,
+            long endTime,
+            long duration,
+            JobStatus status,
+            long lastUpdateTime,
+            int[] tasksPerState,
+            int numTasks,
+            Map<String, Map<Integer, CurrentAttempts>> currentExecutionAttempts,
+            int pendingOperators) {
         this.jobId = checkNotNull(jobId);
         this.jobName = checkNotNull(jobName);
+        this.jobType = jobType;
+        this.schedulerType = schedulerType;
         this.startTime = startTime;
         this.endTime = endTime;
         this.duration = duration;
@@ -164,9 +218,11 @@ public class JobDetails implements Serializable {
         this.tasksPerState = checkNotNull(tasksPerState);
         this.numTasks = numTasks;
         this.currentExecutionAttempts = checkNotNull(currentExecutionAttempts);
+        this.pendingOperators = pendingOperators;
     }
 
-    public static JobDetails createDetailsForJob(AccessExecutionGraph job) {
+    public static JobDetails createDetailsForJob(ExecutionGraphInfo executionGraphInfo) {
+        final AccessExecutionGraph job = executionGraphInfo.getArchivedExecutionGraph();
         JobStatus status = job.getState();
 
         long started = job.getStatusTimestamp(JobStatus.INITIALIZING);
@@ -194,7 +250,8 @@ public class JobDetails implements Serializable {
                                 taskVertex.getCurrentExecutionAttempt().getAttemptNumber(),
                                 taskVertex.getCurrentExecutions().stream()
                                         .map(AccessExecution::getAttemptNumber)
-                                        .collect(Collectors.toSet())));
+                                        .collect(Collectors.toSet()),
+                                state.isTerminal()));
             }
 
             if (!vertexAttempts.isEmpty()) {
@@ -207,6 +264,8 @@ public class JobDetails implements Serializable {
         return new JobDetails(
                 job.getJobID(),
                 job.getJobName(),
+                job.getJobType(),
+                executionGraphInfo.getSchedulerType(),
                 started,
                 finished,
                 duration,
@@ -214,7 +273,8 @@ public class JobDetails implements Serializable {
                 lastChanged,
                 countsPerStatus,
                 numTotalTasks,
-                currentExecutionAttempts);
+                currentExecutionAttempts,
+                job.getPendingOperatorCount());
     }
 
     // ------------------------------------------------------------------------
@@ -228,6 +288,18 @@ public class JobDetails implements Serializable {
     @JsonProperty(FIELD_NAME_JOB_NAME)
     public String getJobName() {
         return jobName;
+    }
+
+    @Nullable
+    @JsonProperty(FIELD_NAME_JOB_TYPE)
+    public JobType getJobType() {
+        return jobType;
+    }
+
+    @Nullable
+    @JsonProperty(FIELD_NAME_JOB_SCHEDULER)
+    public JobManagerOptions.SchedulerType getSchedulerType() {
+        return schedulerType;
     }
 
     @JsonProperty(FIELD_NAME_START_TIME)
@@ -270,6 +342,11 @@ public class JobDetails implements Serializable {
         return lazyTaskInfo;
     }
 
+    @JsonProperty(FIELD_NAME_PENDING_OPERATORS)
+    public int getPendingOperators() {
+        return pendingOperators;
+    }
+
     @JsonIgnore
     public int getNumTasks() {
         return numTasks;
@@ -284,6 +361,7 @@ public class JobDetails implements Serializable {
     public Map<String, Map<Integer, CurrentAttempts>> getCurrentExecutionAttempts() {
         return currentExecutionAttempts;
     }
+
     // ------------------------------------------------------------------------
 
     private static int[] extractNumTasksPerState(Map<String, Integer> ex) {
@@ -309,8 +387,11 @@ public class JobDetails implements Serializable {
                     && this.status == that.status
                     && this.jobId.equals(that.jobId)
                     && this.jobName.equals(that.jobName)
+                    && Objects.equals(jobType, that.jobType)
+                    && Objects.equals(schedulerType, that.schedulerType)
                     && Arrays.equals(this.tasksPerState, that.tasksPerState)
-                    && this.currentExecutionAttempts.equals(that.currentExecutionAttempts);
+                    && this.currentExecutionAttempts.equals(that.currentExecutionAttempts)
+                    && this.pendingOperators == that.pendingOperators;
         } else {
             return false;
         }
@@ -320,6 +401,8 @@ public class JobDetails implements Serializable {
     public int hashCode() {
         int result = jobId.hashCode();
         result = 31 * result + jobName.hashCode();
+        result = 31 * result + Objects.hashCode(jobType);
+        result = 31 * result + Objects.hashCode(schedulerType);
         result = 31 * result + (int) (startTime ^ (startTime >>> 32));
         result = 31 * result + (int) (endTime ^ (endTime >>> 32));
         result = 31 * result + status.hashCode();
@@ -327,6 +410,7 @@ public class JobDetails implements Serializable {
         result = 31 * result + Arrays.hashCode(tasksPerState);
         result = 31 * result + numTasks;
         result = 31 * result + currentExecutionAttempts.hashCode();
+        result = 31 * result + pendingOperators;
         return result;
     }
 
@@ -337,6 +421,12 @@ public class JobDetails implements Serializable {
                 + jobId
                 + ", jobName='"
                 + jobName
+                + '\''
+                + ", jobType='"
+                + jobType
+                + '\''
+                + ", schedulerType='"
+                + schedulerType
                 + '\''
                 + ", startTime="
                 + startTime
@@ -350,21 +440,28 @@ public class JobDetails implements Serializable {
                 + Arrays.toString(tasksPerState)
                 + ", numTasks="
                 + numTasks
+                + ", pendingOperators="
+                + pendingOperators
                 + '}';
     }
 
     /**
      * The CurrentAttempts holds the attempt number of the current representative execution attempt,
-     * and the attempt numbers of all the running attempts.
+     * the attempt numbers of all the running attempts, and whether the current execution has
+     * reached terminal state.
      */
     public static final class CurrentAttempts implements Serializable {
         private final int representativeAttempt;
 
         private final Set<Integer> currentAttempts;
 
-        public CurrentAttempts(int representativeAttempt, Set<Integer> currentAttempts) {
+        private final boolean isTerminalState;
+
+        public CurrentAttempts(
+                int representativeAttempt, Set<Integer> currentAttempts, boolean isTerminalState) {
             this.representativeAttempt = representativeAttempt;
             this.currentAttempts = Collections.unmodifiableSet(currentAttempts);
+            this.isTerminalState = isTerminalState;
         }
 
         public int getRepresentativeAttempt() {
@@ -373,6 +470,10 @@ public class JobDetails implements Serializable {
 
         public Set<Integer> getCurrentAttempts() {
             return currentAttempts;
+        }
+
+        public boolean isTerminalState() {
+            return isTerminalState;
         }
     }
 }

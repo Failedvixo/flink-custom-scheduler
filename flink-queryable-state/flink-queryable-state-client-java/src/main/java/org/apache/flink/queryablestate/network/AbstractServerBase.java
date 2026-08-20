@@ -25,13 +25,14 @@ import org.apache.flink.util.ExecutorUtils;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.Preconditions;
 
-import org.apache.flink.shaded.guava31.com.google.common.util.concurrent.ThreadFactoryBuilder;
+import org.apache.flink.shaded.guava33.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.flink.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
 import org.apache.flink.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.flink.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.flink.shaded.netty4.io.netty.channel.ChannelOption;
 import org.apache.flink.shaded.netty4.io.netty.channel.EventLoopGroup;
-import org.apache.flink.shaded.netty4.io.netty.channel.nio.NioEventLoopGroup;
+import org.apache.flink.shaded.netty4.io.netty.channel.MultiThreadIoEventLoopGroup;
+import org.apache.flink.shaded.netty4.io.netty.channel.nio.NioIoHandler;
 import org.apache.flink.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import org.apache.flink.shaded.netty4.io.netty.channel.socket.nio.NioServerSocketChannel;
 import org.apache.flink.shaded.netty4.io.netty.handler.codec.LengthFieldBasedFrameDecoder;
@@ -236,8 +237,9 @@ public abstract class AbstractServerBase<REQ extends MessageBody, RESP extends M
                         .setNameFormat("Flink " + serverName + " EventLoop Thread %d")
                         .build();
 
-        final NioEventLoopGroup nioGroup =
-                new NioEventLoopGroup(numEventLoopThreads, threadFactory);
+        final MultiThreadIoEventLoopGroup nioGroup =
+                new MultiThreadIoEventLoopGroup(
+                        numEventLoopThreads, threadFactory, NioIoHandler.newFactory());
 
         this.bootstrap =
                 new ServerBootstrap()

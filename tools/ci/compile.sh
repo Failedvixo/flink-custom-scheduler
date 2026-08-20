@@ -60,7 +60,7 @@ EXIT_CODE=0
 
 # run with -T1 because our maven output parsers don't support multi-threaded builds
 $MVN clean deploy -DaltDeploymentRepository=validation_repository::default::file:$MVN_VALIDATION_DIR -Dflink.convergence.phase=install -Pcheck-convergence \
-    -Dmaven.javadoc.skip=true -U -DskipTests "${@}" -T1 | tee $MVN_CLEAN_COMPILE_OUT
+    -Dmaven.javadoc.skip=true -U -DskipTests -Dorg.slf4j.simpleLogger.log.org.apache.maven.plugins.shade=DEBUG "${@}" -T1 | tee $MVN_CLEAN_COMPILE_OUT
 
 EXIT_CODE=${PIPESTATUS[0]}
 
@@ -86,23 +86,11 @@ javadoc_output=/tmp/javadoc.out
 # use the same invocation as .github/workflows/docs.sh
 $MVN javadoc:aggregate -DadditionalJOption='-Xdoclint:none' \
       -Dmaven.javadoc.failOnError=false -Dcheckstyle.skip=true -Denforcer.skip=true -Dspotless.skip=true -Drat.skip=true \
-      -Dheader=someTestHeader > ${javadoc_output}
+      -Dheader=someTestHeader -Pskip-webui-build > ${javadoc_output}
 EXIT_CODE=$?
 if [ $EXIT_CODE != 0 ] ; then
   echo "ERROR in Javadocs. Printing full output:"
   cat ${javadoc_output}
-  exit $EXIT_CODE
-fi
-
-echo "============ Checking Scaladocs ============"
-
-scaladoc_output=/tmp/scaladoc.out
-
-$MVN scala:doc -Dcheckstyle.skip=true -Denforcer.skip=true -Dspotless.skip=true -pl flink-scala 2> ${scaladoc_output}
-EXIT_CODE=$?
-if [ $EXIT_CODE != 0 ] ; then
-  echo "ERROR in Scaladocs. Printing full output:"
-  cat ${scaladoc_output}
   exit $EXIT_CODE
 fi
 
@@ -126,10 +114,7 @@ EXIT_CODE=$(($EXIT_CODE+$?))
 echo "============ Run license check ============"
 
 find $MVN_VALIDATION_DIR
-# We use a different Scala version with Java 17
-if [[ ${PROFILE} != *"jdk17"* ]]; then
-  MVN=$MVN ${CI_DIR}/license_check.sh $MVN_CLEAN_COMPILE_OUT $MVN_VALIDATION_DIR || exit $?
-fi
+MVN=$MVN ${CI_DIR}/license_check.sh $MVN_CLEAN_COMPILE_OUT $MVN_VALIDATION_DIR || exit $?
 
 exit $EXIT_CODE
 

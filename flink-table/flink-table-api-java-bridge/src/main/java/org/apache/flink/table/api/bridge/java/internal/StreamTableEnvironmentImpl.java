@@ -26,6 +26,7 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.InsertConflictStrategy;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.TableConfig;
@@ -45,19 +46,14 @@ import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.delegation.Executor;
 import org.apache.flink.table.delegation.Planner;
 import org.apache.flink.table.expressions.Expression;
+import org.apache.flink.table.factories.ApiFactoryUtil;
 import org.apache.flink.table.factories.CatalogStoreFactory;
 import org.apache.flink.table.factories.PlannerFactoryUtil;
 import org.apache.flink.table.factories.TableFactoryUtil;
-import org.apache.flink.table.functions.AggregateFunction;
-import org.apache.flink.table.functions.TableAggregateFunction;
-import org.apache.flink.table.functions.TableFunction;
-import org.apache.flink.table.functions.UserDefinedFunctionHelper;
 import org.apache.flink.table.module.ModuleManager;
 import org.apache.flink.table.operations.ExternalQueryOperation;
 import org.apache.flink.table.operations.OutputConversionModifyOperation;
 import org.apache.flink.table.resource.ResourceManager;
-import org.apache.flink.table.sources.TableSource;
-import org.apache.flink.table.sources.TableSourceValidation;
 import org.apache.flink.table.types.AbstractDataType;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.utils.TypeConversions;
@@ -117,17 +113,11 @@ public final class StreamTableEnvironmentImpl extends AbstractStreamTableEnviron
                 new ResourceManager(settings.getConfiguration(), userClassLoader);
         final ModuleManager moduleManager = new ModuleManager();
 
-        final CatalogStoreFactory catalogStoreFactory =
-                TableFactoryUtil.findAndCreateCatalogStoreFactory(
-                        settings.getConfiguration(), userClassLoader);
-        final CatalogStoreFactory.Context catalogStoreFactoryContext =
-                TableFactoryUtil.buildCatalogStoreFactoryContext(
-                        settings.getConfiguration(), userClassLoader);
-        catalogStoreFactory.open(catalogStoreFactoryContext);
-        final CatalogStore catalogStore =
-                settings.getCatalogStore() != null
-                        ? settings.getCatalogStore()
-                        : catalogStoreFactory.createCatalogStore();
+        final ApiFactoryUtil.CatalogStoreResult catalogStoreResult =
+                ApiFactoryUtil.getOrCreateCatalogStore(
+                        settings.getCatalogStore(), settings.getConfiguration(), userClassLoader);
+        final CatalogStore catalogStore = catalogStoreResult.getCatalogStore();
+        final CatalogStoreFactory catalogStoreFactory = catalogStoreResult.getCatalogStoreFactory();
 
         final CatalogManager catalogManager =
                 CatalogManager.newBuilder()
@@ -173,39 +163,6 @@ public final class StreamTableEnvironmentImpl extends AbstractStreamTableEnviron
                 planner,
                 executor,
                 settings.isStreamingMode());
-    }
-
-    @Override
-    public <T> void registerFunction(String name, TableFunction<T> tableFunction) {
-        TypeInformation<T> typeInfo =
-                UserDefinedFunctionHelper.getReturnTypeOfTableFunction(tableFunction);
-
-        functionCatalog.registerTempSystemTableFunction(name, tableFunction, typeInfo);
-    }
-
-    @Override
-    public <T, ACC> void registerFunction(
-            String name, AggregateFunction<T, ACC> aggregateFunction) {
-        TypeInformation<T> typeInfo =
-                UserDefinedFunctionHelper.getReturnTypeOfAggregateFunction(aggregateFunction);
-        TypeInformation<ACC> accTypeInfo =
-                UserDefinedFunctionHelper.getAccumulatorTypeOfAggregateFunction(aggregateFunction);
-
-        functionCatalog.registerTempSystemAggregateFunction(
-                name, aggregateFunction, typeInfo, accTypeInfo);
-    }
-
-    @Override
-    public <T, ACC> void registerFunction(
-            String name, TableAggregateFunction<T, ACC> tableAggregateFunction) {
-        TypeInformation<T> typeInfo =
-                UserDefinedFunctionHelper.getReturnTypeOfAggregateFunction(tableAggregateFunction);
-        TypeInformation<ACC> accTypeInfo =
-                UserDefinedFunctionHelper.getAccumulatorTypeOfAggregateFunction(
-                        tableAggregateFunction);
-
-        functionCatalog.registerTempSystemAggregateFunction(
-                name, tableAggregateFunction, typeInfo, accTypeInfo);
     }
 
     @Override
@@ -302,7 +259,7 @@ public final class StreamTableEnvironmentImpl extends AbstractStreamTableEnviron
                         table.getResolvedSchema(),
                         targetDataType);
 
-        return toStreamInternal(table, schemaTranslationResult, ChangelogMode.insertOnly());
+        return toStreamInternal(table, schemaTranslationResult, ChangelogMode.insertOnly(), null);
     }
 
     @Override
@@ -312,7 +269,7 @@ public final class StreamTableEnvironmentImpl extends AbstractStreamTableEnviron
         final SchemaTranslator.ProducingResult schemaTranslationResult =
                 SchemaTranslator.createProducingResult(table.getResolvedSchema(), null);
 
-        return toStreamInternal(table, schemaTranslationResult, null);
+        return toStreamInternal(table, schemaTranslationResult, null, null);
     }
 
     @Override
@@ -323,12 +280,21 @@ public final class StreamTableEnvironmentImpl extends AbstractStreamTableEnviron
         final SchemaTranslator.ProducingResult schemaTranslationResult =
                 SchemaTranslator.createProducingResult(table.getResolvedSchema(), targetSchema);
 
-        return toStreamInternal(table, schemaTranslationResult, null);
+        return toStreamInternal(table, schemaTranslationResult, null, null);
     }
 
     @Override
     public DataStream<Row> toChangelogStream(
             Table table, Schema targetSchema, ChangelogMode changelogMode) {
+        return toChangelogStream(table, targetSchema, changelogMode, null);
+    }
+
+    @Override
+    public DataStream<Row> toChangelogStream(
+            Table table,
+            Schema targetSchema,
+            ChangelogMode changelogMode,
+            InsertConflictStrategy conflictStrategy) {
         Preconditions.checkNotNull(table, "Table must not be null.");
         Preconditions.checkNotNull(targetSchema, "Target schema must not be null.");
         Preconditions.checkNotNull(changelogMode, "Changelog mode must not be null.");
@@ -336,7 +302,7 @@ public final class StreamTableEnvironmentImpl extends AbstractStreamTableEnviron
         final SchemaTranslator.ProducingResult schemaTranslationResult =
                 SchemaTranslator.createProducingResult(table.getResolvedSchema(), targetSchema);
 
-        return toStreamInternal(table, schemaTranslationResult, changelogMode);
+        return toStreamInternal(table, schemaTranslationResult, changelogMode, conflictStrategy);
     }
 
     @Override
@@ -347,11 +313,6 @@ public final class StreamTableEnvironmentImpl extends AbstractStreamTableEnviron
     @Override
     public <T> Table fromDataStream(DataStream<T> dataStream, Expression... fields) {
         return createTable(asQueryOperation(dataStream, Optional.of(Arrays.asList(fields))));
-    }
-
-    @Override
-    public <T> void registerDataStream(String name, DataStream<T> dataStream) {
-        createTemporaryView(name, dataStream);
     }
 
     @Override
@@ -391,11 +352,5 @@ public final class StreamTableEnvironmentImpl extends AbstractStreamTableEnviron
                         wrapWithChangeFlag(typeInfo),
                         OutputConversionModifyOperation.UpdateMode.RETRACT);
         return toStreamInternal(table, modifyOperation);
-    }
-
-    @Override
-    protected void validateTableSource(TableSource<?> tableSource) {
-        super.validateTableSource(tableSource);
-        validateTimeCharacteristic(TableSourceValidation.hasRowtimeAttribute(tableSource));
     }
 }

@@ -24,6 +24,10 @@ import org.apache.flink.table.types.logical.BinaryType;
 import org.apache.flink.table.types.logical.CharType;
 import org.apache.flink.table.types.logical.SymbolType;
 import org.apache.flink.table.types.utils.ValueDataTypeConverter;
+import org.apache.flink.types.bitmap.Bitmap;
+import org.apache.flink.types.bitmap.RoaringBitmapData;
+import org.apache.flink.types.variant.BinaryVariant;
+import org.apache.flink.types.variant.Variant;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -57,6 +61,12 @@ class ValueDataTypeConverterTest {
                 of(BigDecimal.ZERO, DataTypes.DECIMAL(1, 0)),
                 of(new BigDecimal("12.123"), DataTypes.DECIMAL(5, 3)),
                 of(new BigDecimal("1E+36"), DataTypes.DECIMAL(37, 0)),
+                of(new BigDecimal("0.000"), DataTypes.DECIMAL(4, 3)),
+                of(new BigDecimal("0.0"), DataTypes.DECIMAL(2, 1)),
+                of(new BigDecimal("0.11"), DataTypes.DECIMAL(3, 2)),
+                of(new BigDecimal("0.011"), DataTypes.DECIMAL(4, 3)),
+                of(new BigDecimal("0000.01"), DataTypes.DECIMAL(3, 2)),
+                of(new BigDecimal(".01"), DataTypes.DECIMAL(3, 2)),
                 of(12, DataTypes.INT()),
                 of(LocalTime.of(13, 24, 25, 1000), DataTypes.TIME(6)),
                 of(LocalTime.of(13, 24, 25, 0), DataTypes.TIME(0)),
@@ -106,7 +116,14 @@ class ValueDataTypeConverterTest {
                         },
                         DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT()))),
                 of(TimePointUnit.HOUR, new AtomicDataType(new SymbolType<>(), TimePointUnit.class)),
-                of(new BigDecimal[0], null));
+                of(new BigDecimal[0], null),
+                of(
+                        Variant.newBuilder().of("hello"),
+                        DataTypes.VARIANT().bridgedTo(BinaryVariant.class)),
+                of(Bitmap.empty(), DataTypes.BITMAP().bridgedTo(RoaringBitmapData.class)),
+                of(
+                        Bitmap.fromArray(new int[] {1, 2}),
+                        DataTypes.BITMAP().bridgedTo(RoaringBitmapData.class)));
     }
 
     @ParameterizedTest(name = "[{index}] value: {0} type: {1}")

@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.source.coordinator;
 
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.eventtime.WatermarkAlignmentParams;
 import org.apache.flink.api.connector.source.Source;
 import org.apache.flink.api.connector.source.SourceSplit;
@@ -38,6 +39,7 @@ import org.apache.flink.util.concurrent.ExecutorThreadFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -140,6 +142,22 @@ abstract class SourceCoordinatorTestBase {
                 new ReaderRegistrationEvent(subtask, createLocationFor(subtask, attemptNumber)));
     }
 
+    protected void registerReader(
+            SourceCoordinator<MockSourceSplit, Set<MockSourceSplit>> coordinator,
+            int subtask,
+            int attemptNumber,
+            List<MockSourceSplit> splits)
+            throws IOException {
+        coordinator.handleEventFromOperator(
+                subtask,
+                attemptNumber,
+                ReaderRegistrationEvent.createReaderRegistrationEvent(
+                        subtask,
+                        createLocationFor(subtask, attemptNumber),
+                        splits,
+                        new MockSourceSplitSerializer()));
+    }
+
     static String createLocationFor(int subtask, int attemptNumber) {
         return String.format("location_%d_%d", subtask, attemptNumber);
     }
@@ -181,6 +199,7 @@ abstract class SourceCoordinatorTestBase {
                 createMockSource();
 
         return new SourceCoordinator<>(
+                new JobID(),
                 OPERATOR_NAME,
                 mockSource,
                 getNewSourceCoordinatorContext(),
@@ -201,6 +220,7 @@ abstract class SourceCoordinatorTestBase {
                         coordinatorThreadName, operatorCoordinatorContext);
         SourceCoordinatorContext<MockSourceSplit> coordinatorContext =
                 new SourceCoordinatorContext<>(
+                        new JobID(),
                         Executors.newScheduledThreadPool(1, coordinatorThreadFactory),
                         Executors.newScheduledThreadPool(
                                 1, new ExecutorThreadFactory(coordinatorThreadName + "-worker")),

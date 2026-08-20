@@ -30,19 +30,18 @@ import org.apache.flink.connector.file.sink.FileSink;
 import org.apache.flink.connector.file.src.FileSource;
 import org.apache.flink.connector.file.src.reader.TextLineInputFormat;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.filesystem.rollingpolicies.DefaultRollingPolicy;
 import org.apache.flink.streaming.api.functions.windowing.delta.DeltaFunction;
 import org.apache.flink.streaming.api.windowing.assigners.GlobalWindows;
 import org.apache.flink.streaming.api.windowing.evictors.TimeEvictor;
-import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.triggers.DeltaTrigger;
 import org.apache.flink.streaming.examples.windowing.util.CarGeneratorFunction;
 import org.apache.flink.streaming.examples.wordcount.util.CLI;
 
 import java.time.Duration;
-import java.util.concurrent.TimeUnit;
 
 /**
  * An example of grouped stream windowing where different eviction and trigger policies can be used.
@@ -122,15 +121,20 @@ public class TopSpeedWindowing {
 
         int evictionSec = 10;
         double triggerMeters = 50;
-        DataStream<Tuple4<Integer, Integer, Double, Long>> topSpeeds =
+        KeyedStream<Tuple4<Integer, Integer, Double, Long>, Integer> keyedStream =
                 carData.assignTimestampsAndWatermarks(
                                 WatermarkStrategy
                                         .<Tuple4<Integer, Integer, Double, Long>>
                                                 forMonotonousTimestamps()
                                         .withTimestampAssigner((car, ts) -> car.f3))
-                        .keyBy(value -> value.f0)
+                        .keyBy(value -> value.f0);
+        if (params.isAsyncState()) {
+            keyedStream = keyedStream.enableAsyncState();
+        }
+        DataStream<Tuple4<Integer, Integer, Double, Long>> topSpeeds =
+                keyedStream
                         .window(GlobalWindows.create())
-                        .evictor(TimeEvictor.of(Time.of(evictionSec, TimeUnit.SECONDS)))
+                        .evictor(TimeEvictor.of(Duration.ofSeconds(evictionSec)))
                         .trigger(
                                 DeltaTrigger.of(
                                         triggerMeters,
@@ -147,7 +151,9 @@ public class TopSpeedWindowing {
                                                 return newDataPoint.f2 - oldDataPoint.f2;
                                             }
                                         },
-                                        carData.getType().createSerializer(env.getConfig())))
+                                        carData.getType()
+                                                .createSerializer(
+                                                        env.getConfig().getSerializerConfig())))
                         .maxBy(1);
 
         if (params.getOutput().isPresent()) {

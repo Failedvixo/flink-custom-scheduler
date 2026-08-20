@@ -18,7 +18,7 @@
 
 package org.apache.flink.connector.file.table.batch.compact;
 
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.connector.file.table.FileSystemCommitter;
 import org.apache.flink.connector.file.table.FileSystemFactory;
 import org.apache.flink.connector.file.table.PartitionCommitPolicy;
@@ -27,7 +27,7 @@ import org.apache.flink.connector.file.table.TableMetaStoreFactory;
 import org.apache.flink.connector.file.table.stream.compact.CompactMessages;
 import org.apache.flink.connector.file.table.stream.compact.CompactMessages.CompactOutput;
 import org.apache.flink.core.fs.Path;
-import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
+import org.apache.flink.streaming.api.functions.sink.legacy.RichSinkFunction;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.catalog.ObjectIdentifier;
 
@@ -81,7 +81,7 @@ public class BatchPartitionCommitterSink extends RichSinkFunction<CompactOutput>
     }
 
     @Override
-    public void open(Configuration parameters) throws Exception {
+    public void open(OpenContext openContext) throws Exception {
         partitionsFiles = new HashMap<>();
     }
 

@@ -18,8 +18,9 @@
 package org.apache.flink.runtime.rpc.pekko;
 
 import org.apache.flink.annotation.VisibleForTesting;
-import org.apache.flink.configuration.AkkaOptions;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.ConfigurationUtils;
+import org.apache.flink.configuration.RpcOptions;
 import org.apache.flink.runtime.rpc.RpcSystem;
 import org.apache.flink.util.NetUtils;
 
@@ -32,7 +33,9 @@ import org.slf4j.Logger;
 import java.io.IOException;
 import java.net.BindException;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /** Tools for starting the Actor Systems used to run the JobManager and TaskManager actors. */
 public class ActorSystemBootstrapTools {
@@ -122,7 +125,9 @@ public class ActorSystemBootstrapTools {
             } catch (Exception e) {
                 // we can continue to try if this contains a netty channel exception
                 Throwable cause = e.getCause();
-                if (!(cause instanceof org.jboss.netty.channel.ChannelException
+                if (!(cause
+                                instanceof
+                                org.apache.flink.shaded.netty4.io.netty.channel.ChannelException
                         || cause instanceof java.net.BindException)) {
                     throw e;
                 } // else fall through the loop and try the next port
@@ -240,6 +245,22 @@ public class ActorSystemBootstrapTools {
     }
 
     /**
+     * Converts the given Pekko {@link Config} into a flattened {@link Map}.
+     *
+     * @param config The Pekko configuration
+     * @return A map of configuration keys to string values
+     */
+    @VisibleForTesting
+    static Map<String, String> toMaskedMap(Config config) {
+        return ConfigurationUtils.hideSensitiveValues(
+                config.entrySet().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        Map.Entry::getKey,
+                                        entry -> String.valueOf(entry.getValue().unwrapped()))));
+    }
+
+    /**
      * Starts an Actor System with given Pekko config.
      *
      * @param config Config of the started ActorSystem.
@@ -249,7 +270,9 @@ public class ActorSystemBootstrapTools {
      */
     private static ActorSystem startActorSystem(
             Config config, String actorSystemName, Logger logger) {
-        logger.debug("Using pekko configuration\n {}", config);
+        if (logger.isDebugEnabled()) {
+            logger.debug("Using pekko configuration\n {}", toMaskedMap(config));
+        }
         ActorSystem actorSystem = PekkoUtils.createActorSystem(actorSystemName, config);
 
         logger.info("Actor system started at {}", PekkoUtils.getAddress(actorSystem));
@@ -264,11 +287,22 @@ public class ActorSystemBootstrapTools {
     public static RpcSystem.ForkJoinExecutorConfiguration getForkJoinExecutorConfiguration(
             final Configuration configuration) {
         final double parallelismFactor =
-                configuration.getDouble(AkkaOptions.FORK_JOIN_EXECUTOR_PARALLELISM_FACTOR);
+                configuration.get(RpcOptions.FORK_JOIN_EXECUTOR_PARALLELISM_FACTOR);
+        final int minParallelism = configuration.get(RpcOptions.FORK_JOIN_EXECUTOR_PARALLELISM_MIN);
+        final int maxParallelism = configuration.get(RpcOptions.FORK_JOIN_EXECUTOR_PARALLELISM_MAX);
+
+        return new RpcSystem.ForkJoinExecutorConfiguration(
+                parallelismFactor, minParallelism, maxParallelism);
+    }
+
+    public static RpcSystem.ForkJoinExecutorConfiguration getRemoteForkJoinExecutorConfiguration(
+            final Configuration configuration) {
+        final double parallelismFactor =
+                configuration.get(RpcOptions.REMOTE_FORK_JOIN_EXECUTOR_PARALLELISM_FACTOR);
         final int minParallelism =
-                configuration.getInteger(AkkaOptions.FORK_JOIN_EXECUTOR_PARALLELISM_MIN);
+                configuration.get(RpcOptions.REMOTE_FORK_JOIN_EXECUTOR_PARALLELISM_MIN);
         final int maxParallelism =
-                configuration.getInteger(AkkaOptions.FORK_JOIN_EXECUTOR_PARALLELISM_MAX);
+                configuration.get(RpcOptions.REMOTE_FORK_JOIN_EXECUTOR_PARALLELISM_MAX);
 
         return new RpcSystem.ForkJoinExecutorConfiguration(
                 parallelismFactor, minParallelism, maxParallelism);

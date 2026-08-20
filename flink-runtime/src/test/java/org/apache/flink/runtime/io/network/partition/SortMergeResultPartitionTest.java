@@ -28,6 +28,7 @@ import org.apache.flink.runtime.io.network.api.serialization.EventSerializer;
 import org.apache.flink.runtime.io.network.buffer.Buffer;
 import org.apache.flink.runtime.io.network.buffer.BufferPool;
 import org.apache.flink.runtime.io.network.buffer.CompositeBuffer;
+import org.apache.flink.runtime.io.network.buffer.FullyFilledBuffer;
 import org.apache.flink.runtime.io.network.buffer.NetworkBuffer;
 import org.apache.flink.runtime.io.network.buffer.NetworkBufferPool;
 import org.apache.flink.testutils.junit.extensions.parameterized.Parameter;
@@ -62,7 +63,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link SortMergeResultPartition}. */
 @ExtendWith(ParameterizedTestExtension.class)
-public class SortMergeResultPartitionTest {
+class SortMergeResultPartitionTest {
 
     private static final int bufferSize = 1024;
 
@@ -159,33 +160,39 @@ public class SortMergeResultPartitionTest {
         for (int subpartition = 0; subpartition < numSubpartitions; ++subpartition) {
             ByteBuffer record = EventSerializer.toSerializedEvent(EndOfPartitionEvent.INSTANCE);
             recordDataWritten(
-                    record, dataWritten, subpartition, numBytesWritten, DataType.EVENT_BUFFER);
+                    record, dataWritten, subpartition, numBytesWritten, DataType.END_OF_PARTITION);
         }
 
         ResultSubpartitionView[] views = createSubpartitionViews(partition, numSubpartitions);
         readData(
                 views,
-                bufferWithChannel -> {
-                    Buffer buffer = bufferWithChannel.getBuffer();
-                    int subpartition = bufferWithChannel.getChannelIndex();
+                bufferWithSubpartition -> {
+                    Buffer buffer = bufferWithSubpartition.getBuffer();
+                    int subpartition = bufferWithSubpartition.getSubpartitionIndex();
 
                     int numBytes = buffer.readableBytes();
                     numBytesRead[subpartition] += numBytes;
 
                     MemorySegment segment = MemorySegmentFactory.allocateUnpooledSegment(numBytes);
-                    Buffer fullBuffer =
-                            ((CompositeBuffer) buffer)
-                                    .getFullBufferData(
-                                            MemorySegmentFactory.allocateUnpooledSegment(numBytes));
-                    segment.put(0, fullBuffer.getNioBufferReadable(), fullBuffer.readableBytes());
-                    buffersRead[subpartition].add(
-                            new NetworkBuffer(
-                                    segment,
-                                    ignore -> {},
-                                    fullBuffer.getDataType(),
-                                    fullBuffer.isCompressed(),
-                                    fullBuffer.readableBytes()));
-                    fullBuffer.recycleBuffer();
+                    FullyFilledBuffer fullyFilledBuffer = (FullyFilledBuffer) buffer;
+
+                    for (int i = 0; i < fullyFilledBuffer.getPartialBuffers().size(); i++) {
+                        Buffer fullBuffer =
+                                ((CompositeBuffer) fullyFilledBuffer.getPartialBuffers().get(i))
+                                        .getFullBufferData(
+                                                MemorySegmentFactory.allocateUnpooledSegment(
+                                                        numBytes));
+                        segment.put(
+                                0, fullBuffer.getNioBufferReadable(), fullBuffer.readableBytes());
+                        buffersRead[subpartition].add(
+                                new NetworkBuffer(
+                                        segment,
+                                        ignore -> {},
+                                        fullBuffer.getDataType(),
+                                        fullBuffer.isCompressed(),
+                                        fullBuffer.readableBytes()));
+                        fullBuffer.recycleBuffer();
+                    }
                 });
         DataBufferTest.checkWriteReadResult(
                 numSubpartitions, numBytesWritten, numBytesRead, dataWritten, buffersRead);
@@ -209,7 +216,7 @@ public class SortMergeResultPartitionTest {
     }
 
     private long readData(
-            ResultSubpartitionView[] views, Consumer<BufferWithChannel> bufferProcessor)
+            ResultSubpartitionView[] views, Consumer<BufferWithSubpartition> bufferProcessor)
             throws Exception {
         int dataSize = 0;
         int numEndOfPartitionEvents = 0;
@@ -221,13 +228,12 @@ public class SortMergeResultPartitionTest {
                 ResultSubpartition.BufferAndBacklog bufferAndBacklog = view.getNextBuffer();
                 while (bufferAndBacklog != null) {
                     Buffer buffer = bufferAndBacklog.buffer();
-                    bufferProcessor.accept(new BufferWithChannel(buffer, subpartition));
+                    bufferProcessor.accept(new BufferWithSubpartition(buffer, subpartition));
                     dataSize += buffer.readableBytes();
 
                     if (!buffer.isBuffer()) {
                         ++numEndOfPartitionEvents;
-                        assertThat(view.getAvailabilityAndBacklog(Integer.MAX_VALUE).isAvailable())
-                                .isFalse();
+                        assertThat(view.getAvailabilityAndBacklog(true).isAvailable()).isFalse();
                         view.releaseAllResources();
                     }
                     bufferAndBacklog = view.getNextBuffer();
@@ -241,7 +247,9 @@ public class SortMergeResultPartitionTest {
             SortMergeResultPartition partition, int numSubpartitions) throws Exception {
         ResultSubpartitionView[] views = new ResultSubpartitionView[numSubpartitions];
         for (int subpartition = 0; subpartition < numSubpartitions; ++subpartition) {
-            views[subpartition] = partition.createSubpartitionView(subpartition, listener);
+            views[subpartition] =
+                    partition.createSubpartitionView(
+                            new ResultSubpartitionIndexSet(subpartition), listener);
         }
         return views;
     }
@@ -260,23 +268,31 @@ public class SortMergeResultPartitionTest {
         partition.finish();
         partition.close();
 
-        ResultSubpartitionView view = partition.createSubpartitionView(0, listener);
+        ResultSubpartitionView view =
+                partition.createSubpartitionView(new ResultSubpartitionIndexSet(0), listener);
         ByteBuffer recordRead = ByteBuffer.allocate(bufferSize * numBuffers);
         readData(
                 new ResultSubpartitionView[] {view},
-                bufferWithChannel -> {
-                    Buffer buffer = bufferWithChannel.getBuffer();
+                bufferWithSubpartition -> {
+                    Buffer buffer = bufferWithSubpartition.getBuffer();
                     int numBytes = buffer.readableBytes();
 
                     MemorySegment segment = MemorySegmentFactory.allocateUnpooledSegment(numBytes);
-                    Buffer fullBuffer = ((CompositeBuffer) buffer).getFullBufferData(segment);
-                    if (fullBuffer.isBuffer()) {
-                        ByteBuffer byteBuffer =
-                                ByteBuffer.allocate(fullBuffer.readableBytes())
-                                        .put(fullBuffer.getNioBufferReadable());
-                        recordRead.put((ByteBuffer) byteBuffer.flip());
+
+                    FullyFilledBuffer fullyFilledBuffer = (FullyFilledBuffer) buffer;
+
+                    for (int i = 0; i < fullyFilledBuffer.getPartialBuffers().size(); i++) {
+                        Buffer fullBuffer =
+                                ((CompositeBuffer) fullyFilledBuffer.getPartialBuffers().get(i))
+                                        .getFullBufferData(segment);
+                        if (fullBuffer.isBuffer()) {
+                            ByteBuffer byteBuffer =
+                                    ByteBuffer.allocate(fullBuffer.readableBytes())
+                                            .put(fullBuffer.getNioBufferReadable());
+                            recordRead.put(byteBuffer.flip());
+                        }
+                        fullBuffer.recycleBuffer();
                     }
-                    fullBuffer.recycleBuffer();
                 });
         recordWritten.rewind();
         recordRead.flip();
@@ -314,8 +330,8 @@ public class SortMergeResultPartitionTest {
         long dataRead =
                 readData(
                         views,
-                        bufferWithChannel -> {
-                            bufferWithChannel.getBuffer().recycleBuffer();
+                        bufferWithSubpartition -> {
+                            bufferWithSubpartition.getBuffer().recycleBuffer();
                         });
         assertThat(dataRead).isEqualTo(dataSize);
     }
@@ -359,7 +375,8 @@ public class SortMergeResultPartitionTest {
         assertThat(partition.getResultFile().getNumRegions()).isEqualTo(3);
         assertThat(checkNotNull(fileChannelManager.getPaths()[0].list()).length).isEqualTo(2);
 
-        ResultSubpartitionView view = partition.createSubpartitionView(0, listener);
+        ResultSubpartitionView view =
+                partition.createSubpartitionView(new ResultSubpartitionIndexSet(0), listener);
         partition.release();
 
         while (!view.isReleased() && partition.getResultFile() != null) {
@@ -397,7 +414,10 @@ public class SortMergeResultPartitionTest {
     void testReadUnfinishedPartition() throws Exception {
         BufferPool bufferPool = globalPool.createBufferPool(10, 10);
         SortMergeResultPartition partition = createSortMergedPartition(10, bufferPool);
-        assertThatThrownBy(() -> partition.createSubpartitionView(0, listener))
+        assertThatThrownBy(
+                        () ->
+                                partition.createSubpartitionView(
+                                        new ResultSubpartitionIndexSet(0), listener))
                 .isInstanceOf(IllegalStateException.class);
         bufferPool.lazyDestroy();
     }
@@ -409,7 +429,10 @@ public class SortMergeResultPartitionTest {
         partition.finish();
         partition.release();
 
-        assertThatThrownBy(() -> partition.createSubpartitionView(0, listener))
+        assertThatThrownBy(
+                        () ->
+                                partition.createSubpartitionView(
+                                        new ResultSubpartitionIndexSet(0), listener))
                 .isInstanceOf(IllegalStateException.class);
         bufferPool.lazyDestroy();
     }
@@ -461,7 +484,9 @@ public class SortMergeResultPartitionTest {
         Runnable task1 =
                 () -> {
                     try {
-                        ResultSubpartitionView view = partition.createSubpartitionView(0, listener);
+                        ResultSubpartitionView view =
+                                partition.createSubpartitionView(
+                                        new ResultSubpartitionIndexSet(0), listener);
                         BufferPool bufferPool1 =
                                 networkBufferPool.createBufferPool(
                                         numNetworkBuffers / 2, numNetworkBuffers);
@@ -489,7 +514,9 @@ public class SortMergeResultPartitionTest {
 
                         SortMergeResultPartition partition2 =
                                 createSortMergedPartition(1, bufferPool2);
-                        ResultSubpartitionView view = partition.createSubpartitionView(0, listener);
+                        ResultSubpartitionView view =
+                                partition.createSubpartitionView(
+                                        new ResultSubpartitionIndexSet(0), listener);
                         readAndEmitAllData(view, partition2);
                     } catch (Exception ignored) {
                     }
@@ -508,10 +535,13 @@ public class SortMergeResultPartitionTest {
         do {
             buffer = view.getNextBuffer();
             if (buffer != null) {
-                Buffer data = ((CompositeBuffer) buffer.buffer()).getFullBufferData(segment);
-                partition.emitRecord(data.getNioBufferReadable(), 0);
-                if (!data.isRecycled()) {
-                    data.recycleBuffer();
+                for (Buffer partialBuffer :
+                        ((FullyFilledBuffer) buffer.buffer()).getPartialBuffers()) {
+                    Buffer data = ((CompositeBuffer) partialBuffer).getFullBufferData(segment);
+                    partition.emitRecord(data.getNioBufferReadable(), 0);
+                    if (!data.isRecycled()) {
+                        data.recycleBuffer();
+                    }
                 }
                 return buffer.buffer().isBuffer();
             }
@@ -591,7 +621,7 @@ public class SortMergeResultPartitionTest {
         private int numNotifications;
 
         @Override
-        public synchronized void notifyDataAvailable() {
+        public synchronized void notifyDataAvailable(ResultSubpartitionView view) {
             if (numNotifications == 0) {
                 notifyAll();
             }

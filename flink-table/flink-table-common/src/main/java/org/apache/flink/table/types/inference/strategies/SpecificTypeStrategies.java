@@ -22,10 +22,13 @@ import org.apache.flink.annotation.Internal;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.functions.BuiltInFunctionDefinitions;
 import org.apache.flink.table.types.CollectionDataType;
+import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.KeyValueDataType;
 import org.apache.flink.table.types.inference.TypeStrategies;
 import org.apache.flink.table.types.inference.TypeStrategy;
+import org.apache.flink.table.types.logical.LogicalTypeRoot;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -49,6 +52,9 @@ public final class SpecificTypeStrategies {
     /** See {@link MapTypeStrategy}. */
     public static final TypeStrategy MAP = new MapTypeStrategy();
 
+    /** See {@link CollectTypeStrategy}. */
+    public static final TypeStrategy COLLECT = new CollectTypeStrategy();
+
     /** See {@link IfNullTypeStrategy}. */
     public static final TypeStrategy IF_NULL = new IfNullTypeStrategy();
 
@@ -59,11 +65,12 @@ public final class SpecificTypeStrategies {
     public static final TypeStrategy ARRAY = new ArrayTypeStrategy();
 
     /** Type strategy specific for array element. */
-    public static final TypeStrategy ARRAY_ELEMENT =
-            callContext ->
-                    Optional.of(
-                            ((CollectionDataType) callContext.getArgumentDataTypes().get(0))
-                                    .getElementDataType());
+    public static final TypeStrategy ARRAY_ELEMENT = new ArrayElementTypeStrategy();
+
+    public static final TypeStrategy ITEM_AT = new ItemAtTypeStrategy();
+
+    /** See {@link ArrayAppendPrependTypeStrategy}. */
+    public static final TypeStrategy ARRAY_APPEND_PREPEND = new ArrayAppendPrependTypeStrategy();
 
     /** See {@link GetTypeStrategy}. */
     public static final TypeStrategy GET = new GetTypeStrategy();
@@ -89,11 +96,26 @@ public final class SpecificTypeStrategies {
     /** See {@link DecimalTimesTypeStrategy}. */
     public static final TypeStrategy DECIMAL_TIMES = new DecimalTimesTypeStrategy();
 
+    /** Type strategy specific for {@link BuiltInFunctionDefinitions#PERCENTILE}. */
+    public static final TypeStrategy PERCENTILE =
+            callContext ->
+                    Optional.of(
+                            callContext
+                                            .getArgumentDataTypes()
+                                            .get(1)
+                                            .getLogicalType()
+                                            .is(LogicalTypeRoot.ARRAY)
+                                    ? DataTypes.ARRAY(DataTypes.DOUBLE())
+                                    : DataTypes.DOUBLE());
+
     /** See {@link SourceWatermarkTypeStrategy}. */
     public static final TypeStrategy SOURCE_WATERMARK = new SourceWatermarkTypeStrategy();
 
     /** See {@link CurrentWatermarkTypeStrategy}. */
     public static final TypeStrategy CURRENT_WATERMARK = new CurrentWatermarkTypeStrategy();
+
+    /** See {@link RowtimeTypeStrategy}. */
+    public static final TypeStrategy ROWTIME = new RowtimeTypeStrategy();
 
     /** See {@link InternalReplicateRowsTypeStrategy}. */
     public static final TypeStrategy INTERNAL_REPLICATE_ROWS =
@@ -148,6 +170,41 @@ public final class SpecificTypeStrategies {
                                             .getElementDataType(),
                                     ((CollectionDataType) callContext.getArgumentDataTypes().get(1))
                                             .getElementDataType()));
+
+    /**
+     * Strategy for {@link org.apache.flink.table.functions.BuiltInFunctionDefinitions#LAG} and
+     * {@link org.apache.flink.table.functions.BuiltInFunctionDefinitions#LEAD}. Returns a nullable
+     * type of arg0, unless the default value is not null. In that case the result will be not null.
+     */
+    public static final TypeStrategy LEAD_LAG =
+            callContext -> {
+                final List<DataType> argumentDataTypes = callContext.getArgumentDataTypes();
+                final DataType arg0 = argumentDataTypes.get(0);
+                if (argumentDataTypes.size() == 3
+                        && !argumentDataTypes.get(2).getLogicalType().isNullable()) {
+                    return Optional.of(arg0.notNull());
+                } else {
+                    return Optional.of(arg0.nullable());
+                }
+            };
+
+    /** Type strategy specific for {@link BuiltInFunctionDefinitions#OBJECT_OF}. */
+    public static final TypeStrategy OBJECT_OF = new ObjectOfTypeStrategy();
+
+    /** Type strategy specific for {@link BuiltInFunctionDefinitions#OBJECT_UPDATE}. */
+    public static final TypeStrategy OBJECT_UPDATE = new ObjectUpdateTypeStrategy();
+
+    /** Type strategy specific for {@link BuiltInFunctionDefinitions#ML_PREDICT}. */
+    public static final TypeStrategy ML_PREDICT_OUTPUT_TYPE_STRATEGY =
+            MLPredictTypeStrategy.ML_PREDICT_OUTPUT_TYPE_STRATEGY;
+
+    /** Type strategy specific for {@link BuiltInFunctionDefinitions#TO_CHANGELOG}. */
+    public static final TypeStrategy TO_CHANGELOG_OUTPUT_TYPE_STRATEGY =
+            ToChangelogTypeStrategy.OUTPUT_TYPE_STRATEGY;
+
+    /** Type strategy specific for {@link BuiltInFunctionDefinitions#FROM_CHANGELOG}. */
+    public static final TypeStrategy FROM_CHANGELOG_OUTPUT_TYPE_STRATEGY =
+            FromChangelogTypeStrategy.OUTPUT_TYPE_STRATEGY;
 
     private SpecificTypeStrategies() {
         // no instantiation

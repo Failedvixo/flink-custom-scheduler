@@ -24,6 +24,7 @@ import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.BinaryType;
+import org.apache.flink.table.types.logical.BitmapType;
 import org.apache.flink.table.types.logical.BooleanType;
 import org.apache.flink.table.types.logical.CharType;
 import org.apache.flink.table.types.logical.DateType;
@@ -45,12 +46,16 @@ import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.table.types.logical.TinyIntType;
 import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.table.types.logical.VarCharType;
+import org.apache.flink.table.types.logical.VariantType;
 import org.apache.flink.table.types.logical.YearMonthIntervalType;
 import org.apache.flink.table.types.logical.YearMonthIntervalType.YearMonthResolution;
 import org.apache.flink.table.types.logical.ZonedTimestampType;
 import org.apache.flink.table.types.utils.DataTypeFactoryMock;
 import org.apache.flink.table.types.utils.LogicalTypeDataTypeConverter;
 import org.apache.flink.types.Row;
+import org.apache.flink.types.bitmap.Bitmap;
+import org.apache.flink.types.bitmap.RoaringBitmapData;
+import org.apache.flink.types.variant.Variant;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -68,6 +73,7 @@ import java.util.stream.Stream;
 import static org.apache.flink.table.api.DataTypes.ARRAY;
 import static org.apache.flink.table.api.DataTypes.BIGINT;
 import static org.apache.flink.table.api.DataTypes.BINARY;
+import static org.apache.flink.table.api.DataTypes.BITMAP;
 import static org.apache.flink.table.api.DataTypes.BOOLEAN;
 import static org.apache.flink.table.api.DataTypes.BYTES;
 import static org.apache.flink.table.api.DataTypes.CHAR;
@@ -96,6 +102,7 @@ import static org.apache.flink.table.api.DataTypes.TIMESTAMP_WITH_TIME_ZONE;
 import static org.apache.flink.table.api.DataTypes.TINYINT;
 import static org.apache.flink.table.api.DataTypes.VARBINARY;
 import static org.apache.flink.table.api.DataTypes.VARCHAR;
+import static org.apache.flink.table.api.DataTypes.VARIANT;
 import static org.apache.flink.table.test.TableAssertions.assertThat;
 import static org.apache.flink.table.types.logical.DayTimeIntervalType.DEFAULT_DAY_PRECISION;
 import static org.apache.flink.table.types.logical.DayTimeIntervalType.DayTimeResolution.MINUTE_TO_SECOND;
@@ -218,6 +225,12 @@ class DataTypesTest {
                 TestSpec.forDataType(RAW(Void.class, VoidSerializer.INSTANCE))
                         .expectLogicalType(new RawType<>(Void.class, VoidSerializer.INSTANCE))
                         .expectConversionClass(Void.class),
+                TestSpec.forDataType(VARIANT())
+                        .expectLogicalType(new VariantType())
+                        .expectConversionClass(Variant.class),
+                TestSpec.forDataType(BITMAP())
+                        .expectLogicalType(new BitmapType())
+                        .expectConversionClass(Bitmap.class),
                 TestSpec.forUnresolvedDataType(RAW(Types.VOID))
                         .expectUnresolvedString("[RAW('java.lang.Void', '?')]")
                         .lookupReturns(dummyRaw(Void.class))
@@ -287,7 +300,17 @@ class DataTypesTest {
                 TestSpec.forUnresolvedDataType(DataTypes.of(Types.ENUM(DayOfWeek.class)))
                         .expectUnresolvedString("['EnumTypeInfo<java.time.DayOfWeek>']")
                         .lookupReturns(dummyRaw(DayOfWeek.class))
-                        .expectResolvedDataType(dummyRaw(DayOfWeek.class)));
+                        .expectResolvedDataType(dummyRaw(DayOfWeek.class)),
+                TestSpec.forUnresolvedDataType(DataTypes.of(Variant.class))
+                        .expectUnresolvedString("['org.apache.flink.types.variant.Variant']")
+                        .expectResolvedDataType(VARIANT()),
+                TestSpec.forUnresolvedDataType(DataTypes.of(Bitmap.class))
+                        .expectUnresolvedString("['org.apache.flink.types.bitmap.Bitmap']")
+                        .expectResolvedDataType(BITMAP()),
+                TestSpec.forUnresolvedDataType(DataTypes.of(RoaringBitmapData.class))
+                        .expectUnresolvedString(
+                                "['org.apache.flink.types.bitmap.RoaringBitmapData']")
+                        .expectResolvedDataType(BITMAP().bridgedTo(RoaringBitmapData.class)));
     }
 
     @ParameterizedTest(name = "{index}: {0}")

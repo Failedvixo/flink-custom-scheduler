@@ -19,9 +19,9 @@
 package org.apache.flink.api.java.typeutils.runtime.kryo;
 
 import org.apache.flink.FlinkVersion;
-import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.serialization.SerializerConfigImpl;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.api.common.typeutils.TypeSerializerMatchers;
+import org.apache.flink.api.common.typeutils.TypeSerializerConditions;
 import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
 import org.apache.flink.api.common.typeutils.TypeSerializerUpgradeTestBase;
 import org.apache.flink.api.java.typeutils.runtime.kryo.KryoPojosForMigrationTests.Animal;
@@ -30,46 +30,51 @@ import org.apache.flink.api.java.typeutils.runtime.kryo.KryoPojosForMigrationTes
 import org.apache.flink.api.java.typeutils.runtime.kryo.KryoPojosForMigrationTests.Parrot;
 
 import com.esotericsoftware.kryo.serializers.DefaultSerializers;
-import org.hamcrest.Matcher;
+import org.assertj.core.api.Condition;
 
 import java.util.ArrayList;
 import java.util.Collection;
 
-import static org.apache.flink.api.common.typeutils.TypeSerializerMatchers.hasSameCompatibilityAs;
+import static org.apache.flink.api.common.typeutils.TypeSerializerConditions.hasSameCompatibilityAs;
 import static org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility.compatibleWithReconfiguredSerializer;
-import static org.hamcrest.Matchers.is;
 
+// Flink 2.0 has done a major Kryo 2.x -> 5.x upgrade and the new Flink is not compatible with older
+// Kryo state.
 /** Tests migrations for {@link KryoSerializerSnapshot}. */
 @SuppressWarnings("WeakerAccess")
 class KryoSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<Object, Object> {
-
     public Collection<TestSpecification<?, ?>> createTestSpecifications(FlinkVersion flinkVersion)
             throws Exception {
         ArrayList<TestSpecification<?, ?>> testSpecifications = new ArrayList<>();
-        testSpecifications.add(
-                new TestSpecification<>(
-                        "kryo-type-serializer-empty-config",
-                        flinkVersion,
-                        KryoTypeSerializerEmptyConfigSetup.class,
-                        KryoTypeSerializerEmptyConfigVerifier.class));
-        testSpecifications.add(
-                new TestSpecification<>(
-                        "kryo-type-serializer-unrelated-config-after-restore",
-                        flinkVersion,
-                        KryoTypeSerializerEmptyConfigSetup.class,
-                        KryoTypeSerializerWithUnrelatedConfigVerifier.class));
-        testSpecifications.add(
-                new TestSpecification<>(
-                        "kryo-type-serializer-changed-registration-order",
-                        flinkVersion,
-                        KryoTypeSerializerChangedRegistrationOrderSetup.class,
-                        KryoTypeSerializerChangedRegistrationOrderVerifier.class));
-        testSpecifications.add(
-                new TestSpecification<>(
-                        "kryo-custom-type-serializer-changed-registration-order",
-                        flinkVersion,
-                        KryoCustomTypeSerializerChangedRegistrationOrderSetup.class,
-                        KryoCustomTypeSerializerChangedRegistrationOrderVerifier.class));
+
+        // 2025-01-02: We do not support compatibility with Kryo data from 1.x
+        if (flinkVersion.isNewerVersionThan(FlinkVersion.v2_0)
+                || flinkVersion == FlinkVersion.v2_0) {
+            testSpecifications.add(
+                    new TestSpecification<>(
+                            "kryo-type-serializer-empty-config",
+                            flinkVersion,
+                            KryoTypeSerializerEmptyConfigSetup.class,
+                            KryoTypeSerializerEmptyConfigVerifier.class));
+            testSpecifications.add(
+                    new TestSpecification<>(
+                            "kryo-type-serializer-unrelated-config-after-restore",
+                            flinkVersion,
+                            KryoTypeSerializerEmptyConfigSetup.class,
+                            KryoTypeSerializerWithUnrelatedConfigVerifier.class));
+            testSpecifications.add(
+                    new TestSpecification<>(
+                            "kryo-type-serializer-changed-registration-order",
+                            flinkVersion,
+                            KryoTypeSerializerChangedRegistrationOrderSetup.class,
+                            KryoTypeSerializerChangedRegistrationOrderVerifier.class));
+            testSpecifications.add(
+                    new TestSpecification<>(
+                            "kryo-custom-type-serializer-changed-registration-order",
+                            flinkVersion,
+                            KryoCustomTypeSerializerChangedRegistrationOrderSetup.class,
+                            KryoCustomTypeSerializerChangedRegistrationOrderVerifier.class));
+        }
 
         return testSpecifications;
     }
@@ -83,7 +88,7 @@ class KryoSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<Object, Ob
 
         @Override
         public TypeSerializer<Animal> createPriorSerializer() {
-            return new KryoSerializer<>(Animal.class, new ExecutionConfig());
+            return new KryoSerializer<>(Animal.class, new SerializerConfigImpl());
         }
 
         @Override
@@ -97,18 +102,20 @@ class KryoSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<Object, Ob
 
         @Override
         public TypeSerializer<Animal> createUpgradedSerializer() {
-            return new KryoSerializer<>(Animal.class, new ExecutionConfig());
+            return new KryoSerializer<>(Animal.class, new SerializerConfigImpl());
         }
 
         @Override
-        public Matcher<Animal> testDataMatcher() {
-            return is(new Dog("Hasso"));
+        public Condition<Animal> testDataCondition() {
+            return new Condition<>(
+                    value -> new Dog("Hasso").equals(value),
+                    "value should be a Dog with name 'Hasso'");
         }
 
         @Override
-        public Matcher<TypeSerializerSchemaCompatibility<Animal>> schemaCompatibilityMatcher(
+        public Condition<TypeSerializerSchemaCompatibility<Animal>> schemaCompatibilityCondition(
                 FlinkVersion version) {
-            return TypeSerializerMatchers.isCompatibleAsIs();
+            return TypeSerializerConditions.isCompatibleAsIs();
         }
     }
 
@@ -121,25 +128,27 @@ class KryoSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<Object, Ob
 
         @Override
         public TypeSerializer<Animal> createUpgradedSerializer() {
-            ExecutionConfig executionConfig = new ExecutionConfig();
-            executionConfig.registerKryoType(DummyClassOne.class);
-            executionConfig.registerTypeWithKryoSerializer(
+            SerializerConfigImpl serializerConfigImpl = new SerializerConfigImpl();
+            serializerConfigImpl.registerKryoType(DummyClassOne.class);
+            serializerConfigImpl.registerTypeWithKryoSerializer(
                     DummyClassTwo.class, DefaultSerializers.StringSerializer.class);
 
-            return new KryoSerializer<>(Animal.class, executionConfig);
+            return new KryoSerializer<>(Animal.class, serializerConfigImpl);
         }
 
         @Override
-        public Matcher<Animal> testDataMatcher() {
-            return is(new Dog("Hasso"));
+        public Condition<Animal> testDataCondition() {
+            return new Condition<>(
+                    value -> new Dog("Hasso").equals(value),
+                    "value should be a Dog with name 'Hasso'");
         }
 
         @Override
-        public Matcher<TypeSerializerSchemaCompatibility<Animal>> schemaCompatibilityMatcher(
+        public Condition<TypeSerializerSchemaCompatibility<Animal>> schemaCompatibilityCondition(
                 FlinkVersion version) {
             return hasSameCompatibilityAs(
                     compatibleWithReconfiguredSerializer(
-                            new KryoSerializer<>(Animal.class, new ExecutionConfig())));
+                            new KryoSerializer<>(Animal.class, new SerializerConfigImpl())));
         }
     }
 
@@ -152,12 +161,12 @@ class KryoSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<Object, Ob
 
         @Override
         public TypeSerializer<Animal> createPriorSerializer() {
-            ExecutionConfig executionConfig = new ExecutionConfig();
-            executionConfig.registerKryoType(Dog.class);
-            executionConfig.registerKryoType(Cat.class);
-            executionConfig.registerKryoType(Parrot.class);
+            SerializerConfigImpl serializerConfigImpl = new SerializerConfigImpl();
+            serializerConfigImpl.registerKryoType(Dog.class);
+            serializerConfigImpl.registerKryoType(Cat.class);
+            serializerConfigImpl.registerKryoType(Parrot.class);
 
-            return new KryoSerializer<>(Animal.class, executionConfig);
+            return new KryoSerializer<>(Animal.class, serializerConfigImpl);
         }
 
         @Override
@@ -171,27 +180,29 @@ class KryoSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<Object, Ob
 
         @Override
         public TypeSerializer<Animal> createUpgradedSerializer() {
-            ExecutionConfig executionConfig = new ExecutionConfig();
-            executionConfig.registerKryoType(DummyClassOne.class);
-            executionConfig.registerKryoType(Dog.class);
-            executionConfig.registerKryoType(DummyClassTwo.class);
-            executionConfig.registerKryoType(Cat.class);
-            executionConfig.registerKryoType(Parrot.class);
+            SerializerConfigImpl serializerConfigImpl = new SerializerConfigImpl();
+            serializerConfigImpl.registerKryoType(DummyClassOne.class);
+            serializerConfigImpl.registerKryoType(Dog.class);
+            serializerConfigImpl.registerKryoType(DummyClassTwo.class);
+            serializerConfigImpl.registerKryoType(Cat.class);
+            serializerConfigImpl.registerKryoType(Parrot.class);
 
-            return new KryoSerializer<>(Animal.class, executionConfig);
+            return new KryoSerializer<>(Animal.class, serializerConfigImpl);
         }
 
         @Override
-        public Matcher<Animal> testDataMatcher() {
-            return is(new Dog("Hasso"));
+        public Condition<Animal> testDataCondition() {
+            return new Condition<>(
+                    value -> new Dog("Hasso").equals(value),
+                    "value should be a Dog with name 'Hasso'");
         }
 
         @Override
-        public Matcher<TypeSerializerSchemaCompatibility<Animal>> schemaCompatibilityMatcher(
+        public Condition<TypeSerializerSchemaCompatibility<Animal>> schemaCompatibilityCondition(
                 FlinkVersion version) {
             return hasSameCompatibilityAs(
                     compatibleWithReconfiguredSerializer(
-                            new KryoSerializer<>(Animal.class, new ExecutionConfig())));
+                            new KryoSerializer<>(Animal.class, new SerializerConfigImpl())));
         }
     }
 
@@ -204,14 +215,14 @@ class KryoSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<Object, Ob
 
         @Override
         public TypeSerializer<Animal> createPriorSerializer() {
-            ExecutionConfig executionConfig = new ExecutionConfig();
-            executionConfig.registerTypeWithKryoSerializer(
+            SerializerConfigImpl serializerConfigImpl = new SerializerConfigImpl();
+            serializerConfigImpl.registerTypeWithKryoSerializer(
                     Dog.class, KryoPojosForMigrationTests.DogKryoSerializer.class);
-            executionConfig.registerKryoType(Cat.class);
-            executionConfig.registerTypeWithKryoSerializer(
+            serializerConfigImpl.registerKryoType(Cat.class);
+            serializerConfigImpl.registerTypeWithKryoSerializer(
                     Parrot.class, KryoPojosForMigrationTests.ParrotKryoSerializer.class);
 
-            return new KryoSerializer<>(Animal.class, executionConfig);
+            return new KryoSerializer<>(Animal.class, serializerConfigImpl);
         }
 
         @Override
@@ -225,29 +236,31 @@ class KryoSerializerUpgradeTest extends TypeSerializerUpgradeTestBase<Object, Ob
 
         @Override
         public TypeSerializer<Animal> createUpgradedSerializer() {
-            ExecutionConfig executionConfig = new ExecutionConfig();
-            executionConfig.registerKryoType(DummyClassOne.class);
-            executionConfig.registerTypeWithKryoSerializer(
+            SerializerConfigImpl serializerConfigImpl = new SerializerConfigImpl();
+            serializerConfigImpl.registerKryoType(DummyClassOne.class);
+            serializerConfigImpl.registerTypeWithKryoSerializer(
                     Dog.class, KryoPojosForMigrationTests.DogV2KryoSerializer.class);
-            executionConfig.registerKryoType(DummyClassTwo.class);
-            executionConfig.registerKryoType(Cat.class);
-            executionConfig.registerTypeWithKryoSerializer(
+            serializerConfigImpl.registerKryoType(DummyClassTwo.class);
+            serializerConfigImpl.registerKryoType(Cat.class);
+            serializerConfigImpl.registerTypeWithKryoSerializer(
                     Parrot.class, KryoPojosForMigrationTests.ParrotKryoSerializer.class);
 
-            return new KryoSerializer<>(Animal.class, executionConfig);
+            return new KryoSerializer<>(Animal.class, serializerConfigImpl);
         }
 
         @Override
-        public Matcher<Animal> testDataMatcher() {
-            return is(new Dog("Hasso"));
+        public Condition<Animal> testDataCondition() {
+            return new Condition<>(
+                    value -> new Dog("Hasso").equals(value),
+                    "value should be a Dog with name 'Hasso'");
         }
 
         @Override
-        public Matcher<TypeSerializerSchemaCompatibility<Animal>> schemaCompatibilityMatcher(
+        public Condition<TypeSerializerSchemaCompatibility<Animal>> schemaCompatibilityCondition(
                 FlinkVersion version) {
             return hasSameCompatibilityAs(
                     compatibleWithReconfiguredSerializer(
-                            new KryoSerializer<>(Animal.class, new ExecutionConfig())));
+                            new KryoSerializer<>(Animal.class, new SerializerConfigImpl())));
         }
     }
 

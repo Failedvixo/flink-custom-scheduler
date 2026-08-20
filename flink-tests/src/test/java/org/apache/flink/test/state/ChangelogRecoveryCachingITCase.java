@@ -22,8 +22,10 @@ import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.changelog.fs.FsStateChangelogStorageFactory;
+import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.MemorySize;
+import org.apache.flink.core.execution.CheckpointingMode;
 import org.apache.flink.core.fs.FSDataInputStream;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.FileSystemFactory;
@@ -33,18 +35,17 @@ import org.apache.flink.core.plugin.TestingPluginManager;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.testutils.CommonTestUtils;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
-import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
+import org.apache.flink.streaming.api.functions.sink.v2.DiscardingSink;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
-import org.apache.flink.util.TestLogger;
+import org.apache.flink.testutils.junit.utils.TempDirUtils;
+import org.apache.flink.util.TestLoggerExtension;
 
-import org.junit.After;
-import org.junit.Assert;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
@@ -62,46 +63,45 @@ import static org.apache.flink.changelog.fs.FsStateChangelogOptions.CACHE_IDLE_T
 import static org.apache.flink.changelog.fs.FsStateChangelogOptions.PREEMPTIVE_PERSIST_THRESHOLD;
 import static org.apache.flink.configuration.CheckpointingOptions.CHECKPOINTS_DIRECTORY;
 import static org.apache.flink.configuration.CheckpointingOptions.CHECKPOINT_STORAGE;
-import static org.apache.flink.configuration.CheckpointingOptions.LOCAL_RECOVERY;
+import static org.apache.flink.configuration.CheckpointingOptions.FILE_MERGING_ENABLED;
+import static org.apache.flink.configuration.CheckpointingOptions.UNALIGNED_RECOVER_OUTPUT_ON_DOWNSTREAM;
 import static org.apache.flink.configuration.CoreOptions.DEFAULT_PARALLELISM;
+import static org.apache.flink.configuration.ExternalizedCheckpointRetention.RETAIN_ON_CANCELLATION;
 import static org.apache.flink.configuration.RestartStrategyOptions.RESTART_STRATEGY;
 import static org.apache.flink.configuration.StateBackendOptions.STATE_BACKEND;
 import static org.apache.flink.configuration.StateChangelogOptions.ENABLE_STATE_CHANGE_LOG;
-import static org.apache.flink.configuration.StateChangelogOptions.PERIODIC_MATERIALIZATION_INTERVAL;
+import static org.apache.flink.configuration.StateChangelogOptions.PERIODIC_MATERIALIZATION_ENABLED;
+import static org.apache.flink.configuration.StateRecoveryOptions.LOCAL_RECOVERY;
 import static org.apache.flink.configuration.TaskManagerOptions.BUFFER_DEBLOAT_ENABLED;
 import static org.apache.flink.runtime.jobgraph.SavepointRestoreSettings.forPath;
 import static org.apache.flink.runtime.testutils.CommonTestUtils.waitForAllTaskRunning;
 import static org.apache.flink.runtime.testutils.CommonTestUtils.waitForCheckpoint;
-import static org.apache.flink.streaming.api.environment.CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION;
-import static org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions.ALIGNED_CHECKPOINT_TIMEOUT;
-import static org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions.CHECKPOINTING_INTERVAL;
-import static org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions.CHECKPOINTING_MODE;
-import static org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions.ENABLE_UNALIGNED;
-import static org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions.EXTERNALIZED_CHECKPOINT;
-import static org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions.UNALIGNED_MAX_SUBTASKS_PER_CHANNEL_STATE_FILE;
 import static org.apache.flink.util.Preconditions.checkState;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests caching of changelog segments downloaded during recovery. */
-public class ChangelogRecoveryCachingITCase extends TestLogger {
+@ExtendWith(TestLoggerExtension.class)
+class ChangelogRecoveryCachingITCase {
     private static final int ACCUMULATE_TIME_MILLIS = 500; // high enough to build some state
     private static final int PARALLELISM = 10; // high enough to trigger DSTL file multiplexing
 
-    @Rule public TemporaryFolder temporaryFolder = new TemporaryFolder();
+    @TempDir private java.nio.file.Path temporaryFolder;
 
     private OpenOnceFileSystem fileSystem;
 
     private MiniClusterWithClientResource cluster;
 
-    @Before
-    public void before() throws Exception {
-        File tmpFolder = temporaryFolder.newFolder();
+    @BeforeEach
+    void init() throws Exception {
+        File tmpFolder = TempDirUtils.newFolder(temporaryFolder);
         registerFileSystem(fileSystem = new OpenOnceFileSystem(), tmpFolder.toURI().getScheme());
 
         Configuration configuration = new Configuration();
         configuration.set(CACHE_IDLE_TIMEOUT, Duration.ofDays(365)); // cache forever
 
         FsStateChangelogStorageFactory.configure(
-                configuration, tmpFolder, Duration.ofMinutes(1), 10);
+                configuration, temporaryFolder.toFile(), Duration.ofMinutes(1), 10);
+
         cluster =
                 new MiniClusterWithClientResource(
                         new MiniClusterResourceConfiguration.Builder()
@@ -112,8 +112,8 @@ public class ChangelogRecoveryCachingITCase extends TestLogger {
         cluster.before();
     }
 
-    @After
-    public void after() throws Exception {
+    @AfterEach
+    void after() {
         if (cluster != null) {
             cluster.after();
             cluster = null;
@@ -122,15 +122,15 @@ public class ChangelogRecoveryCachingITCase extends TestLogger {
     }
 
     @Test
-    public void test() throws Exception {
-        JobID jobID1 = submit(configureJob(temporaryFolder.newFolder()), graph -> {});
+    void test() throws Exception {
+        JobID jobID1 = submit(configureJob(TempDirUtils.newFolder(temporaryFolder)), graph -> {});
 
         Thread.sleep(ACCUMULATE_TIME_MILLIS);
         String cpLocation = checkpointAndCancel(jobID1);
 
         JobID jobID2 =
                 submit(
-                        configureJob(temporaryFolder.newFolder()),
+                        configureJob(TempDirUtils.newFolder(temporaryFolder)),
                         graph -> graph.setSavepointRestoreSettings(forPath(cpLocation)));
         waitForAllTaskRunning(cluster.getMiniCluster(), jobID2, true);
         cluster.getClusterClient().cancel(jobID2).get();
@@ -159,7 +159,7 @@ public class ChangelogRecoveryCachingITCase extends TestLogger {
                                 return value;
                             }
                         })
-                .addSink(new DiscardingSink<>());
+                .sinkTo(new DiscardingSink<>());
 
         return env.getStreamGraph().getJobGraph();
     }
@@ -167,26 +167,35 @@ public class ChangelogRecoveryCachingITCase extends TestLogger {
     private Configuration configureJob(File cpDir) {
         Configuration conf = new Configuration();
 
-        conf.set(EXTERNALIZED_CHECKPOINT, RETAIN_ON_CANCELLATION);
+        conf.set(CheckpointingOptions.EXTERNALIZED_CHECKPOINT_RETENTION, RETAIN_ON_CANCELLATION);
         conf.set(DEFAULT_PARALLELISM, PARALLELISM);
         conf.set(ENABLE_STATE_CHANGE_LOG, true);
-        conf.set(CHECKPOINTING_MODE, CheckpointingMode.EXACTLY_ONCE);
-        conf.set(CHECKPOINTING_INTERVAL, Duration.ofMillis(10));
+        conf.set(
+                CheckpointingOptions.CHECKPOINTING_CONSISTENCY_MODE,
+                CheckpointingMode.EXACTLY_ONCE);
+        conf.set(CheckpointingOptions.CHECKPOINTING_INTERVAL, Duration.ofMillis(10));
         conf.set(CHECKPOINT_STORAGE, "filesystem");
         conf.set(CHECKPOINTS_DIRECTORY, cpDir.toURI().toString());
         conf.set(STATE_BACKEND, "hashmap");
         conf.set(LOCAL_RECOVERY, false); // force download
         // tune changelog
         conf.set(PREEMPTIVE_PERSIST_THRESHOLD, MemorySize.ofMebiBytes(10));
-        conf.set(PERIODIC_MATERIALIZATION_INTERVAL, Duration.ofDays(-1));
+        conf.set(PERIODIC_MATERIALIZATION_ENABLED, false);
 
-        conf.set(ENABLE_UNALIGNED, true); // speedup
-        conf.set(ALIGNED_CHECKPOINT_TIMEOUT, Duration.ZERO); // prevent randomization
+        conf.set(CheckpointingOptions.ENABLE_UNALIGNED, true); // speedup
+        // Disable UNALIGNED_ALLOW_ON_RECOVERY to prevent randomization since the output buffer
+        // states file may be opened from multiple downstream subtasks
+        conf.set(UNALIGNED_RECOVER_OUTPUT_ON_DOWNSTREAM, false);
         conf.set(
-                UNALIGNED_MAX_SUBTASKS_PER_CHANNEL_STATE_FILE,
+                CheckpointingOptions.ALIGNED_CHECKPOINT_TIMEOUT,
+                Duration.ZERO); // prevent randomization
+        conf.set(
+                CheckpointingOptions.UNALIGNED_MAX_SUBTASKS_PER_CHANNEL_STATE_FILE,
                 1); // prevent file is opened multiple times
         conf.set(BUFFER_DEBLOAT_ENABLED, false); // prevent randomization
         conf.set(RESTART_STRATEGY, "none"); // not expecting any failures
+        conf.set(
+                FILE_MERGING_ENABLED, false); // TODO: remove file merging setting after FLINK-32085
 
         return conf;
     }
@@ -197,9 +206,7 @@ public class ChangelogRecoveryCachingITCase extends TestLogger {
         checkStatus(jobID);
         return CommonTestUtils.getLatestCompletedCheckpointPath(jobID, cluster.getMiniCluster())
                 .<NoSuchElementException>orElseThrow(
-                        () -> {
-                            throw new NoSuchElementException("No checkpoint was created yet");
-                        });
+                        () -> new NoSuchElementException("No checkpoint was created yet"));
     }
 
     private void checkStatus(JobID jobID) throws InterruptedException, ExecutionException {
@@ -220,7 +227,7 @@ public class ChangelogRecoveryCachingITCase extends TestLogger {
 
         @Override
         public FSDataInputStream open(Path f) throws IOException {
-            Assert.assertTrue(f + " was already opened", openedPaths.add(f));
+            assertThat(openedPaths.add(f)).as(f + " was already opened").isTrue();
             return super.open(f);
         }
 

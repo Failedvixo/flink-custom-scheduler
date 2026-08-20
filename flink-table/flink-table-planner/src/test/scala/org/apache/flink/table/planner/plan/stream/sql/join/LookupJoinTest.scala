@@ -17,45 +17,36 @@
  */
 package org.apache.flink.table.planner.plan.stream.sql.join
 
-import org.apache.flink.api.scala._
-import org.apache.flink.core.testutils.FlinkMatchers.containsMessage
+import org.apache.flink.legacy.table.sources.StreamTableSource
 import org.apache.flink.streaming.api.datastream.DataStream
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
 import org.apache.flink.table.api._
 import org.apache.flink.table.api.config.{ExecutionConfigOptions, OptimizerConfigOptions}
-import org.apache.flink.table.api.internal.TableEnvironmentInternal
 import org.apache.flink.table.data.RowData
 import org.apache.flink.table.descriptors.ConnectorDescriptorValidator.CONNECTOR_TYPE
 import org.apache.flink.table.descriptors.DescriptorProperties
-import org.apache.flink.table.factories.TableSourceFactory
 import org.apache.flink.table.functions.{AsyncTableFunction, TableFunction, UserDefinedFunction}
+import org.apache.flink.table.legacy.api.TableSchema
+import org.apache.flink.table.legacy.factories.TableSourceFactory
+import org.apache.flink.table.legacy.sources.{LookupableTableSource, TableSource}
 import org.apache.flink.table.planner.plan.utils._
 import org.apache.flink.table.planner.utils.{TableTestBase, TestingTableEnvironment}
 import org.apache.flink.table.planner.utils.TableTestUtil.{readFromResource, replaceNodeIdInOperator, replaceStageId, replaceStreamNodeId}
-import org.apache.flink.table.sources._
 import org.apache.flink.table.types.DataType
 import org.apache.flink.table.utils.EncodingUtils
 
-import _root_.java.lang.{Boolean => JBoolean}
 import _root_.java.sql.Timestamp
 import _root_.java.util
-import _root_.java.util.{ArrayList => JArrayList, Collection => JCollection, HashMap => JHashMap, List => JList, Map => JMap}
-import _root_.scala.collection.JavaConversions._
-import org.junit.{Assume, Before, Test}
-import org.junit.Assert.{assertEquals, assertThat, assertTrue, fail}
-import org.junit.runner.RunWith
-import org.junit.runners.Parameterized
+import _root_.java.util.{ArrayList => JArrayList, HashMap => JHashMap, List => JList, Map => JMap}
+import org.assertj.core.api.Assertions.{assertThat, assertThatExceptionOfType, assertThatThrownBy}
+import org.junit.jupiter.api.{BeforeEach, Test}
 
-/**
- * The physical plans for legacy [[org.apache.flink.table.sources.LookupableTableSource]] and new
- * [[org.apache.flink.table.connector.source.LookupTableSource]] should be identical.
- */
-@RunWith(classOf[Parameterized])
-class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Serializable {
+/** Tests for lookup join. */
+class LookupJoinTest extends TableTestBase with Serializable {
 
   private val util = streamTestUtil()
 
-  @Before
+  @BeforeEach
   def before(): Unit = {
     util.addDataStream[(Int, String, Long)](
       "MyTable",
@@ -67,42 +58,105 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
     util.addDataStream[(Int, String, Long, Double)]("T1", 'a, 'b, 'c, 'd)
     util.addDataStream[(Int, String, Int)]("nonTemporal", 'id, 'name, 'age)
 
-    if (legacyTableSource) {
-      TestTemporalTable.createTemporaryTable(util.tableEnv, "LookupTable")
-      TestTemporalTable.createTemporaryTable(util.tableEnv, "AsyncLookupTable", async = true)
-    } else {
-      util.addTable("""
-                      |CREATE TABLE LookupTable (
-                      |  `id` INT,
-                      |  `name` STRING,
-                      |  `age` INT
-                      |) WITH (
-                      |  'connector' = 'values'
-                      |)
-                      |""".stripMargin)
-      util.addTable("""
-                      |CREATE TABLE AsyncLookupTable (
-                      |  `id` INT,
-                      |  `name` STRING,
-                      |  `age` INT
-                      |) WITH (
-                      |  'connector' = 'values',
-                      |  'async' = 'true'
-                      |)
-                      |""".stripMargin)
+    util.addTable("""
+                    |CREATE TABLE UpsertTable (
+                    |  `id` INT,
+                    |  `name` STRING,
+                    |  `age` INT
+                    |) WITH (
+                    |  'connector' = 'values',
+                    |  'changelog-mode' = 'I,UA,UB,D'
+                    |)
+                    |""".stripMargin)
 
-      util.addTable("""
-                      |CREATE TABLE LookupTableWithComputedColumn (
-                      |  `id` INT,
-                      |  `name` STRING,
-                      |  `age` INT,
-                      |  `nominal_age` as age + 1
-                      |) WITH (
-                      |  'connector' = 'values',
-                      |  'bounded' = 'true'
-                      |)
-                      |""".stripMargin)
-    }
+    util.addTable("""
+                    |CREATE TABLE AppendOnlyTable (
+                    |  `id` INT,
+                    |  `name` STRING,
+                    |  `age` INT
+                    |) WITH (
+                    |  'connector' = 'values',
+                    |  'bounded' = 'true'
+                    |)
+                    |""".stripMargin)
+
+    util.addTable("""
+                    |CREATE TABLE LookupTable (
+                    |  `id` INT,
+                    |  `name` STRING,
+                    |  `age` INT
+                    |) WITH (
+                    |  'connector' = 'values'
+                    |)
+                    |""".stripMargin)
+    util.addTable("""
+                    |CREATE TABLE AsyncLookupTable (
+                    |  `id` INT,
+                    |  `name` STRING,
+                    |  `age` INT
+                    |) WITH (
+                    |  'connector' = 'values',
+                    |  'async' = 'true'
+                    |)
+                    |""".stripMargin)
+
+    util.addTable("""
+                    |CREATE TABLE LookupTableWithComputedColumn (
+                    |  `id` INT,
+                    |  `name` STRING,
+                    |  `age` INT,
+                    |  `nominal_age` as age + 1
+                    |) WITH (
+                    |  'connector' = 'values',
+                    |  'bounded' = 'true'
+                    |)
+                    |""".stripMargin)
+    util.addTable("""
+                    |CREATE TABLE LookupTableWithCustomShuffle1 (
+                    |  `id` INT,
+                    |  `name` STRING,
+                    |  `age` INT,
+                    |  PRIMARY KEY(id) NOT ENFORCED
+                    |) WITH (
+                    |  'connector' = 'values',
+                    |  'enable-custom-shuffle' = 'true'
+                    |)
+                    |""".stripMargin)
+
+    util.addTable("""
+                    |CREATE TABLE LookupTableWithCustomShuffle2 (
+                    |  `id` INT,
+                    |  `name` STRING,
+                    |  `age` INT,
+                    |  PRIMARY KEY(id) NOT ENFORCED
+                    |) WITH (
+                    |  'connector' = 'values',
+                    |  'enable-custom-shuffle' = 'true',
+                    |  'custom-shuffle-deterministic' = 'false'
+                    |)
+                    |""".stripMargin)
+    util.addTable("""
+                    |CREATE TABLE LookupTableWithCustomShuffle3 (
+                    |  `id` INT,
+                    |  `name` STRING,
+                    |  `age` INT,
+                    |  PRIMARY KEY(id) NOT ENFORCED
+                    |) WITH (
+                    |  'connector' = 'values',
+                    |  'enable-custom-shuffle' = 'true',
+                    |  'custom-shuffle-empty-partitioner' = 'true'
+                    |)
+                    |""".stripMargin)
+    util.addTable("""
+                    |CREATE TABLE UpsertSource (
+                    |  `a` int,
+                    |  `b` varchar,
+                    |  `c` bigint,
+                    |  `proctime` AS PROCTIME()
+                    |) with (
+                    |  'connector' = 'values',
+                    |  'changelog-mode' = 'I,UA,UB,D'
+                    |)""".stripMargin)
     util.addTable("""
                     |CREATE TABLE Sink1 (
                     |  a int,
@@ -167,9 +221,6 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
 
   @Test
   def testInvalidLookupTableFunction(): Unit = {
-    if (legacyTableSource) {
-      return
-    }
     util.addDataStream[(Int, String, Long, Timestamp)]("T", 'a, 'b, 'c, 'ts, 'proctime.proctime)
     createLookupTable("LookupTable1", new InvalidTableFunctionResultType)
 
@@ -220,12 +271,9 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
     expectExceptionThrown(
       "SELECT * FROM T JOIN LookupTable7 " +
         "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.a = D.id AND T.b = D.name AND T.ts = D.ts",
-      "Could not find an implementation method 'eval' in class " +
+      "Method 'eval' of function class " +
         "'org.apache.flink.table.planner.plan.utils.InvalidAsyncTableFunctionEvalSignature1' " +
-        "for function 'default_catalog.default_database.LookupTable7' that matches the " +
-        "following signature:\n" +
-        "void eval(java.util.concurrent.CompletableFuture, java.lang.Integer, " +
-        "org.apache.flink.table.data.StringData, org.apache.flink.table.data.TimestampData)",
+        "must have a first argument of type java.util.concurrent.CompletableFuture<java.util.Collection>.",
       classOf[ValidationException]
     )
 
@@ -233,12 +281,9 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
     expectExceptionThrown(
       "SELECT * FROM T JOIN LookupTable8 " +
         "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.a = D.id AND T.b = D.name AND T.ts = D.ts",
-      "Could not find an implementation method 'eval' in class " +
+      "Method 'eval' of function class " +
         "'org.apache.flink.table.planner.plan.utils.InvalidAsyncTableFunctionEvalSignature2' " +
-        "for function 'default_catalog.default_database.LookupTable8' that matches the " +
-        "following signature:\nvoid eval(java.util.concurrent.CompletableFuture, " +
-        "java.lang.Integer, java.lang.String, " +
-        "java.time.LocalDateTime)",
+        "must have a first argument of type java.util.concurrent.CompletableFuture<java.util.Collection>.",
       classOf[ValidationException]
     )
 
@@ -252,12 +297,19 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
     expectExceptionThrown(
       "SELECT * FROM T JOIN LookupTable10 " +
         "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.a = D.id AND T.b = D.name AND T.ts = D.ts",
-      "Could not find an implementation method 'eval' in class " +
+      "Method 'eval' of function class " +
         "'org.apache.flink.table.planner.plan.utils.InvalidAsyncTableFunctionEvalSignature3' " +
-        "for function 'default_catalog.default_database.LookupTable10' that matches the " +
-        "following signature:\n" +
-        "void eval(java.util.concurrent.CompletableFuture, java.lang.Integer, " +
-        "org.apache.flink.table.data.StringData, org.apache.flink.table.data.TimestampData)",
+        "must have a first argument of type java.util.concurrent.CompletableFuture<java.util.Collection>.",
+      classOf[ValidationException]
+    )
+
+    createLookupTable("LookupTable11", new InvalidAsyncTableFunctionType)
+    expectExceptionThrown(
+      "SELECT * FROM T JOIN LookupTable11 " +
+        "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.a = D.id AND T.b = D.name AND T.ts = D.ts",
+      "Method 'eval' of function class " +
+        "'org.apache.flink.table.planner.plan.utils.InvalidAsyncTableFunctionType' " +
+        "must have a first argument of type java.util.concurrent.CompletableFuture<java.util.Collection>.",
       classOf[ValidationException]
     )
   }
@@ -265,13 +317,14 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
   @Test
   def testJoinOnDifferentKeyTypes(): Unit = {
     // Will do implicit type coercion.
-    thrown.expect(classOf[TableException])
-    thrown.expectMessage(
-      "implicit type conversion between VARCHAR(2147483647) and INTEGER " +
+    assertThatThrownBy(
+      () =>
+        util.verifyExecPlan(
+          "SELECT * FROM MyTable AS T JOIN LookupTable "
+            + "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.b = D.id"))
+      .hasMessageContaining("implicit type conversion between VARCHAR(2147483647) and INTEGER " +
         "is not supported on join's condition now")
-    util.verifyExecPlan(
-      "SELECT * FROM MyTable AS T JOIN LookupTable "
-        + "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.b = D.id")
+      .isInstanceOf[TableException]
   }
 
   @Test
@@ -381,10 +434,6 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
 
   @Test
   def testJoinTemporalTableWithTrueCondition(): Unit = {
-    thrown.expect(classOf[TableException])
-    thrown.expectMessage(
-      "Temporal table join requires an equality condition on fields of " +
-        "table [default_catalog.default_database.LookupTable]")
     val sql =
       """
         |SELECT * FROM MyTable AS T
@@ -393,7 +442,10 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
         |WHERE T.c > 1000
       """.stripMargin
 
-    util.verifyExplain(sql)
+    assertThatThrownBy(() => util.verifyExplain(sql))
+      .hasMessageContaining("Temporal table join requires an equality condition on fields of " +
+        "table [default_catalog.default_database.LookupTable]")
+      .isInstanceOf[TableException]
   }
 
   @Test
@@ -451,8 +503,6 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
 
   @Test
   def testJoinTemporalTableWithComputedColumn(): Unit = {
-    // Computed column do not support in legacyTableSource.
-    Assume.assumeFalse(legacyTableSource)
     val sql =
       """
         |SELECT
@@ -466,8 +516,6 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
 
   @Test
   def testJoinTemporalTableWithComputedColumnAndPushDown(): Unit = {
-    // Computed column do not support in legacyTableSource.
-    Assume.assumeFalse(legacyTableSource)
     val sql =
       """
         |SELECT
@@ -505,11 +553,11 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
         |LEFT JOIN LookupTable2 FOR SYSTEM_TIME AS OF MyTable.`proctime`
         |ON MyTable.a = CAST(LookupTable2.`id` as INT)
         |""".stripMargin
-    thrown.expect(classOf[TableException])
-    thrown.expectMessage(
-      "Temporal table join requires an equality condition on fields of " +
+
+    assertThatThrownBy(() => verifyTranslationSuccess(sql))
+      .hasMessageContaining("Temporal table join requires an equality condition on fields of " +
         "table [default_catalog.default_database.LookupTable2]")
-    verifyTranslationSuccess(sql)
+      .isInstanceOf[TableException]
   }
 
   @Test
@@ -564,16 +612,11 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
         |  ON D.id = 100
       """.stripMargin
     val actual = util.tableEnv.explainSql(sql, ExplainDetail.JSON_EXECUTION_PLAN)
-    val expected = if (legacyTableSource) {
-      readFromResource(
-        "explain/stream/join/lookup/testAggAndAllConstantLookupKeyWithTryResolveMode.out")
-    } else {
+    val expected =
       readFromResource(
         "explain/stream/join/lookup/testAggAndAllConstantLookupKeyWithTryResolveMode_newSource.out")
-    }
-    assertEquals(
-      replaceNodeIdInOperator(replaceStreamNodeId(replaceStageId(expected))),
-      replaceNodeIdInOperator(replaceStreamNodeId(replaceStageId(actual))))
+    assertThat(replaceNodeIdInOperator(replaceStreamNodeId(replaceStageId(actual))))
+      .isEqualTo(replaceNodeIdInOperator(replaceStreamNodeId(replaceStageId(expected))))
   }
 
   @Test
@@ -764,7 +807,7 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
         |SELECT /*+ LOOKUP('table'='D', 'output-mode'='allow_unordered'),
         |           LOOKUP('table'='D', 'output-mode'='ordered') */ *
         |FROM MyTable AS T
-        |JOIN AsyncLookupTable FOR SYSTEM_TIME AS OF T.proctime AS D 
+        |JOIN AsyncLookupTable FOR SYSTEM_TIME AS OF T.proctime AS D
         | ON T.a = D.id
       """.stripMargin
     util.verifyExecPlan(sql)
@@ -794,9 +837,9 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
         |SELECT /*+ LOOKUP('table'='D', 'output-mode'='allow_unordered'),
         |           LOOKUP('table'='D1', 'retry-predicate'='lookup_miss', 'retry-strategy'='fixed_delay', 'fixed-delay'='10s', 'max-attempts'='3') */ *
         |FROM MyTable AS T
-        |JOIN AsyncLookupTable FOR SYSTEM_TIME AS OF T.proctime AS D 
+        |JOIN AsyncLookupTable FOR SYSTEM_TIME AS OF T.proctime AS D
         |  ON T.a = D.id
-        |JOIN LookupTable FOR SYSTEM_TIME AS OF T.proctime AS D1 
+        |JOIN LookupTable FOR SYSTEM_TIME AS OF T.proctime AS D1
         |  ON T.a = D1.id
       """.stripMargin
     util.verifyExecPlan(sql)
@@ -829,6 +872,28 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
   }
 
   @Test
+  def testJoinAsyncTableKeyOrderedWithCdcSource(): Unit = {
+    util.tableEnv.getConfig
+      .set(ExecutionConfigOptions.TABLE_EXEC_ASYNC_LOOKUP_KEY_ORDERED, Boolean.box(true))
+    val sql =
+      "SELECT /*+ LOOKUP('table'='D', 'async'='true', 'output-mode'='allow_unordered') */ * " +
+        "FROM (SELECT *, PROCTIME() AS proctime FROM UpsertTable) AS T JOIN AsyncLookupTable " +
+        "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.id = D.id"
+    util.verifyExplain(sql)
+  }
+
+  @Test
+  def testJoinAsyncTableKeyOrderedWithAppendOnlySource(): Unit = {
+    util.tableEnv.getConfig
+      .set(ExecutionConfigOptions.TABLE_EXEC_ASYNC_LOOKUP_KEY_ORDERED, Boolean.box(true))
+    val sql =
+      "SELECT /*+ LOOKUP('table'='D', 'async'='true', 'output-mode'='allow_unordered') */ * " +
+        "FROM (SELECT *, PROCTIME() AS proctime FROM AppendOnlyTable) AS T JOIN AsyncLookupTable " +
+        "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.id = D.id"
+    util.verifyExecPlan(sql)
+  }
+
+  @Test
   def testAggAndLeftJoinAllowUnordered(): Unit = {
     util.tableEnv.getConfig.set(
       ExecutionConfigOptions.TABLE_EXEC_ASYNC_LOOKUP_OUTPUT_MODE,
@@ -847,10 +912,8 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
     util.verifyExplain(stmt, ExplainDetail.JSON_EXECUTION_PLAN)
   }
 
+  @Test
   def testAggAndLeftJoinWithTryResolveMode(): Unit = {
-    thrown.expectMessage("Required sync lookup function by planner, but table")
-    thrown.expect(classOf[TableException])
-
     util.tableEnv.getConfig.set(
       OptimizerConfigOptions.TABLE_OPTIMIZER_NONDETERMINISTIC_UPDATE_STRATEGY,
       OptimizerConfigOptions.NonDeterministicUpdateStrategy.TRY_RESOLVE)
@@ -865,7 +928,9 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
         |FOR SYSTEM_TIME AS OF T.proctime AS D ON T.a = D.id
         |""".stripMargin)
 
-    util.verifyExplain(stmt, ExplainDetail.JSON_EXECUTION_PLAN)
+    assertThatThrownBy(() => util.verifyExplain(stmt, ExplainDetail.JSON_EXECUTION_PLAN))
+      .hasMessageContaining("Required sync lookup function by planner, but table")
+      .isInstanceOf[TableException]
   }
 
   @Test
@@ -963,54 +1028,73 @@ class LookupJoinTest(legacyTableSource: Boolean) extends TableTestBase with Seri
     )
   }
 
+  @Test
+  def testJoinTemporalTableWithShuffleLookupHint(): Unit = {
+    val sql =
+      "SELECT /*+ LOOKUP('table'='D', 'shuffle'='true') */ * FROM MyTable AS T JOIN LookupTableWithCustomShuffle1 " +
+        "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.a = D.id"
+    util.verifyExplain(sql, ExplainDetail.JSON_EXECUTION_PLAN)
+  }
+
+  @Test
+  def testJoinTemporalTableWithNotShuffleLookupHint(): Unit = {
+    val sql =
+      "SELECT /*+ LOOKUP('table'='D', 'shuffle'='false') */ * FROM MyTable AS T JOIN LookupTableWithCustomShuffle1 " +
+        "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.a = D.id"
+    util.verifyExplain(sql, ExplainDetail.JSON_EXECUTION_PLAN)
+  }
+
+  @Test
+  def testJoinTemporalTableWithShuffleLookupHintEmptyPartitioner(): Unit = {
+    val sql =
+      "SELECT /*+ LOOKUP('table'='D', 'shuffle'='true') */ * FROM MyTable AS T JOIN LookupTableWithCustomShuffle3 " +
+        "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.a = D.id"
+    util.verifyExplain(sql, ExplainDetail.JSON_EXECUTION_PLAN)
+  }
+
+  @Test
+  def testJoinTemporalTableWithNonDeterministicInsertOnlyInputCustomShuffle(): Unit = {
+    val sql =
+      "SELECT /*+ LOOKUP('table'='D', 'shuffle'='true') */ * FROM MyTable AS T JOIN LookupTableWithCustomShuffle2 " +
+        "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.a = D.id"
+    util.verifyExplain(sql, ExplainDetail.JSON_EXECUTION_PLAN)
+  }
+
+  @Test
+  def testJoinTemporalTableWithNonDeterministicUpsertInputCustomShuffle(): Unit = {
+    val sql =
+      "SELECT /*+ LOOKUP('table'='D', 'shuffle'='true') */ * FROM UpsertSource AS T JOIN LookupTableWithCustomShuffle2 " +
+        "FOR SYSTEM_TIME AS OF T.proctime AS D ON T.a = D.id"
+    util.verifyExplain(sql, ExplainDetail.JSON_EXECUTION_PLAN)
+  }
+
   // ==========================================================================================
 
   private def createLookupTable(tableName: String, lookupFunction: UserDefinedFunction): Unit = {
-    if (legacyTableSource) {
-      lookupFunction match {
-        case tf: TableFunction[_] =>
-          TestInvalidTemporalTable.createTemporaryTable(util.tableEnv, tableName, tf)
-        case atf: AsyncTableFunction[_] =>
-          TestInvalidTemporalTable.createTemporaryTable(util.tableEnv, tableName, atf)
-      }
-    } else {
-      util.addTable(s"""
-                       |CREATE TABLE $tableName (
-                       |  `id` INT,
-                       |  `name` STRING,
-                       |  `age` INT,
-                       |  `ts` TIMESTAMP(3)
-                       |) WITH (
-                       |  'connector' = 'values',
-                       |  'lookup-function-class' = '${lookupFunction.getClass.getName}'
-                       |)
-                       |""".stripMargin)
-    }
+    util.addTable(s"""
+                     |CREATE TABLE $tableName (
+                     |  `id` INT,
+                     |  `name` STRING,
+                     |  `age` INT,
+                     |  `ts` TIMESTAMP(3)
+                     |) WITH (
+                     |  'connector' = 'values',
+                     |  'lookup-function-class' = '${lookupFunction.getClass.getName}'
+                     |)
+                     |""".stripMargin)
   }
 
   private def expectExceptionThrown(
       sql: String,
       message: String,
       clazz: Class[_ <: Throwable] = classOf[ValidationException]): Unit = {
-    try {
-      verifyTranslationSuccess(sql)
-      fail(s"Expected a $clazz, but no exception is thrown.")
-    } catch {
-      case e: Throwable =>
-        assertTrue(clazz.isAssignableFrom(e.getClass))
-        assertThat(e, containsMessage(message))
-    }
+    assertThatExceptionOfType(clazz)
+      .isThrownBy(() => verifyTranslationSuccess(sql))
+      .withMessageContaining(message)
   }
 
   private def verifyTranslationSuccess(sql: String): Unit = {
     util.tableEnv.sqlQuery(sql).explain()
-  }
-}
-
-object LookupJoinTest {
-  @Parameterized.Parameters(name = "LegacyTableSource={0}")
-  def parameters(): JCollection[Array[Object]] = {
-    Seq[Array[AnyRef]](Array(JBoolean.TRUE), Array(JBoolean.FALSE))
   }
 }
 
@@ -1063,18 +1147,6 @@ class TestTemporalTable(
       builder.primaryKey(keys: _*)
     }
     builder.build()
-  }
-}
-
-object TestTemporalTable {
-
-  def createTemporaryTable(
-      tEnv: TableEnvironment,
-      tableName: String,
-      isBounded: Boolean = false,
-      async: Boolean = false): Unit = {
-    val source = new TestTemporalTable(isBounded, async = async)
-    tEnv.asInstanceOf[TableEnvironmentInternal].registerTableSourceInternal(tableName, source)
   }
 }
 

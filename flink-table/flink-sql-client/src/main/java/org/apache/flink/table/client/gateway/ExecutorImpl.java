@@ -19,6 +19,8 @@
 package org.apache.flink.table.client.gateway;
 
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.client.ClientUtils;
+import org.apache.flink.client.program.rest.UrlPrefixDecorator;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ReadableConfig;
@@ -41,6 +43,7 @@ import org.apache.flink.table.gateway.SqlGateway;
 import org.apache.flink.table.gateway.api.operation.OperationHandle;
 import org.apache.flink.table.gateway.api.results.ResultSet;
 import org.apache.flink.table.gateway.api.session.SessionHandle;
+import org.apache.flink.table.gateway.rest.header.application.DeployScriptHeaders;
 import org.apache.flink.table.gateway.rest.header.operation.CancelOperationHeaders;
 import org.apache.flink.table.gateway.rest.header.operation.CloseOperationHeaders;
 import org.apache.flink.table.gateway.rest.header.session.CloseSessionHeaders;
@@ -52,7 +55,7 @@ import org.apache.flink.table.gateway.rest.header.statement.CompleteStatementHea
 import org.apache.flink.table.gateway.rest.header.statement.ExecuteStatementHeaders;
 import org.apache.flink.table.gateway.rest.header.statement.FetchResultsHeaders;
 import org.apache.flink.table.gateway.rest.header.util.GetApiVersionHeaders;
-import org.apache.flink.table.gateway.rest.header.util.UrlPrefixDecorator;
+import org.apache.flink.table.gateway.rest.message.application.DeployScriptRequestBody;
 import org.apache.flink.table.gateway.rest.message.operation.OperationMessageParameters;
 import org.apache.flink.table.gateway.rest.message.operation.OperationStatusResponseBody;
 import org.apache.flink.table.gateway.rest.message.session.CloseSessionResponseBody;
@@ -83,8 +86,8 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.URL;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
@@ -178,7 +181,8 @@ public class ExecutorImpl implements Executor {
         this.gatewayUrl = gatewayUrl;
         this.rowFormat = rowFormat;
         this.customHttpHeaders =
-                readHeadersFromEnvironmentVariable(ConfigConstants.FLINK_REST_CLIENT_HEADERS);
+                ClientUtils.readHeadersFromEnvironmentVariable(
+                        ConfigConstants.FLINK_REST_CLIENT_HEADERS);
         try {
             // register required resource
             this.executorService = Executors.newCachedThreadPool();
@@ -328,6 +332,19 @@ public class ExecutorImpl implements Executor {
                                 new SessionMessageParameters(sessionHandle),
                                 new CompleteStatementRequestBody(statement, position)))
                 .getCandidates();
+    }
+
+    @Override
+    public String deployScript(@Nullable String script, @Nullable URI uri) {
+        return getResponse(
+                        sendRequest(
+                                DeployScriptHeaders.getInstance(),
+                                new SessionMessageParameters(sessionHandle),
+                                new DeployScriptRequestBody(
+                                        script,
+                                        uri == null ? null : uri.toString(),
+                                        Collections.emptyMap())))
+                .getClusterID();
     }
 
     @Override
@@ -553,7 +570,8 @@ public class ExecutorImpl implements Executor {
                                         // to build the target URL without API version.
                                         Collections.min(
                                                 SqlGatewayRestAPIVersion.getStableVersions())))
-                        .getVersions().stream()
+                        .getVersions()
+                        .stream()
                         .map(SqlGatewayRestAPIVersion::valueOf)
                         .collect(Collectors.toList());
         SqlGatewayRestAPIVersion clientVersion = SqlGatewayRestAPIVersion.getDefaultVersion();
@@ -593,26 +611,6 @@ public class ExecutorImpl implements Executor {
                     e);
             // ignore any throwable to keep the cleanup running
         }
-    }
-
-    private static Collection<HttpHeader> readHeadersFromEnvironmentVariable(String envVarName) {
-        List<HttpHeader> headers = new ArrayList<>();
-        String rawHeaders = System.getenv(envVarName);
-
-        if (rawHeaders != null) {
-            String[] lines = rawHeaders.split("\n");
-            for (String line : lines) {
-                String[] keyValue = line.split(":", 2);
-                if (keyValue.length == 2) {
-                    headers.add(new HttpHeader(keyValue[0], keyValue[1]));
-                } else {
-                    LOG.info(
-                            "Skipped a malformed header {} from FLINK_REST_CLIENT_HEADERS env variable. Expecting newline-separated headers in format header_name:header_value.",
-                            line);
-                }
-            }
-        }
-        return headers;
     }
 
     @VisibleForTesting

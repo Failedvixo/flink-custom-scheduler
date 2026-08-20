@@ -22,6 +22,7 @@ import org.apache.flink.table.data.{DecimalData, DecimalDataUtils, TimestampData
 import org.apache.flink.table.data.binary.{BinaryStringData, BinaryStringDataUtil}
 import org.apache.flink.table.functions.SqlLikeUtils
 import org.apache.flink.table.runtime.functions._
+import org.apache.flink.table.runtime.functions.SqlJsonUtils.JsonQueryReturnType
 import org.apache.flink.table.utils.DateTimeUtils
 import org.apache.flink.table.utils.DateTimeUtils.TimeUnitRange
 
@@ -324,18 +325,6 @@ object BuiltInMethods {
     classOf[Long],
     classOf[TimeZone])
 
-  val LONG_TO_TIMESTAMP_LTZ_WITH_PRECISION =
-    Types.lookupMethod(classOf[DateTimeUtils], "toTimestampData", classOf[Long], classOf[Int])
-
-  val DOUBLE_TO_TIMESTAMP_LTZ_WITH_PRECISION =
-    Types.lookupMethod(classOf[DateTimeUtils], "toTimestampData", classOf[Double], classOf[Int])
-
-  val DECIMAL_TO_TIMESTAMP_LTZ_WITH_PRECISION = Types.lookupMethod(
-    classOf[DateTimeUtils],
-    "toTimestampData",
-    classOf[DecimalData],
-    classOf[Int])
-
   val STRING_TO_TIMESTAMP =
     Types.lookupMethod(classOf[DateTimeUtils], "parseTimestampData", classOf[String])
 
@@ -351,11 +340,18 @@ object BuiltInMethods {
     classOf[TimestampData],
     classOf[TimeZone])
 
+  val TIMESTAMP_WITHOUT_LOCAL_TIME_ZONE_TO_TIME = Types.lookupMethod(
+    classOf[DateTimeUtils],
+    "timestampWithoutLocalZoneToTime",
+    classOf[TimestampData],
+    classOf[Int])
+
   val TIMESTAMP_WITH_LOCAL_TIME_ZONE_TO_TIME = Types.lookupMethod(
     classOf[DateTimeUtils],
     "timestampWithLocalZoneToTime",
     classOf[TimestampData],
-    classOf[TimeZone])
+    classOf[TimeZone],
+    classOf[Int])
 
   val DATE_TO_TIMESTAMP_WITH_LOCAL_TIME_ZONE = Types.lookupMethod(
     classOf[DateTimeUtils],
@@ -457,6 +453,9 @@ object BuiltInMethods {
   val TRUNCATE_SQL_TIMESTAMP =
     Types.lookupMethod(classOf[DateTimeUtils], "truncate", classOf[TimestampData], classOf[Int])
 
+  val TRUNCATE_SQL_TIME =
+    Types.lookupMethod(classOf[DateTimeUtils], "truncate", classOf[Int], classOf[Int])
+
   val ADD_MONTHS =
     Types.lookupMethod(classOf[DateTimeUtils], "addMonths", classOf[Long], classOf[Int])
 
@@ -464,6 +463,11 @@ object BuiltInMethods {
     Types.lookupMethod(classOf[DateTimeUtils], "subtractMonths", classOf[Long], classOf[Long])
 
   // JSON functions
+  val JSON = Types.lookupMethod(
+    classOf[SqlJsonUtils],
+    "json",
+    classOf[String]
+  )
 
   val JSON_EXISTS =
     Types.lookupMethod(classOf[SqlJsonUtils], "jsonExists", classOf[String], classOf[String])
@@ -491,6 +495,7 @@ object BuiltInMethods {
     "jsonQuery",
     classOf[String],
     classOf[String],
+    classOf[JsonQueryReturnType],
     classOf[JsonQueryWrapper],
     classOf[JsonQueryOnEmptyOrError],
     classOf[JsonQueryOnEmptyOrError]
@@ -541,7 +546,11 @@ object BuiltInMethods {
     Types.lookupMethod(classOf[BinaryStringDataUtil], "toDate", classOf[BinaryStringData])
 
   val STRING_DATA_TO_TIME =
-    Types.lookupMethod(classOf[BinaryStringDataUtil], "toTime", classOf[BinaryStringData])
+    Types.lookupMethod(
+      classOf[BinaryStringDataUtil],
+      "toTime",
+      classOf[BinaryStringData],
+      classOf[Int])
 
   val STRING_DATA_TO_TIMESTAMP = Types.lookupMethod(
     classOf[BinaryStringDataUtil],

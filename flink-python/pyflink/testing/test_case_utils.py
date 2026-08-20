@@ -28,6 +28,7 @@ import time
 import unittest
 from abc import abstractmethod
 from decimal import Decimal
+from functools import wraps
 
 from py4j.java_gateway import JavaObject
 
@@ -37,6 +38,7 @@ from pyflink.datastream.stream_execution_environment import StreamExecutionEnvir
 from pyflink.find_flink_home import _find_flink_home, _find_flink_source_root
 from pyflink.java_gateway import get_gateway
 from pyflink.table.table_environment import StreamTableEnvironment
+from pyflink.util.api_stability_decorators import PublicEvolving, Experimental, Internal, Public
 from pyflink.util.java_utils import add_jars_to_context_class_loader, to_jarray
 
 if os.getenv("VERBOSE"):
@@ -221,6 +223,10 @@ class PythonAPICompletenessTestCase(object):
         output = ''.join(x.capitalize() or '_' for x in method_name.split('_'))
         return output[0].lower() + output[1:]
 
+    @classmethod
+    def get_python_stability_decorators(cls, python_class):
+        return getattr(python_class, '__stability_decorators', set())
+
     @staticmethod
     def get_java_class_methods(java_class):
         gateway = get_gateway()
@@ -228,6 +234,15 @@ class PythonAPICompletenessTestCase(object):
         method_arr = gateway.jvm.Class.forName(java_class).getMethods()
         for i in range(0, len(method_arr)):
             s.add(method_arr[i].getName())
+        return s
+
+    @staticmethod
+    def get_java_class_annotations(java_class):
+        gateway = get_gateway()
+        s = set()
+        annotations_arr = gateway.jvm.Class.forName(java_class).getDeclaredAnnotations()
+        for i in range(0, len(annotations_arr)):
+            s.add(annotations_arr[i].toString())
         return s
 
     @classmethod
@@ -241,6 +256,45 @@ class PythonAPICompletenessTestCase(object):
         if len(missing_methods) > 0:
             raise Exception('Methods: %s in Java class %s have not been added in Python class %s.'
                             % (missing_methods, cls.java_class(), cls.python_class()))
+
+    @classmethod
+    def check_stability_decorators(cls):
+        stability_decorator_mapping = [
+            ("@org.apache.flink.annotation.Public()", Public),
+            ("@org.apache.flink.annotation.PublicEvolving()", PublicEvolving),
+            ("@org.apache.flink.annotation.Experimental()", Experimental),
+            ("@org.apache.flink.annotation.Internal()", Internal),
+        ]
+
+        java_annotations = cls.get_java_class_annotations(cls.java_class())
+        python_decorators = cls.get_python_stability_decorators(cls.python_class())
+
+        missing_python_decorators = []
+        unnecessary_python_decorators = []
+
+        for java_annotation, python_decorator in stability_decorator_mapping:
+            java_has_annotation = java_annotation in java_annotations
+            python_has_decorator = python_decorator in python_decorators
+
+            if java_has_annotation and not python_has_decorator:
+                missing_python_decorators.append(java_annotation)
+
+            if python_has_decorator and not java_has_annotation:
+                unnecessary_python_decorators.append(python_decorator.__name__)
+
+        if missing_python_decorators or unnecessary_python_decorators:
+            error_parts = []
+            if missing_python_decorators:
+                error_parts.append(
+                    f"Annotations {missing_python_decorators} present on Java class "
+                    f"{cls.java_class()} are not present on Python class {cls.python_class()}"
+                )
+            if unnecessary_python_decorators:
+                error_parts.append(
+                    f"Decorations {unnecessary_python_decorators} present on Python class "
+                    f"{cls.python_class()} are not present on Java class {cls.java_class()}"
+                )
+            raise Exception("\n".join(error_parts))
 
     @classmethod
     def java_method_name(cls, python_method_name):
@@ -279,8 +333,18 @@ class PythonAPICompletenessTestCase(object):
         """
         return {"equals", "hashCode", "toString"}
 
+    @classmethod
+    def ignore_decorators(cls):
+        """
+        Whether to ignore stability annotation/decorator alignment checks. Useful
+        if the underlying class is not a class, but a module.
+        """
+        return False
+
     def test_completeness(self):
         self.check_methods()
+        if not self.ignore_decorators():
+            self.check_stability_decorators()
 
 
 def replace_uuid(input_obj):
@@ -394,3 +458,43 @@ def to_java_data_structure(value):
         return j_row
     else:
         raise TypeError('unsupported value type {}'.format(str(type(value))))
+
+
+def run_with_config(config_dict):
+    """
+    Decorator to run a test with specific configuration and restore previous config after test.
+
+    :param config_dict: Dictionary of configuration key-value pairs to set for the test.
+    """
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            # Save original configuration values
+            from pyflink.util.java_utils import get_j_env_configuration
+            config = get_j_env_configuration(self.env._j_stream_execution_environment)
+            original_config = {}
+            for key in config_dict:
+                try:
+                    original_config[key] = config.getString(key)
+                except:
+                    original_config[key] = None
+
+            # Set new configuration
+            for key, value in config_dict.items():
+                config.setString(key, value)
+
+            try:
+                # Run the test
+                return func(self, *args, **kwargs)
+            finally:
+                # Restore original configuration
+                for key, original_value in original_config.items():
+                    if original_value is not None:
+                        config.setString(key, original_value)
+                    else:
+                        config.removeKey(key)
+
+        return wrapper
+
+    return decorator

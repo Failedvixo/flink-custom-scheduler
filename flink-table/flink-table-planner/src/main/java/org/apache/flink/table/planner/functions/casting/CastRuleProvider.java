@@ -48,6 +48,8 @@ public class CastRuleProvider {
 
     static {
         INSTANCE
+                // Highest precedence rule
+                .addRule(IdentityCastRule.INSTANCE)
                 // Numeric rules
                 .addRule(DecimalToDecimalCastRule.INSTANCE)
                 .addRule(NumericPrimitiveToDecimalCastRule.INSTANCE)
@@ -85,6 +87,7 @@ public class CastRuleProvider {
                 .addRule(TimeToTimestampCastRule.INSTANCE)
                 .addRule(NumericToTimestampCastRule.INSTANCE)
                 .addRule(TimestampToNumericCastRule.INSTANCE)
+                .addRule(TimeToTimeCastRule.INSTANCE)
                 // To binary rules
                 .addRule(BinaryToBinaryCastRule.INSTANCE)
                 .addRule(RawToBinaryCastRule.INSTANCE)
@@ -92,10 +95,14 @@ public class CastRuleProvider {
                 .addRule(ArrayToArrayCastRule.INSTANCE)
                 .addRule(MapToMapAndMultisetToMultisetCastRule.INSTANCE)
                 .addRule(RowToRowCastRule.INSTANCE)
+                // Variant rules
+                .addRule(VariantToStringCastRule.INSTANCE)
+                // Bitmap rules
+                .addRule(BitmapToStringCastRule.INSTANCE)
+                .addRule(BitmapToBinaryCastRule.INSTANCE)
                 // Special rules
                 .addRule(CharVarCharTrimPadCastRule.INSTANCE)
-                .addRule(NullToStringCastRule.INSTANCE)
-                .addRule(IdentityCastRule.INSTANCE);
+                .addRule(NullToStringCastRule.INSTANCE);
     }
 
     /* ------- Entrypoint ------- */

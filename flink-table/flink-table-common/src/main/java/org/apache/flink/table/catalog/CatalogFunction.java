@@ -21,7 +21,9 @@ package org.apache.flink.table.catalog;
 import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.table.resource.ResourceUri;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /** Interface for a function in a catalog. */
@@ -57,16 +59,6 @@ public interface CatalogFunction {
     Optional<String> getDetailedDescription();
 
     /**
-     * Distinguish if the function is a generic function.
-     *
-     * @return whether the function is a generic function
-     * @deprecated There is no replacement for this function, as now functions have type inference
-     *     strategies
-     */
-    @Deprecated
-    boolean isGeneric();
-
-    /**
      * Get the language used for the definition of function.
      *
      * @return the language type of the function definition
@@ -79,4 +71,9 @@ public interface CatalogFunction {
      * @return an {@link ResourceUri} list of the function
      */
     List<ResourceUri> getFunctionResources();
+
+    /** Returns a map of string-based options. */
+    default Map<String, String> getOptions() {
+        return Collections.emptyMap();
+    }
 }

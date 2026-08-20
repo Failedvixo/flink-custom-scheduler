@@ -18,10 +18,8 @@
 
 package org.apache.flink.runtime.jobmaster;
 
-import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobStatus;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.runtime.dispatcher.JobCancellationFailedException;
 import org.apache.flink.runtime.execution.librarycache.LibraryCacheManager;
 import org.apache.flink.runtime.highavailability.JobResultStore;
@@ -43,7 +41,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.concurrent.GuardedBy;
 
-import java.io.IOException;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -168,13 +166,6 @@ public class JobMasterServiceLeadershipRunner implements JobManagerRunner, Leade
         leaderElection.startLeaderElection(this);
     }
 
-    // TODO: This method can be removed with the migration of the LeaderElection instantiation into
-    // the HighAvailabilityServices in FLINK-31797
-    @VisibleForTesting
-    public LeaderElection getLeaderElection() {
-        return leaderElection;
-    }
-
     @Override
     public CompletableFuture<JobMasterGateway> getJobMasterGateway() {
         synchronized (lock) {
@@ -193,7 +184,7 @@ public class JobMasterServiceLeadershipRunner implements JobManagerRunner, Leade
     }
 
     @Override
-    public CompletableFuture<Acknowledge> cancel(Time timeout) {
+    public CompletableFuture<Acknowledge> cancel(Duration timeout) {
         synchronized (lock) {
             hasCurrentLeaderBeenCancelled = true;
             return getJobMasterGateway()
@@ -209,7 +200,7 @@ public class JobMasterServiceLeadershipRunner implements JobManagerRunner, Leade
     }
 
     @Override
-    public CompletableFuture<JobStatus> requestJobStatus(Time timeout) {
+    public CompletableFuture<JobStatus> requestJobStatus(Duration timeout) {
         return requestJob(timeout)
                 .thenApply(
                         executionGraphInfo ->
@@ -217,16 +208,12 @@ public class JobMasterServiceLeadershipRunner implements JobManagerRunner, Leade
     }
 
     @Override
-    public CompletableFuture<JobDetails> requestJobDetails(Time timeout) {
-        return requestJob(timeout)
-                .thenApply(
-                        executionGraphInfo ->
-                                JobDetails.createDetailsForJob(
-                                        executionGraphInfo.getArchivedExecutionGraph()));
+    public CompletableFuture<JobDetails> requestJobDetails(Duration timeout) {
+        return requestJob(timeout).thenApply(JobDetails::createDetailsForJob);
     }
 
     @Override
-    public CompletableFuture<ExecutionGraphInfo> requestJob(Time timeout) {
+    public CompletableFuture<ExecutionGraphInfo> requestJob(Duration timeout) {
         synchronized (lock) {
             if (state == State.RUNNING) {
                 if (jobMasterServiceProcess.isInitializedAndRunning()) {
@@ -262,34 +249,49 @@ public class JobMasterServiceLeadershipRunner implements JobManagerRunner, Leade
     @GuardedBy("lock")
     private void startJobMasterServiceProcessAsync(UUID leaderSessionId) {
         sequentialOperation =
-                sequentialOperation.thenRun(
-                        () ->
-                                runIfValidLeader(
-                                        leaderSessionId,
-                                        ThrowingRunnable.unchecked(
-                                                () ->
-                                                        verifyJobSchedulingStatusAndCreateJobMasterServiceProcess(
-                                                                leaderSessionId)),
-                                        "verify job scheduling status and create JobMasterServiceProcess"));
-
+                sequentialOperation.thenCompose(
+                        unused ->
+                                jobResultStore
+                                        .hasJobResultEntryAsync(getJobID())
+                                        .thenCompose(
+                                                hasJobResult -> {
+                                                    if (hasJobResult) {
+                                                        return handleJobAlreadyDoneIfValidLeader(
+                                                                leaderSessionId);
+                                                    } else {
+                                                        return createNewJobMasterServiceProcessIfValidLeader(
+                                                                leaderSessionId);
+                                                    }
+                                                }));
         handleAsyncOperationError(sequentialOperation, "Could not start the job manager.");
     }
 
-    @GuardedBy("lock")
-    private void verifyJobSchedulingStatusAndCreateJobMasterServiceProcess(UUID leaderSessionId)
-            throws FlinkException {
-        try {
-            if (jobResultStore.hasJobResultEntry(getJobID())) {
-                jobAlreadyDone(leaderSessionId);
-            } else {
-                createNewJobMasterServiceProcess(leaderSessionId);
-            }
-        } catch (IOException e) {
-            throw new FlinkException(
-                    String.format(
-                            "Could not retrieve the job scheduling status for job %s.", getJobID()),
-                    e);
-        }
+    private CompletableFuture<Void> handleJobAlreadyDoneIfValidLeader(UUID leaderSessionId) {
+        return runIfValidLeader(
+                leaderSessionId, () -> jobAlreadyDone(leaderSessionId), "check completed job");
+    }
+
+    private CompletableFuture<Void> createNewJobMasterServiceProcessIfValidLeader(
+            UUID leaderSessionId) {
+        return runIfValidLeader(
+                leaderSessionId,
+                () ->
+                        // the heavy lifting of the JobMasterServiceProcess instantiation is still
+                        // done asynchronously (see
+                        // DefaultJobMasterServiceFactory#createJobMasterService executing the logic
+                        // on the leaderOperation thread in the DefaultLeaderElectionService should
+                        // be, therefore, fine
+                        ThrowingRunnable.unchecked(
+                                        () -> createNewJobMasterServiceProcess(leaderSessionId))
+                                .run(),
+                "create new job master service process");
+    }
+
+    private void printLogIfNotValidLeader(String actionDescription, UUID leaderSessionId) {
+        LOG.debug(
+                "Ignore leader action '{}' because the leadership runner is no longer the valid leader for {}.",
+                actionDescription,
+                leaderSessionId);
     }
 
     private ExecutionGraphInfo createExecutionGraphInfoWithJobStatus(JobStatus jobStatus) {
@@ -312,7 +314,7 @@ public class JobMasterServiceLeadershipRunner implements JobManagerRunner, Leade
     }
 
     @GuardedBy("lock")
-    private void createNewJobMasterServiceProcess(UUID leaderSessionId) throws FlinkException {
+    private void createNewJobMasterServiceProcess(UUID leaderSessionId) {
         Preconditions.checkState(jobMasterServiceProcess.closeAsync().isDone());
 
         LOG.info(
@@ -336,35 +338,28 @@ public class JobMasterServiceLeadershipRunner implements JobManagerRunner, Leade
     private void confirmLeadership(
             UUID leaderSessionId, CompletableFuture<String> leaderAddressFuture) {
         FutureUtils.assertNoException(
-                leaderAddressFuture.thenAccept(
-                        address -> {
-                            synchronized (lock) {
-                                if (isValidLeader(leaderSessionId)) {
-                                    LOG.debug("Confirm leadership {}.", leaderSessionId);
-                                    leaderElection.confirmLeadership(leaderSessionId, address);
-                                } else {
-                                    LOG.trace(
-                                            "Ignore confirming leadership because the leader {} is no longer valid.",
-                                            leaderSessionId);
-                                }
-                            }
-                        }));
+                leaderAddressFuture.thenCompose(
+                        address ->
+                                callIfRunning(
+                                                () -> {
+                                                    LOG.debug(
+                                                            "Confirm leadership {}.",
+                                                            leaderSessionId);
+                                                    return leaderElection.confirmLeadershipAsync(
+                                                            leaderSessionId, address);
+                                                },
+                                                "confirming leadership")
+                                        .orElse(FutureUtils.completedVoidFuture())));
     }
 
     private void forwardResultFuture(
             UUID leaderSessionId, CompletableFuture<JobManagerRunnerResult> resultFuture) {
         resultFuture.whenComplete(
-                (jobManagerRunnerResult, throwable) -> {
-                    synchronized (lock) {
-                        if (isValidLeader(leaderSessionId)) {
-                            onJobCompletion(jobManagerRunnerResult, throwable);
-                        } else {
-                            LOG.trace(
-                                    "Ignore result future forwarding because the leader {} is no longer valid.",
-                                    leaderSessionId);
-                        }
-                    }
-                });
+                (jobManagerRunnerResult, throwable) ->
+                        runIfValidLeader(
+                                leaderSessionId,
+                                () -> onJobCompletion(jobManagerRunnerResult, throwable),
+                                "result future forwarding"));
     }
 
     @GuardedBy("lock")
@@ -462,7 +457,7 @@ public class JobMasterServiceLeadershipRunner implements JobManagerRunner, Leade
             if (isRunning()) {
                 action.run();
             } else {
-                LOG.trace(
+                LOG.debug(
                         "Ignore '{}' because the leadership runner is no longer running.",
                         actionDescription);
             }
@@ -475,7 +470,7 @@ public class JobMasterServiceLeadershipRunner implements JobManagerRunner, Leade
             if (isRunning()) {
                 return Optional.of(supplier.get());
             } else {
-                LOG.trace(
+                LOG.debug(
                         "Ignore '{}' because the leadership runner is no longer running.",
                         supplierDescription);
                 return Optional.empty();
@@ -488,25 +483,37 @@ public class JobMasterServiceLeadershipRunner implements JobManagerRunner, Leade
         return state == State.RUNNING;
     }
 
-    private void runIfValidLeader(
-            UUID expectedLeaderId, Runnable action, String actionDescription) {
+    private CompletableFuture<Void> runIfValidLeader(
+            UUID expectedLeaderId, Runnable action, Runnable noLeaderFallback) {
         synchronized (lock) {
-            if (isValidLeader(expectedLeaderId)) {
-                action.run();
+            if (isRunning() && leaderElection != null) {
+                return leaderElection
+                        .hasLeadershipAsync(expectedLeaderId)
+                        .thenAccept(
+                                hasLeadership -> {
+                                    synchronized (lock) {
+                                        if (isRunning() && hasLeadership) {
+                                            action.run();
+                                        } else {
+                                            noLeaderFallback.run();
+                                        }
+                                    }
+                                });
             } else {
-                LOG.trace(
-                        "Ignore leader action '{}' because the leadership runner is no longer the valid leader for {}.",
-                        actionDescription,
-                        expectedLeaderId);
+                noLeaderFallback.run();
+                return FutureUtils.completedVoidFuture();
             }
         }
     }
 
-    @GuardedBy("lock")
-    private boolean isValidLeader(UUID expectedLeaderId) {
-        return isRunning()
-                && leaderElection != null
-                && leaderElection.hasLeadership(expectedLeaderId);
+    private CompletableFuture<Void> runIfValidLeader(
+            UUID expectedLeaderId, Runnable action, String noLeaderFallbackCommandDescription) {
+        return runIfValidLeader(
+                expectedLeaderId,
+                action,
+                () ->
+                        printLogIfNotValidLeader(
+                                noLeaderFallbackCommandDescription, expectedLeaderId));
     }
 
     private <T> void forwardIfValidLeader(
@@ -515,22 +522,17 @@ public class JobMasterServiceLeadershipRunner implements JobManagerRunner, Leade
             CompletableFuture<T> target,
             String forwardDescription) {
         source.whenComplete(
-                (t, throwable) -> {
-                    synchronized (lock) {
-                        if (isValidLeader(expectedLeaderId)) {
-                            if (throwable != null) {
-                                target.completeExceptionally(throwable);
-                            } else {
-                                target.complete(t);
-                            }
-                        } else {
-                            LOG.trace(
-                                    "Ignore forwarding '{}' because the leadership runner is no longer the valid leader for {}.",
-                                    forwardDescription,
-                                    expectedLeaderId);
-                        }
-                    }
-                });
+                (t, throwable) ->
+                        runIfValidLeader(
+                                expectedLeaderId,
+                                () -> {
+                                    if (throwable != null) {
+                                        target.completeExceptionally(throwable);
+                                    } else {
+                                        target.complete(t);
+                                    }
+                                },
+                                forwardDescription));
     }
 
     enum State {

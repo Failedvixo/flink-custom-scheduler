@@ -20,8 +20,8 @@ package org.apache.flink.table.planner.catalog;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ReadableConfig;
+import org.apache.flink.legacy.table.sources.StreamTableSource;
 import org.apache.flink.table.api.Schema;
-import org.apache.flink.table.api.TableSchema;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogTable;
@@ -30,15 +30,16 @@ import org.apache.flink.table.catalog.ConnectorCatalogTable;
 import org.apache.flink.table.catalog.ContextResolvedTable;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
+import org.apache.flink.table.expressions.DefaultSqlFactory;
 import org.apache.flink.table.factories.TableFactoryUtil;
-import org.apache.flink.table.factories.TableSourceFactory;
 import org.apache.flink.table.factories.TableSourceFactoryContextImpl;
+import org.apache.flink.table.legacy.api.TableSchema;
+import org.apache.flink.table.legacy.factories.TableSourceFactory;
+import org.apache.flink.table.legacy.sources.TableSource;
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
 import org.apache.flink.table.planner.plan.stats.FlinkStatistic;
 import org.apache.flink.table.planner.sources.TableSourceUtil;
 import org.apache.flink.table.runtime.types.PlannerTypeUtils;
-import org.apache.flink.table.sources.StreamTableSource;
-import org.apache.flink.table.sources.TableSource;
 import org.apache.flink.table.sources.TableSourceValidation;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
@@ -116,7 +117,8 @@ public class CatalogSchemaTable extends AbstractTable implements TemporalTable {
                 && sourceOpt.isPresent()
                 && schema.getColumns().stream().allMatch(Column::isPhysical)
                 && schema.getWatermarkSpecs().isEmpty()) {
-            TableSchema tableSchema = TableSchema.fromResolvedSchema(schema);
+            TableSchema tableSchema =
+                    TableSchema.fromResolvedSchema(schema, DefaultSqlFactory.INSTANCE);
             TableSource<?> source = sourceOpt.get();
             if (TableSourceValidation.hasProctimeAttribute(source)
                     || TableSourceValidation.hasRowtimeAttribute(source)) {
@@ -173,17 +175,19 @@ public class CatalogSchemaTable extends AbstractTable implements TemporalTable {
                         new TableSourceFactoryContextImpl(
                                 contextResolvedTable.getIdentifier(),
                                 new ResolvedCatalogTable(
-                                        CatalogTable.of(
-                                                Schema.newBuilder()
-                                                        .fromResolvedSchema(
-                                                                TableSchemaUtils
-                                                                        .removeTimeAttributeFromResolvedSchema(
-                                                                                originTable
-                                                                                        .getResolvedSchema()))
-                                                        .build(),
-                                                originTable.getComment(),
-                                                originTable.getPartitionKeys(),
-                                                originTable.getOptions()),
+                                        CatalogTable.newBuilder()
+                                                .schema(
+                                                        Schema.newBuilder()
+                                                                .fromResolvedSchema(
+                                                                        TableSchemaUtils
+                                                                                .removeTimeAttributeFromResolvedSchema(
+                                                                                        originTable
+                                                                                                .getResolvedSchema()))
+                                                                .build())
+                                                .comment(originTable.getComment())
+                                                .partitionKeys(originTable.getPartitionKeys())
+                                                .options(originTable.getOptions())
+                                                .build(),
                                         originTable.getResolvedSchema()),
                                 config,
                                 contextResolvedTable.isTemporary());

@@ -21,11 +21,11 @@ import org.apache.flink.api.common.BatchShuffleMode
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.tuple.{Tuple2 => JTuple2}
 import org.apache.flink.api.java.typeutils.{RowTypeInfo, TupleTypeInfoBase}
-import org.apache.flink.api.scala._
 import org.apache.flink.configuration.{ExecutionOptions, JobManagerOptions}
 import org.apache.flink.configuration.JobManagerOptions.SchedulerType
-import org.apache.flink.table.api.{DataTypes, TableException, Types}
+import org.apache.flink.table.api._
 import org.apache.flink.table.data.DecimalDataUtils
+import org.apache.flink.table.legacy.api.Types
 import org.apache.flink.table.planner.factories.TestValuesTableFactory
 import org.apache.flink.table.planner.runtime.utils.BatchTestBase
 import org.apache.flink.table.planner.runtime.utils.BatchTestBase.row
@@ -34,11 +34,17 @@ import org.apache.flink.types.Row
 
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.{BeforeEach, Test}
+import org.junit.jupiter.api.condition.DisabledIf
 
 /** Aggregate IT case base class. */
 abstract class AggregateITCaseBase(testName: String) extends BatchTestBase {
 
   def prepareAggOp(): Unit
+
+  def isHashAggITCase: Boolean = {
+    // Disable variance related tests for hash agg, because the acc of WELFORD_M2 is not fixed length.
+    this.isInstanceOf[HashAggITCase]
+  }
 
   @BeforeEach
   override def before(): Unit = {
@@ -772,6 +778,7 @@ abstract class AggregateITCaseBase(testName: String) extends BatchTestBase {
     )
   }
 
+  @DisabledIf("isHashAggITCase")
   @Test
   def testStdDev(): Unit = {
     // NOTE: if f0 is INT type, our stddev functions return INT.
@@ -782,6 +789,7 @@ abstract class AggregateITCaseBase(testName: String) extends BatchTestBase {
     )
   }
 
+  @DisabledIf("isHashAggITCase")
   @Test
   def test1RowStdDev(): Unit = {
     checkQuery(
@@ -790,6 +798,7 @@ abstract class AggregateITCaseBase(testName: String) extends BatchTestBase {
       Seq((0.0, null, null)))
   }
 
+  @DisabledIf("isHashAggITCase")
   @Test
   def testVariance(): Unit = {
     checkQuery(
@@ -798,6 +807,7 @@ abstract class AggregateITCaseBase(testName: String) extends BatchTestBase {
       Seq((0.25, 0.5, 0.5)))
   }
 
+  @DisabledIf("isHashAggITCase")
   @Test
   def test1RowVariance(): Unit = {
     checkQuery(
@@ -806,6 +816,7 @@ abstract class AggregateITCaseBase(testName: String) extends BatchTestBase {
       Seq((0.0, null, null)))
   }
 
+  @DisabledIf("isHashAggITCase")
   @Test
   def testZeroStdDev(): Unit = {
     val emptyTable = Seq[(Int, Int)]()
@@ -836,6 +847,7 @@ abstract class AggregateITCaseBase(testName: String) extends BatchTestBase {
     )
   }
 
+  @DisabledIf("isHashAggITCase")
   @Test
   def testMoments(): Unit = {
     checkQuery(
@@ -846,6 +858,7 @@ abstract class AggregateITCaseBase(testName: String) extends BatchTestBase {
     // todo: Spark has skewness() and kurtosis()
   }
 
+  @DisabledIf("isHashAggITCase")
   @Test
   def testZeroMoments(): Unit = {
     checkQuery(
@@ -856,6 +869,7 @@ abstract class AggregateITCaseBase(testName: String) extends BatchTestBase {
     // todo: Spark returns Double.NaN instead of null
   }
 
+  @DisabledIf("isHashAggITCase")
   @Test
   def testNullMoments(): Unit = {
     checkQuery(
@@ -1222,6 +1236,11 @@ abstract class AggregateITCaseBase(testName: String) extends BatchTestBase {
          |WINDOW w AS (ORDER BY proctime)
          |""".stripMargin
     checkResult(sql, Seq(row("11, 11"), row("12, 12"), row("null, null")))
+  }
+
+  @Test
+  def testAggFilterReferenceFirstColumn(): Unit = {
+    checkResult("select count(*) filter (where a < 10) from Table3", Seq(row(9)))
   }
 
   // TODO support csv

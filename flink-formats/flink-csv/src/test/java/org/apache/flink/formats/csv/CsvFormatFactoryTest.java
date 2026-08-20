@@ -20,6 +20,9 @@ package org.apache.flink.formats.csv;
 
 import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.common.serialization.SerializationSchema;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.connector.file.src.FileSourceSplit;
+import org.apache.flink.connector.file.src.reader.BulkFormat;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.Column;
@@ -33,11 +36,8 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.factories.TestDynamicTableFactory;
 import org.apache.flink.table.runtime.connector.source.ScanRuntimeProviderContext;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
-import org.apache.flink.util.TestLogger;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.ExpectedException;
+import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -49,7 +49,6 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.apache.flink.connector.testutils.formats.SchemaTestUtils.open;
-import static org.apache.flink.core.testutils.FlinkMatchers.containsCause;
 import static org.apache.flink.table.data.DecimalData.fromBigDecimal;
 import static org.apache.flink.table.data.StringData.fromString;
 import static org.apache.flink.table.factories.utils.FactoryMocks.PHYSICAL_DATA_TYPE;
@@ -58,13 +57,13 @@ import static org.apache.flink.table.factories.utils.FactoryMocks.SCHEMA;
 import static org.apache.flink.table.factories.utils.FactoryMocks.createTableSink;
 import static org.apache.flink.table.factories.utils.FactoryMocks.createTableSource;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link CsvFormatFactory}. */
-public class CsvFormatFactoryTest extends TestLogger {
-    @Rule public ExpectedException thrown = ExpectedException.none();
+class CsvFormatFactoryTest {
 
     @Test
-    public void testSeDeSchema() {
+    void testSeDeSchema() {
         final CsvRowDataDeserializationSchema expectedDeser =
                 new CsvRowDataDeserializationSchema.Builder(
                                 PHYSICAL_TYPE, InternalTypeInfo.of(PHYSICAL_TYPE))
@@ -75,9 +74,16 @@ public class CsvFormatFactoryTest extends TestLogger {
                         .setArrayElementDelimiter("|")
                         .setEscapeCharacter('\\')
                         .setNullLiteral("n/a")
+                        .setTrimSpaces(true)
+                        .setEmptyStringAsNull(true)
                         .build();
         open(expectedDeser);
-        final Map<String, String> options = getAllOptions();
+        final Map<String, String> options =
+                getModifiedOptions(
+                        opts -> {
+                            opts.put("csv.trim-spaces", "true");
+                            opts.put("csv.empty-string-as-null", "true");
+                        });
         DeserializationSchema<RowData> actualDeser = createDeserializationSchema(options);
         assertThat(actualDeser).isEqualTo(expectedDeser);
 
@@ -94,7 +100,7 @@ public class CsvFormatFactoryTest extends TestLogger {
     }
 
     @Test
-    public void testDisableQuoteCharacter() {
+    void testDisableQuoteCharacter() {
         final Map<String, String> options =
                 getModifiedOptions(
                         opts -> {
@@ -131,35 +137,41 @@ public class CsvFormatFactoryTest extends TestLogger {
     }
 
     @Test
-    public void testDisableQuoteCharacterException() {
-        thrown.expect(ValidationException.class);
-        thrown.expect(
-                containsCause(
+    void testDisableQuoteCharacterException() {
+        assertThatThrownBy(
+                        () -> {
+                            final Map<String, String> options =
+                                    getModifiedOptions(
+                                            opts ->
+                                                    opts.put(
+                                                            "csv.disable-quote-character", "true"));
+
+                            createTableSink(SCHEMA, options);
+                        })
+                .isInstanceOf(ValidationException.class)
+                .hasRootCause(
                         new ValidationException(
-                                "Format cannot define a quote character and disabled quote character at the same time.")));
-
-        final Map<String, String> options =
-                getModifiedOptions(opts -> opts.put("csv.disable-quote-character", "true"));
-
-        createTableSink(SCHEMA, options);
+                                "Format cannot define a quote character and disabled quote character at the same time."));
     }
 
     @Test
-    public void testInvalidCharacterOption() {
-        thrown.expect(ValidationException.class);
-        thrown.expect(
-                containsCause(
+    void testInvalidCharacterOption() {
+        assertThatThrownBy(
+                        () -> {
+                            final Map<String, String> options =
+                                    getModifiedOptions(
+                                            opts -> opts.put("csv.quote-character", "abc"));
+
+                            createTableSink(SCHEMA, options);
+                        })
+                .isInstanceOf(ValidationException.class)
+                .hasRootCause(
                         new ValidationException(
-                                "Option 'csv.quote-character' must be a string with single character, but was: abc")));
-
-        final Map<String, String> options =
-                getModifiedOptions(opts -> opts.put("csv.quote-character", "abc"));
-
-        createTableSink(SCHEMA, options);
+                                "Option 'csv.quote-character' must be a string with single character, but was: abc"));
     }
 
     @Test
-    public void testEscapedFieldDelimiter() throws IOException {
+    void testEscapedFieldDelimiter() throws IOException {
         final CsvRowDataSerializationSchema expectedSer =
                 new CsvRowDataSerializationSchema.Builder(PHYSICAL_TYPE)
                         .setFieldDelimiter('\t')
@@ -206,7 +218,7 @@ public class CsvFormatFactoryTest extends TestLogger {
     }
 
     @Test
-    public void testDeserializeWithEscapedFieldDelimiter() throws IOException {
+    void testDeserializeWithEscapedFieldDelimiter() throws IOException {
         // test deserialization schema
         final Map<String, String> options =
                 getModifiedOptions(opts -> opts.put("csv.field-delimiter", "\t"));
@@ -224,22 +236,24 @@ public class CsvFormatFactoryTest extends TestLogger {
     }
 
     @Test
-    public void testInvalidIgnoreParseError() {
-        thrown.expect(ValidationException.class);
-        thrown.expect(
-                containsCause(
+    void testInvalidIgnoreParseError() {
+        assertThatThrownBy(
+                        () -> {
+                            final Map<String, String> options =
+                                    getModifiedOptions(
+                                            opts -> opts.put("csv.ignore-parse-errors", "abc"));
+
+                            createTableSink(SCHEMA, options);
+                        })
+                .isInstanceOf(ValidationException.class)
+                .hasRootCause(
                         new IllegalArgumentException(
                                 "Unrecognized option for boolean: abc. "
-                                        + "Expected either true or false(case insensitive)")));
-
-        final Map<String, String> options =
-                getModifiedOptions(opts -> opts.put("csv.ignore-parse-errors", "abc"));
-
-        createTableSink(SCHEMA, options);
+                                        + "Expected either true or false(case insensitive)"));
     }
 
     @Test
-    public void testSerializationWithWriteBigDecimalInScientificNotation() {
+    void testSerializationWithWriteBigDecimalInScientificNotation() {
         final Map<String, String> options =
                 getModifiedOptions(
                         opts -> opts.put("csv.write-bigdecimal-in-scientific-notation", "true"));
@@ -262,11 +276,11 @@ public class CsvFormatFactoryTest extends TestLogger {
                 GenericRowData.of(
                         fromString("abc"), fromBigDecimal(new BigDecimal("100000"), 10, 3), false);
         byte[] bytes = runtimeEncoder.serialize(rowData);
-        assertThat(new String(bytes)).isEqualTo("abc;'1E+5';false");
+        assertThat(new String(bytes)).isEqualTo("abc;1E+5;false");
     }
 
     @Test
-    public void testSerializationWithNotWriteBigDecimalInScientificNotation() {
+    void testSerializationWithNotWriteBigDecimalInScientificNotation() {
         final Map<String, String> options =
                 getModifiedOptions(
                         opts -> opts.put("csv.write-bigdecimal-in-scientific-notation", "false"));
@@ -289,11 +303,11 @@ public class CsvFormatFactoryTest extends TestLogger {
                 GenericRowData.of(
                         fromString("abc"), fromBigDecimal(new BigDecimal("100000"), 10, 3), false);
         byte[] bytes = runtimeEncoder.serialize(rowData);
-        assertThat(new String(bytes)).isEqualTo("abc;'100000';false");
+        assertThat(new String(bytes)).isEqualTo("abc;100000.000;false");
     }
 
     @Test
-    public void testProjectionPushdown() throws IOException {
+    void testProjectionPushdown() throws IOException {
         final Map<String, String> options = getAllOptions();
 
         final Projection projection =
@@ -311,7 +325,7 @@ public class CsvFormatFactoryTest extends TestLogger {
     }
 
     @Test
-    public void testProjectionPushdownNoOpProjection() throws IOException {
+    void testProjectionPushdownNoOpProjection() throws IOException {
         final Map<String, String> options = getAllOptions();
 
         List<String> fields = Arrays.asList("a", "b", "c");
@@ -329,7 +343,7 @@ public class CsvFormatFactoryTest extends TestLogger {
     }
 
     @Test
-    public void testProjectionPushdownEmptyProjection() throws IOException {
+    void testProjectionPushdownEmptyProjection() throws IOException {
         final Map<String, String> options = getAllOptions();
 
         final int[][] projectionMatrix = new int[][] {};
@@ -341,6 +355,105 @@ public class CsvFormatFactoryTest extends TestLogger {
         GenericRowData expected = GenericRowData.of();
 
         assertThat(deserialized).isEqualTo(expected);
+    }
+
+    @Test
+    void testTrimSpaces() throws IOException {
+        final Map<String, String> options =
+                getModifiedOptions(opts -> opts.put("csv.trim-spaces", "true"));
+        DeserializationSchema<RowData> deserializationSchema = createDeserializationSchema(options);
+        RowData actual = deserializationSchema.deserialize(" abc ;123;false".getBytes());
+        GenericRowData expected = GenericRowData.of(fromString("abc"), 123, false);
+        assertThat(actual).isEqualTo(expected);
+    }
+
+    @Test
+    void testEmptyStringAsNull() throws IOException {
+        final Map<String, String> options =
+                getModifiedOptions(opts -> opts.put("csv.empty-string-as-null", "true"));
+        DeserializationSchema<RowData> deserializationSchema = createDeserializationSchema(options);
+        RowData actual = deserializationSchema.deserialize(";123;false".getBytes());
+        assertThat(actual.isNullAt(0)).isTrue();
+        assertThat(actual.getInt(1)).isEqualTo(123);
+        assertThat(actual.getBoolean(2)).isFalse();
+    }
+
+    @Test
+    void testAllowTrailingComma() throws IOException {
+        final Map<String, String> options =
+                getModifiedOptions(opts -> opts.put("csv.allow-trailing-comma", "true"));
+        DeserializationSchema<RowData> deserializationSchema = createDeserializationSchema(options);
+        RowData actual = deserializationSchema.deserialize("abc;123;false;".getBytes());
+        GenericRowData expected = GenericRowData.of(fromString("abc"), 123, false);
+        assertThat(actual).isEqualTo(expected);
+    }
+
+    @Test
+    void testIgnoreTrailingUnmappable() throws IOException {
+        final Map<String, String> options =
+                getModifiedOptions(opts -> opts.put("csv.ignore-trailing-unmappable", "true"));
+        DeserializationSchema<RowData> deserializationSchema = createDeserializationSchema(options);
+        RowData actual = deserializationSchema.deserialize("abc;123;false;extra".getBytes());
+        GenericRowData expected = GenericRowData.of(fromString("abc"), 123, false);
+        assertThat(actual).isEqualTo(expected);
+    }
+
+    @Test
+    void testFailOnMissingColumns() {
+        final Map<String, String> options =
+                getModifiedOptions(
+                        opts -> {
+                            opts.put("csv.fail-on-missing-columns", "true");
+                            opts.remove("csv.ignore-parse-errors");
+                        });
+        DeserializationSchema<RowData> deserializationSchema = createDeserializationSchema(options);
+        assertThatThrownBy(() -> deserializationSchema.deserialize("abc;123".getBytes()))
+                .isInstanceOf(IOException.class);
+    }
+
+    @Test
+    void testDeserializationSchemaEqualityWithFeatures() {
+        final CsvRowDataDeserializationSchema schema1 =
+                new CsvRowDataDeserializationSchema.Builder(
+                                PHYSICAL_TYPE, InternalTypeInfo.of(PHYSICAL_TYPE))
+                        .setTrimSpaces(true)
+                        .setEmptyStringAsNull(true)
+                        .build();
+        final CsvRowDataDeserializationSchema schema2 =
+                new CsvRowDataDeserializationSchema.Builder(
+                                PHYSICAL_TYPE, InternalTypeInfo.of(PHYSICAL_TYPE))
+                        .setTrimSpaces(true)
+                        .setEmptyStringAsNull(true)
+                        .build();
+        final CsvRowDataDeserializationSchema schema3 =
+                new CsvRowDataDeserializationSchema.Builder(
+                                PHYSICAL_TYPE, InternalTypeInfo.of(PHYSICAL_TYPE))
+                        .setTrimSpaces(false)
+                        .build();
+
+        assertThat(schema1).isEqualTo(schema2);
+        assertThat(schema1).isNotEqualTo(schema3);
+    }
+
+    @Test
+    void testBulkFormatWithParserFeatures() {
+        final Configuration formatOptions = new Configuration();
+        formatOptions.set(CsvFormatOptions.FIELD_DELIMITER, ";");
+        formatOptions.set(CsvFormatOptions.TRIM_SPACES, true);
+        formatOptions.set(CsvFormatOptions.IGNORE_TRAILING_UNMAPPABLE, true);
+        formatOptions.set(CsvFormatOptions.ALLOW_TRAILING_COMMA, true);
+        formatOptions.set(CsvFormatOptions.EMPTY_STRING_AS_NULL, true);
+
+        CsvFileFormatFactory.CsvBulkDecodingFormat bulkDecodingFormat =
+                new CsvFileFormatFactory.CsvBulkDecodingFormat(formatOptions);
+
+        // Verify the bulk format can be created without errors
+        BulkFormat<RowData, FileSourceSplit> bulkFormat =
+                bulkDecodingFormat.createRuntimeDecoder(
+                        ScanRuntimeProviderContext.INSTANCE,
+                        PHYSICAL_DATA_TYPE,
+                        Projection.all(PHYSICAL_DATA_TYPE).toNestedIndexes());
+        assertThat(bulkFormat).isNotNull();
     }
 
     // ------------------------------------------------------------------------

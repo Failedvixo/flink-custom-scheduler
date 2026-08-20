@@ -19,14 +19,21 @@
 package org.apache.flink.test.checkpointing;
 
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.functions.RichFlatMapFunction;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.state.v2.StateFuture;
+import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
+import org.apache.flink.api.connector.sink2.Sink;
+import org.apache.flink.api.connector.sink2.SinkWriter;
+import org.apache.flink.api.connector.sink2.WriterInitContext;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.ExternalizedCheckpointRetention;
+import org.apache.flink.configuration.RestartStrategyOptions;
 import org.apache.flink.configuration.StateBackendOptions;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.minicluster.MiniCluster;
@@ -36,57 +43,81 @@ import org.apache.flink.runtime.state.KeyGroupRangeAssignment;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.environment.CheckpointConfig;
+import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.SinkFunction;
-import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunction;
+import org.apache.flink.streaming.api.functions.source.legacy.RichParallelSourceFunction;
+import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
-import org.apache.flink.testutils.junit.SharedObjects;
+import org.apache.flink.testutils.junit.SharedObjectsExtension;
 import org.apache.flink.testutils.junit.SharedReference;
+import org.apache.flink.testutils.junit.extensions.parameterized.ParameterizedTestExtension;
+import org.apache.flink.testutils.junit.extensions.parameterized.Parameters;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.Preconditions;
-import org.apache.flink.util.TestLogger;
+import org.apache.flink.util.TestLoggerExtension;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.ClassRule;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.TestTemplate;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.flink.runtime.jobgraph.SavepointRestoreSettings.forPath;
 import static org.apache.flink.runtime.testutils.CommonTestUtils.getLatestCompletedCheckpointPath;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Test checkpoint rescaling for incremental rocksdb. The implementations of
  * NotifyingDefiniteKeySource, SubtaskIndexFlatMapper and CollectionSink refer to RescalingITCase,
  * because the static fields in these classes can not be shared.
  */
-public class RescaleCheckpointManuallyITCase extends TestLogger {
+@ExtendWith({TestLoggerExtension.class, ParameterizedTestExtension.class})
+class RescaleCheckpointManuallyITCase {
 
     private static final int NUM_TASK_MANAGERS = 2;
     private static final int SLOTS_PER_TASK_MANAGER = 2;
 
-    private static MiniClusterWithClientResource cluster;
-    @Rule public final SharedObjects sharedObjects = SharedObjects.create();
+    private MiniClusterWithClientResource cluster;
 
-    @ClassRule public static TemporaryFolder temporaryFolder = new TemporaryFolder();
+    @TempDir private File temporaryFolder;
 
-    @Before
-    public void setup() throws Exception {
+    @RegisterExtension
+    private final SharedObjectsExtension sharedObjects = SharedObjectsExtension.create();
+
+    private final String statebackendType;
+    private final boolean enableAsyncState;
+
+    private RescaleCheckpointManuallyITCase(String statebackendType, boolean enableAsyncState) {
+        this.statebackendType = statebackendType;
+        this.enableAsyncState = enableAsyncState;
+    }
+
+    @Parameters(name = "statebackend type ={0}, enableAsyncState={1}")
+    private static List<Object[]> parameter() {
+        return Arrays.asList(
+                new Object[] {"forst", true},
+                new Object[] {"forst", false},
+                new Object[] {"rocksdb", true},
+                new Object[] {"rocksdb", false});
+    }
+
+    @BeforeEach
+    void setup() throws Exception {
         Configuration config = new Configuration();
-        config.setString(StateBackendOptions.STATE_BACKEND, "rocksdb");
-        config.setBoolean(CheckpointingOptions.INCREMENTAL_CHECKPOINTS, true);
+        config.set(StateBackendOptions.STATE_BACKEND, statebackendType);
+        config.set(CheckpointingOptions.INCREMENTAL_CHECKPOINTS, true);
 
         cluster =
                 new MiniClusterWithClientResource(
@@ -98,21 +129,21 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
         cluster.before();
     }
 
-    @After
-    public void shutDownExistingCluster() {
+    @AfterEach
+    void shutDownExistingCluster() {
         if (cluster != null) {
             cluster.after();
             cluster = null;
         }
     }
 
-    @Test
-    public void testCheckpointRescalingInKeyedState() throws Exception {
+    @TestTemplate
+    void testCheckpointRescalingInKeyedState() throws Exception {
         testCheckpointRescalingKeyedState(false);
     }
 
-    @Test
-    public void testCheckpointRescalingOutKeyedState() throws Exception {
+    @TestTemplate
+    void testCheckpointRescalingOutKeyedState() throws Exception {
         testCheckpointRescalingKeyedState(true);
     }
 
@@ -120,7 +151,7 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
      * Tests that a job with purely keyed state can be restarted from a checkpoint with a different
      * parallelism.
      */
-    public void testCheckpointRescalingKeyedState(boolean scaleOut) throws Exception {
+    private void testCheckpointRescalingKeyedState(boolean scaleOut) throws Exception {
         final int numberKeys = 42;
         final int numberElements = 1000;
         final int numberElements2 = 500;
@@ -133,7 +164,7 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
                 runJobAndGetCheckpoint(
                         numberKeys, numberElements, parallelism, maxParallelism, miniCluster);
 
-        assertNotNull(checkpointPath);
+        assertThat(checkpointPath).isNotNull();
 
         restoreAndAssert(
                 parallelism2,
@@ -152,6 +183,7 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
             int maxParallelism,
             MiniCluster miniCluster)
             throws Exception {
+        JobID jobID = null;
         try {
             JobGraph jobGraph =
                     createJobGraphWithKeyedState(
@@ -163,18 +195,18 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
                             true,
                             100,
                             miniCluster);
+            jobID = jobGraph.getJobID();
             miniCluster.submitJob(jobGraph).get();
-            miniCluster.requestJobResult(jobGraph.getJobID()).get();
-            // The elements may not all be sent to sink when unaligned checkpoints enabled(refer to
-            // FLINK-26882 for more details).
-            // Don't verify current state here.
-            return getLatestCompletedCheckpointPath(jobGraph.getJobID(), miniCluster)
+            miniCluster.requestJobResult(jobID).get();
+            return getLatestCompletedCheckpointPath(jobID, miniCluster)
                     .orElseThrow(
                             () ->
                                     new IllegalStateException(
                                             "Cannot get completed checkpoint, job failed before completing checkpoint"));
         } finally {
-            CollectionSink.clearElementsSet();
+            if (jobID != null) {
+                CollectionSink.clearElementsSet(jobID);
+            }
         }
     }
 
@@ -187,6 +219,7 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
             MiniCluster miniCluster,
             String restorePath)
             throws Exception {
+        JobID jobID = null;
         try {
             JobGraph scaledJobGraph =
                     createJobGraphWithKeyedState(
@@ -198,13 +231,14 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
                             false,
                             100,
                             miniCluster);
+            jobID = scaledJobGraph.getJobID();
 
             scaledJobGraph.setSavepointRestoreSettings(forPath(restorePath));
 
             miniCluster.submitJob(scaledJobGraph).get();
-            miniCluster.requestJobResult(scaledJobGraph.getJobID()).get();
+            miniCluster.requestJobResult(jobID).get();
 
-            Set<Tuple2<Integer, Integer>> actualResult = CollectionSink.getElementsSet();
+            Set<Tuple2<Integer, Integer>> actualResult = CollectionSink.getElementsSet(jobID);
 
             Set<Tuple2<Integer, Integer>> expectedResult = new HashSet<>();
 
@@ -216,9 +250,11 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
                                         maxParallelism, restoreParallelism, keyGroupIndex),
                                 key * numberElementsExpect));
             }
-            assertEquals(expectedResult, actualResult);
+            assertThat(actualResult).isEqualTo(expectedResult);
         } finally {
-            CollectionSink.clearElementsSet();
+            if (jobID != null) {
+                CollectionSink.clearElementsSet(jobID);
+            }
         }
     }
 
@@ -232,36 +268,55 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
             int checkpointingInterval,
             MiniCluster miniCluster)
             throws IOException {
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        final Configuration configuration = new Configuration();
+        configuration.set(
+                CheckpointingOptions.CHECKPOINTS_DIRECTORY, temporaryFolder.toURI().toString());
+        configuration.set(
+                CheckpointingOptions.EXTERNALIZED_CHECKPOINT_RETENTION,
+                ExternalizedCheckpointRetention.RETAIN_ON_CANCELLATION);
+        // Force Aligned Checkpoints. This is necessary to prevent test environment randomization
+        // from overriding it. The elements may not all be sent to sink when unaligned checkpoints
+        // enabled(refer to FLINK-26882 for more details).
+        configuration.set(CheckpointingOptions.ENABLE_UNALIGNED, false);
+        configuration.set(RestartStrategyOptions.RESTART_STRATEGY, "none");
+
+        StreamExecutionEnvironment env =
+                StreamExecutionEnvironment.getExecutionEnvironment(configuration);
         env.setParallelism(parallelism);
         if (0 < maxParallelism) {
             env.getConfig().setMaxParallelism(maxParallelism);
         }
         env.enableCheckpointing(checkpointingInterval);
-        env.getCheckpointConfig().setCheckpointStorage(temporaryFolder.newFolder().toURI());
-        env.getCheckpointConfig()
-                .setExternalizedCheckpointCleanup(
-                        CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
-        env.setRestartStrategy(RestartStrategies.noRestart());
         env.getConfig().setUseSnapshotCompression(true);
 
         SharedReference<JobID> jobID = sharedObjects.add(new JobID());
         SharedReference<MiniCluster> miniClusterRef = sharedObjects.add(miniCluster);
-        DataStream<Integer> input =
+        KeyedStream<Integer, Integer> input =
                 env.addSource(
                                 new NotifyingDefiniteKeySource(
                                         numberKeys, numberElements, failAfterEmission) {
+
+                                    String lastCheckpointPath = null;
+
+                                    /**
+                                     * This wait method waits at least two checkpoint finished to
+                                     * make sure the latest checkpoint contains all the source data.
+                                     */
                                     @Override
-                                    public void waitCheckpointCompleted() throws Exception {
+                                    public boolean waitCheckpointCompleted() throws Exception {
                                         Optional<String> mostRecentCompletedCheckpointPath =
                                                 getLatestCompletedCheckpointPath(
                                                         jobID.get(), miniClusterRef.get());
-                                        while (!mostRecentCompletedCheckpointPath.isPresent()) {
-                                            Thread.sleep(50);
-                                            mostRecentCompletedCheckpointPath =
-                                                    getLatestCompletedCheckpointPath(
-                                                            jobID.get(), miniClusterRef.get());
+                                        if (mostRecentCompletedCheckpointPath.isPresent()) {
+                                            if (lastCheckpointPath == null) {
+                                                lastCheckpointPath =
+                                                        mostRecentCompletedCheckpointPath.get();
+                                            } else if (!lastCheckpointPath.equals(
+                                                    mostRecentCompletedCheckpointPath.get())) {
+                                                return true;
+                                            }
                                         }
+                                        return false;
                                     }
                                 })
                         .keyBy(
@@ -273,10 +328,18 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
                                         return value;
                                     }
                                 });
-        DataStream<Tuple2<Integer, Integer>> result =
-                input.flatMap(new SubtaskIndexFlatMapper(numberElementsExpect));
+        if (enableAsyncState) {
+            input.enableAsyncState();
+            DataStream<Tuple2<Integer, Integer>> result =
+                    input.flatMap(new AsyncSubtaskIndexFlatMapper(numberElementsExpect));
 
-        result.addSink(new CollectionSink<>());
+            result.sinkTo(new CollectionSink<>());
+        } else {
+            DataStream<Tuple2<Integer, Integer>> result =
+                    input.flatMap(new SubtaskIndexFlatMapper(numberElementsExpect));
+
+            result.sinkTo(new CollectionSink<>());
+        }
 
         return env.getStreamGraph().getJobGraph(env.getClass().getClassLoader(), jobID.get());
     }
@@ -299,23 +362,40 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
             this.failAfterEmission = failAfterEmission;
         }
 
-        public void waitCheckpointCompleted() throws Exception {}
+        public boolean waitCheckpointCompleted() throws Exception {
+            return true;
+        }
 
         @Override
         public void run(SourceContext<Integer> ctx) throws Exception {
-            final int subtaskIndex = getRuntimeContext().getIndexOfThisSubtask();
+            final int subtaskIndex = getRuntimeContext().getTaskInfo().getIndexOfThisSubtask();
             while (running) {
                 if (counter < numberElements) {
                     synchronized (ctx.getCheckpointLock()) {
                         for (int value = subtaskIndex;
                                 value < numberKeys;
-                                value += getRuntimeContext().getNumberOfParallelSubtasks()) {
+                                value +=
+                                        getRuntimeContext()
+                                                .getTaskInfo()
+                                                .getNumberOfParallelSubtasks()) {
                             ctx.collect(value);
                         }
                         counter++;
                     }
                 } else {
-                    waitCheckpointCompleted();
+                    boolean newCheckpoint = false;
+                    long waited = 0L;
+                    running = false;
+                    // maximum wait 5min
+                    while (!newCheckpoint && waited < 300000L) {
+                        synchronized (ctx.getCheckpointLock()) {
+                            newCheckpoint = waitCheckpointCompleted();
+                        }
+                        if (!newCheckpoint) {
+                            waited += 10L;
+                            Thread.sleep(10L);
+                        }
+                    }
                     if (failAfterEmission) {
                         throw new FlinkRuntimeException(
                                 "Make job fail artificially, to retain completed checkpoint.");
@@ -359,7 +439,8 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
             sum.update(s);
 
             if (count == numberElements) {
-                out.collect(Tuple2.of(getRuntimeContext().getIndexOfThisSubtask(), s));
+                out.collect(
+                        Tuple2.of(getRuntimeContext().getTaskInfo().getIndexOfThisSubtask(), s));
             }
         }
 
@@ -379,25 +460,132 @@ public class RescaleCheckpointManuallyITCase extends TestLogger {
         }
     }
 
-    private static class CollectionSink<IN> implements SinkFunction<IN> {
+    private static class AsyncSubtaskIndexFlatMapper
+            extends RichFlatMapFunction<Integer, Tuple2<Integer, Integer>>
+            implements CheckpointedFunction {
 
-        private static final Set<Object> elements =
-                Collections.newSetFromMap(new ConcurrentHashMap<>());
+        private static final long serialVersionUID = 1L;
+
+        private transient org.apache.flink.api.common.state.v2.ValueState<Integer> counter;
+        private transient org.apache.flink.api.common.state.v2.ValueState<Integer> sum;
+
+        private final int numberElements;
+
+        public AsyncSubtaskIndexFlatMapper(int numberElements) {
+            this.numberElements = numberElements;
+        }
+
+        @Override
+        public void flatMap(Integer value, Collector<Tuple2<Integer, Integer>> out)
+                throws Exception {
+            StateFuture<Integer> counterFuture =
+                    counter.asyncValue()
+                            .thenCompose(
+                                    (Integer c) -> {
+                                        int updated = c == null ? 1 : c + 1;
+                                        return counter.asyncUpdate(updated)
+                                                .thenApply(nothing -> updated);
+                                    });
+            StateFuture<Integer> sumFuture =
+                    sum.asyncValue()
+                            .thenCompose(
+                                    (Integer s) -> {
+                                        int updated = s == null ? value : s + value;
+                                        return sum.asyncUpdate(updated)
+                                                .thenApply(nothing -> updated);
+                                    });
+
+            counterFuture.thenCombine(
+                    sumFuture,
+                    (c, s) -> {
+                        if (c == numberElements) {
+                            out.collect(
+                                    Tuple2.of(
+                                            getRuntimeContext()
+                                                    .getTaskInfo()
+                                                    .getIndexOfThisSubtask(),
+                                            s));
+                        }
+                        return null;
+                    });
+        }
+
+        @Override
+        public void snapshotState(FunctionSnapshotContext context) throws Exception {
+            // all managed, nothing to do.
+        }
+
+        @Override
+        public void initializeState(FunctionInitializationContext context) throws Exception {}
+
+        @Override
+        public void open(OpenContext openContext) throws Exception {
+            counter =
+                    ((StreamingRuntimeContext) getRuntimeContext())
+                            .getValueState(
+                                    new org.apache.flink.api.common.state.v2.ValueStateDescriptor<>(
+                                            "counter", BasicTypeInfo.INT_TYPE_INFO));
+            sum =
+                    ((StreamingRuntimeContext) getRuntimeContext())
+                            .getValueState(
+                                    new org.apache.flink.api.common.state.v2.ValueStateDescriptor<>(
+                                            "sum", BasicTypeInfo.INT_TYPE_INFO));
+        }
+    }
+
+    private static class CollectionSink<IN> implements Sink<IN> {
+
+        private static final ConcurrentHashMap<JobID, CollectionSinkWriter<?>> writers =
+                new ConcurrentHashMap<>();
 
         private static final long serialVersionUID = 1L;
 
         @SuppressWarnings("unchecked")
-        public static <IN> Set<IN> getElementsSet() {
-            return (Set<IN>) elements;
+        public static <IN> Set<IN> getElementsSet(JobID jobID) {
+            CollectionSinkWriter<IN> writer = (CollectionSinkWriter<IN>) writers.get(jobID);
+            if (writer == null) {
+                return Collections.emptySet();
+            } else {
+                return writer.getElementsSet();
+            }
         }
 
-        public static void clearElementsSet() {
-            elements.clear();
+        public static void clearElementsSet(JobID jobID) {
+            writers.remove(jobID);
         }
 
         @Override
-        public void invoke(IN value) throws Exception {
-            elements.add(value);
+        @SuppressWarnings("unchecked")
+        public SinkWriter<IN> createWriter(WriterInitContext context) throws IOException {
+            final CollectionSinkWriter<IN> writer =
+                    (CollectionSinkWriter<IN>)
+                            writers.computeIfAbsent(
+                                    context.getJobInfo().getJobId(),
+                                    (k) -> new CollectionSinkWriter<IN>());
+            return writer;
+        }
+
+        private static class CollectionSinkWriter<IN> implements SinkWriter<IN> {
+
+            private final Set<Object> elements =
+                    Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+            @Override
+            public void write(IN element, Context context)
+                    throws IOException, InterruptedException {
+                elements.add(element);
+            }
+
+            @Override
+            public void flush(boolean endOfInput) throws IOException, InterruptedException {}
+
+            @Override
+            public void close() throws Exception {}
+
+            @SuppressWarnings("unchecked")
+            public <IN> Set<IN> getElementsSet() {
+                return (Set<IN>) elements;
+            }
         }
     }
 }

@@ -42,6 +42,7 @@ import org.apache.flink.cep.nfa.sharedbuffer.SharedBuffer;
 import org.apache.flink.cep.nfa.sharedbuffer.SharedBufferAccessor;
 import org.apache.flink.cep.time.TimerService;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.VoidNamespace;
@@ -161,7 +162,12 @@ public class CepOperator<IN, KEY, OUT>
     }
 
     @Override
-    public void setup(
+    public boolean useInterruptibleTimers(ReadableConfig config) {
+        return true;
+    }
+
+    @Override
+    protected void setup(
             StreamTask<?, ?> containingTask,
             StreamConfig config,
             Output<StreamRecord<OUT>> output) {
@@ -194,10 +200,6 @@ public class CepOperator<IN, KEY, OUT>
                                         EVENT_QUEUE_STATE_NAME,
                                         LongSerializer.INSTANCE,
                                         new ListSerializer<>(inputSerializer)));
-
-        if (context.isRestored()) {
-            partialMatches.migrateOldState(getKeyedStateBackend(), computationStates);
-        }
     }
 
     @Override
@@ -326,6 +328,11 @@ public class CepOperator<IN, KEY, OUT>
 
         // STEP 4
         updateNFA(nfaState);
+
+        // In order to remove dangling partial matches.
+        if (nfaState.getPartialMatches().size() == 1 && nfaState.getCompletedMatches().isEmpty()) {
+            computationStates.clear();
+        }
     }
 
     @Override

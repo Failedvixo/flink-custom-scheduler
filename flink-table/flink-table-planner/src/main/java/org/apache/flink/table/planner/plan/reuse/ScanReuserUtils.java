@@ -21,6 +21,7 @@ package org.apache.flink.table.planner.plan.reuse;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ResolvedSchema;
+import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.planner.connectors.DynamicSourceUtils;
 import org.apache.flink.table.planner.plan.abilities.source.FilterPushDownSpec;
 import org.apache.flink.table.planner.plan.abilities.source.ProjectPushDownSpec;
@@ -32,6 +33,7 @@ import org.apache.flink.table.planner.plan.nodes.physical.common.CommonPhysicalT
 import org.apache.flink.table.planner.plan.nodes.physical.stream.StreamPhysicalCalc;
 import org.apache.flink.table.planner.plan.nodes.physical.stream.StreamPhysicalTableSourceScan;
 import org.apache.flink.table.planner.plan.schema.TableSourceTable;
+import org.apache.flink.table.types.logical.LocalZonedTimestampType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampKind;
@@ -46,10 +48,10 @@ import org.apache.calcite.rex.RexShuttle;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -58,6 +60,7 @@ import java.util.stream.Stream;
 import scala.Option;
 
 import static org.apache.flink.table.planner.connectors.DynamicSourceUtils.createRequiredMetadataColumns;
+import static org.apache.flink.table.planner.connectors.DynamicSourceUtils.extractMetadataMap;
 
 /** Utils for {@link ScanReuser}. */
 public class ScanReuserUtils {
@@ -200,35 +203,46 @@ public class ScanReuserUtils {
                 String name = newFieldNames.get(i);
                 LogicalType type = newSourceType.getTypeAt(i);
                 if (name.equals(rowtimeColumn)) {
-                    type = new TimestampType(type.isNullable(), TimestampKind.ROWTIME, 3);
+                    if (type instanceof LocalZonedTimestampType) {
+                        type =
+                                new LocalZonedTimestampType(
+                                        type.isNullable(), TimestampKind.ROWTIME, 3);
+                    } else if (type instanceof TimestampType) {
+                        type = new TimestampType(type.isNullable(), TimestampKind.ROWTIME, 3);
+                    } else {
+                        throw new TableException(
+                                String.format(
+                                        "Watermark only supports LocalZonedTimestampType and TimestampType "
+                                                + "while current type %s is not supported by watermark. "
+                                                + "This should not happen.",
+                                        type.asSummaryString()));
+                    }
                 }
                 fields.add(new RowType.RowField(name, type));
             }
             newSourceType = new RowType(fields);
         }
-        RexNode newExpr =
-                adjustRexNodeIndex(
-                                oldSourceType,
-                                newSourceType,
-                                Collections.singletonList(spec.getWatermarkExpr()))
-                        .get(0);
-        return spec.copy(newExpr, newSourceType);
+
+        RexShuttle adjustIndicesShuttle = createAdjustIndicesShuttle(oldSourceType, newSourceType);
+
+        RexNode adjustedWatermarkExpr = spec.getWatermarkExpr().accept(adjustIndicesShuttle);
+        RexNode adjustedRowtimeExpr =
+                spec.getRowtimeExpr().map(e -> e.accept(adjustIndicesShuttle)).orElse(null);
+        return spec.copy(adjustedWatermarkExpr, adjustedRowtimeExpr, newSourceType);
     }
 
-    private static List<RexNode> adjustRexNodeIndex(
-            RowType oldSourceType, RowType newSourceType, List<RexNode> rexNodes) {
+    private static RexShuttle createAdjustIndicesShuttle(
+            RowType oldSourceType, RowType newSourceType) {
         List<String> oldFieldNames = oldSourceType.getFieldNames();
         List<String> newFieldNames = newSourceType.getFieldNames();
-        RexShuttle shuttle =
-                new RexShuttle() {
-                    @Override
-                    public RexNode visitInputRef(RexInputRef inputRef) {
-                        String name = oldFieldNames.get(inputRef.getIndex());
-                        int newIndex = newFieldNames.indexOf(name);
-                        return new RexInputRef(newIndex, inputRef.getType());
-                    }
-                };
-        return rexNodes.stream().map(node -> node.accept(shuttle)).collect(Collectors.toList());
+        return new RexShuttle() {
+            @Override
+            public RexNode visitInputRef(RexInputRef inputRef) {
+                String name = oldFieldNames.get(inputRef.getIndex());
+                int newIndex = newFieldNames.indexOf(name);
+                return new RexInputRef(newIndex, inputRef.getType());
+            }
+        };
     }
 
     public static Calc createCalcForScan(RelNode input, RexProgram program) {
@@ -268,6 +282,15 @@ public class ScanReuserUtils {
                         .map(col -> col.getMetadataKey().orElse(col.getName()))
                         .collect(Collectors.toList())
                 : meta.getMetadataKeys();
+    }
+
+    public static List<String> enforceMetadataKeyOrder(
+            Set<String> allUsedMetadataKeys, DynamicTableSource source) {
+        Set<String> allOrderedMetadataKeysFromTable = extractMetadataMap(source).keySet();
+
+        return allOrderedMetadataKeysFromTable.stream()
+                .filter(allUsedMetadataKeys::contains)
+                .collect(Collectors.toList());
     }
 
     public static int[][] concatProjectedFields(

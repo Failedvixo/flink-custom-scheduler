@@ -26,8 +26,8 @@ from pyflink.common import Row, Configuration
 from pyflink.common.time import Time
 from pyflink.common.typeinfo import Types
 from pyflink.common.watermark_strategy import WatermarkStrategy, TimestampAssigner
-from pyflink.datastream import (TimeCharacteristic, RuntimeContext, SlotSharingGroup,
-                                StreamExecutionEnvironment, RuntimeExecutionMode)
+from pyflink.datastream import (RuntimeContext, SlotSharingGroup, StreamExecutionEnvironment,
+                                RuntimeExecutionMode)
 from pyflink.datastream.data_stream import DataStream
 from pyflink.datastream.functions import (AggregateFunction, CoMapFunction, CoFlatMapFunction,
                                           MapFunction, FilterFunction, FlatMapFunction,
@@ -38,9 +38,11 @@ from pyflink.datastream.output_tag import OutputTag
 from pyflink.datastream.state import (ValueStateDescriptor, ListStateDescriptor, MapStateDescriptor,
                                       ReducingStateDescriptor, ReducingState, AggregatingState,
                                       AggregatingStateDescriptor, StateTtlConfig)
-from pyflink.datastream.tests.test_util import DataStreamTestSinkFunction
+from pyflink.datastream.tests.test_util import DataStreamTestSinkFunction, \
+    SecondColumnTimestampAssigner
 from pyflink.java_gateway import get_gateway
 from pyflink.metrics import Counter, Meter, Distribution
+from pyflink.pyflink_gateway_server import get_log_dir, prepare_environment_variables
 from pyflink.testing.test_case_utils import (PyFlinkBatchTestCase, PyFlinkStreamingTestCase,
                                              PyFlinkTestCase)
 from pyflink.util.java_utils import get_j_env_configuration
@@ -122,7 +124,6 @@ class DataStreamTests(object):
 
     def test_keyed_process_function_with_state(self):
         self.env.get_config().set_auto_watermark_interval(2000)
-        self.env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
         data_stream = self.env.from_collection([(1, 'hi', '1603708211000'),
                                                 (2, 'hello', '1603708224000'),
                                                 (3, 'hi', '1603708226000'),
@@ -218,7 +219,7 @@ class DataStreamTests(object):
         class MyProcessFunction(KeyedProcessFunction):
 
             def __init__(self):
-                self.reducing_state = None  # type: ReducingState
+                self.reducing_state: ReducingState = None
 
             def open(self, runtime_context: RuntimeContext):
                 self.reducing_state = runtime_context.get_reducing_state(
@@ -262,7 +263,7 @@ class DataStreamTests(object):
         class MyProcessFunction(KeyedProcessFunction):
 
             def __init__(self):
-                self.aggregating_state = None  # type: AggregatingState
+                self.aggregating_state: AggregatingState = None
 
             def open(self, runtime_context: RuntimeContext):
                 descriptor = AggregatingStateDescriptor(
@@ -355,10 +356,10 @@ class DataStreamTests(object):
         self.assert_equals_sorted(expected, results)
 
     def test_co_broadcast_process(self):
-        ds = self.env.from_collection([1, 2, 3, 4, 5], type_info=Types.INT())  # type: DataStream
-        ds_broadcast = self.env.from_collection(
+        ds: DataStream = self.env.from_collection([1, 2, 3, 4, 5], type_info=Types.INT())
+        ds_broadcast: DataStream = self.env.from_collection(
             [(0, "a"), (1, "b")], type_info=Types.TUPLE([Types.INT(), Types.STRING()])
-        )  # type: DataStream
+        )
 
         class MyBroadcastProcessFunction(BroadcastProcessFunction):
             def __init__(self, map_state_desc):
@@ -401,17 +402,17 @@ class DataStreamTests(object):
         self.assert_equals_sorted(expected, self.test_sink.get_results())
 
     def test_keyed_co_broadcast_process(self):
-        ds = self.env.from_collection(
+        ds: DataStream = self.env.from_collection(
             [(1, '1603708211000'),
              (2, '1603708212000'),
              (3, '1603708213000'),
              (4, '1603708214000')],
-            type_info=Types.ROW([Types.INT(), Types.STRING()]))  # type: DataStream
-        ds_broadcast = self.env.from_collection(
+            type_info=Types.ROW([Types.INT(), Types.STRING()]))
+        ds_broadcast: DataStream = self.env.from_collection(
             [(0, '1603708215000', 'a'),
              (1, '1603708215000', 'b')],
             type_info=Types.ROW([Types.INT(), Types.STRING(), Types.STRING()])
-        )  # type: DataStream
+        )
         watermark_strategy = WatermarkStrategy.for_monotonous_timestamps() \
             .with_timestamp_assigner(SecondColumnTimestampAssigner())
         ds = ds.assign_timestamps_and_watermarks(watermark_strategy)
@@ -632,7 +633,7 @@ class DataStreamTests(object):
         class MyKeyedProcessFunction(KeyedProcessFunction):
 
             def __init__(self):
-                self.reducing_state = None  # type: ReducingState
+                self.reducing_state: ReducingState = None
 
             def open(self, context: RuntimeContext):
                 self.reducing_state = context.get_reducing_state(
@@ -668,7 +669,7 @@ class DataStreamTests(object):
         class MyKeyedCoProcessFunction(KeyedCoProcessFunction):
 
             def __init__(self):
-                self.reducing_state = None  # type: ReducingState
+                self.reducing_state: ReducingState = None
 
             def open(self, context: RuntimeContext):
                 self.reducing_state = context.get_reducing_state(
@@ -706,7 +707,7 @@ class DataStreamTests(object):
         class MyKeyedBroadcastProcessFunction(KeyedBroadcastProcessFunction):
 
             def __init__(self):
-                self.reducing_state = None  # type: ReducingState
+                self.reducing_state: ReducingState = None
 
             def open(self, context: RuntimeContext):
                 self.reducing_state = context.get_reducing_state(
@@ -1090,7 +1091,6 @@ class ProcessDataStreamTests(DataStreamTests):
     def test_process_function(self):
         self.env.set_parallelism(1)
         self.env.get_config().set_auto_watermark_interval(2000)
-        self.env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
         data_stream = self.env.from_collection([(1, '1603708211000'),
                                                 (2, '1603708224000'),
                                                 (3, '1603708226000'),
@@ -1266,12 +1266,12 @@ class EmbeddedDataStreamStreamTests(DataStreamStreamingTests, PyFlinkStreamingTe
 
         class MyMapFunction(MapFunction):
             def __init__(self):
-                self.counter = None  # type: Counter
+                self.counter: Counter = None
                 self.counter_value = 0
-                self.meter = None  # type: Meter
+                self.meter: Meter = None
                 self.meter_value = 0
                 self.value_to_expose = 0
-                self.distribution = None  # type: Distribution
+                self.distribution: Distribution = None
 
             def open(self, runtime_context: RuntimeContext):
                 self.counter = runtime_context.get_metrics_group().counter("my_counter")
@@ -1315,7 +1315,11 @@ class EmbeddedDataStreamBatchTests(DataStreamBatchTests, PyFlinkBatchTestCase):
 class CommonDataStreamTests(PyFlinkTestCase):
     def setUp(self) -> None:
         super(CommonDataStreamTests, self).setUp()
-        self.env = StreamExecutionEnvironment.get_execution_environment()
+        self.env = StreamExecutionEnvironment.get_execution_environment(Configuration.from_dict(
+            {
+                'python.logging.default.level': 'DEBUG',
+                'python.logging.level.overrides': f'{__name__}: INFO'
+            }))
         self.env.set_parallelism(2)
         self.env.set_runtime_mode(RuntimeExecutionMode.STREAMING)
         config = get_j_env_configuration(self.env._j_stream_execution_environment)
@@ -1652,6 +1656,51 @@ class CommonDataStreamTests(PyFlinkTestCase):
         expected = ['c', 'c', 'b']
         self.assert_equals_sorted(expected, results)
 
+    def test_logging_msg(self):
+        import logging
+        logger = logging.getLogger(__name__)
+
+        root_logger = logging.getLogger()
+
+        def log_function(e):
+            root_logger.debug(f'root: input is {e}')
+            logger.info(f'info: input is {e}')
+            logger.debug(f'debug: input is {e}')
+            return e
+        ds = self.env.from_collection(
+            [('a', 0)],
+            type_info=Types.ROW([Types.STRING(), Types.INT()])
+        ).map(log_function)
+        with ds.execute_and_collect() as results:
+            actual = [result for result in results]
+            self.assert_equals_sorted([Row(f0='a', f1=0)], actual)
+
+        # get the log file
+        env = dict(os.environ)
+        prepare_environment_variables(env)
+        log_dir = get_log_dir(env)
+        files = [os.path.join(log_dir, x) for x in os.listdir(log_dir)
+                 if 'python' in x and x.endswith('.log')]
+        if len(files) != 1:
+            raise Exception(f"log file number is not 1, but {len(files)}: {files}")
+
+        # search logs in the log file
+        find_root_debug_level_msg = False
+        find_any_internal_info_msg = False
+        with open(files[0], 'r', encoding='utf-8') as f:
+            for line in f:
+                if 'debug: input is' in line:
+                    raise Exception(f'Unexpected msg: {line}')
+                if 'root: input is' in line:
+                    find_root_debug_level_msg = True
+                if 'info: input is' in line:
+                    find_any_internal_info_msg = True
+
+        if not find_root_debug_level_msg:
+            raise Exception('external log debug-level msg not found')
+        if not find_any_internal_info_msg:
+            raise Exception('debug msg not found')
+
 
 class MyKeySelector(KeySelector):
     def get_key(self, value):
@@ -1734,9 +1783,3 @@ class MyReduceFunction(ReduceFunction):
             assert state_value == 3
         self.state.update(state_value)
         return result_value
-
-
-class SecondColumnTimestampAssigner(TimestampAssigner):
-
-    def extract_timestamp(self, value, record_timestamp) -> int:
-        return int(value[1])

@@ -47,14 +47,14 @@ import java.util.stream.Collectors;
 
 import static org.apache.flink.configuration.MetricOptions.REPORTERS_LIST;
 import static org.apache.flink.configuration.MetricOptions.SYSTEM_RESOURCE_METRICS;
-import static org.junit.Assert.assertEquals;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Integration tests for proper initialization of the system resource metrics. */
 class SystemResourcesMetricsITCase {
 
     @RegisterExtension
     @Order(1)
-    static final ContextClassLoaderExtension CONTEXT_CLASS_LOADER_EXTENSION =
+    private static final ContextClassLoaderExtension CONTEXT_CLASS_LOADER_EXTENSION =
             ContextClassLoaderExtension.builder()
                     .withServiceEntry(
                             MetricReporterFactory.class,
@@ -63,7 +63,7 @@ class SystemResourcesMetricsITCase {
 
     @RegisterExtension
     @Order(2)
-    static final MiniClusterExtension MINI_CLUSTER_RESOURCE =
+    private static final MiniClusterExtension MINI_CLUSTER_RESOURCE =
             new MiniClusterExtension(
                     new MiniClusterResourceConfiguration.Builder()
                             .setConfiguration(getConfiguration())
@@ -73,10 +73,10 @@ class SystemResourcesMetricsITCase {
 
     private static Configuration getConfiguration() {
         Configuration configuration = new Configuration();
-        configuration.setBoolean(SYSTEM_RESOURCE_METRICS, true);
-        configuration.setString(REPORTERS_LIST, "test_reporter");
-        configuration.setString(MetricOptions.SCOPE_NAMING_JM, "jobmanager");
-        configuration.setString(MetricOptions.SCOPE_NAMING_TM, "taskmanager");
+        configuration.set(SYSTEM_RESOURCE_METRICS, true);
+        configuration.set(REPORTERS_LIST, "test_reporter");
+        configuration.set(MetricOptions.SCOPE_NAMING_JM, "jobmanager");
+        configuration.set(MetricOptions.SCOPE_NAMING_TM, "taskmanager");
         MetricOptions.forReporter(configuration, "test_reporter")
                 .set(MetricOptions.REPORTER_FACTORY_CLASS, TestReporter.class.getName());
         return configuration;
@@ -84,7 +84,7 @@ class SystemResourcesMetricsITCase {
 
     @Test
     void startTaskManagerAndCheckForRegisteredSystemMetrics() throws Exception {
-        assertEquals(1, TestReporter.OPENED_REPORTERS.size());
+        assertThat(TestReporter.OPENED_REPORTERS).hasSize(1);
         TestReporter reporter = TestReporter.OPENED_REPORTERS.iterator().next();
 
         reporter.patternsExhaustedFuture.get(10, TimeUnit.SECONDS);

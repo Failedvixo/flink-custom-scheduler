@@ -18,7 +18,6 @@
 
 package org.apache.flink.runtime.rpc.pekko;
 
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.testutils.FlinkAssertions;
 import org.apache.flink.core.testutils.OneShotLatch;
@@ -235,16 +234,16 @@ class PekkoRpcActorTest {
                         PekkoRpcServiceConfiguration.defaultConfiguration());
 
         try {
-            final DeserializatonFailingEndpoint rpcEndpoint =
-                    new DeserializatonFailingEndpoint(serverPekkoRpcService);
+            final DeserializationFailingEndpoint rpcEndpoint =
+                    new DeserializationFailingEndpoint(serverPekkoRpcService);
             rpcEndpoint.start();
 
-            final DeserializatonFailingGateway rpcGateway =
-                    rpcEndpoint.getSelfGateway(DeserializatonFailingGateway.class);
+            final DeserializationFailingGateway rpcGateway =
+                    rpcEndpoint.getSelfGateway(DeserializationFailingGateway.class);
 
-            final DeserializatonFailingGateway connect =
+            final DeserializationFailingGateway connect =
                     clientPekkoRpcService
-                            .connect(rpcGateway.getAddress(), DeserializatonFailingGateway.class)
+                            .connect(rpcGateway.getAddress(), DeserializationFailingGateway.class)
                             .get();
 
             assertThatFuture(connect.doStuff())
@@ -372,9 +371,9 @@ class PekkoRpcActorTest {
             assertThat(terminationFuture).isNotDone();
 
             final CompletableFuture<Integer> firstAsyncOperationFuture =
-                    asyncOperationGateway.asyncOperation(Time.fromDuration(timeout));
+                    asyncOperationGateway.asyncOperation(timeout);
             final CompletableFuture<Integer> secondAsyncOperationFuture =
-                    asyncOperationGateway.asyncOperation(Time.fromDuration(timeout));
+                    asyncOperationGateway.asyncOperation(timeout);
 
             endpoint.awaitEnterAsyncOperation();
 
@@ -753,14 +752,14 @@ class PekkoRpcActorTest {
 
     // ------------------------------------------------------------------------
 
-    private interface DeserializatonFailingGateway extends RpcGateway {
+    private interface DeserializationFailingGateway extends RpcGateway {
         CompletableFuture<DeserializationFailingObject> doStuff();
     }
 
-    private static class DeserializatonFailingEndpoint extends RpcEndpoint
-            implements DeserializatonFailingGateway {
+    private static class DeserializationFailingEndpoint extends RpcEndpoint
+            implements DeserializationFailingGateway {
 
-        protected DeserializatonFailingEndpoint(RpcService rpcService) {
+        protected DeserializationFailingEndpoint(RpcService rpcService) {
             super(rpcService);
         }
 
@@ -845,7 +844,7 @@ class PekkoRpcActorTest {
     // ------------------------------------------------------------------------
 
     interface AsyncOperationGateway extends RpcGateway {
-        CompletableFuture<Integer> asyncOperation(@RpcTimeout Time timeout);
+        CompletableFuture<Integer> asyncOperation(@RpcTimeout Duration timeout);
     }
 
     private static class TerminatingAfterOnStopFutureCompletionEndpoint extends RpcEndpoint
@@ -866,7 +865,7 @@ class PekkoRpcActorTest {
         }
 
         @Override
-        public CompletableFuture<Integer> asyncOperation(Time timeout) {
+        public CompletableFuture<Integer> asyncOperation(Duration timeout) {
             asyncOperationCounter.incrementAndGet();
             enterAsyncOperation.trigger();
 

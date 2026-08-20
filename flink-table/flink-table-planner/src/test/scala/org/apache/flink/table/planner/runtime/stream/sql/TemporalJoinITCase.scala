@@ -17,30 +17,31 @@
  */
 package org.apache.flink.table.planner.runtime.stream.sql
 
+import org.apache.flink.core.testutils.EachCallbackWrapper
 import org.apache.flink.table.api.TableException
 import org.apache.flink.table.api.config.ExecutionConfigOptions
 import org.apache.flink.table.planner.factories.TestValuesTableFactory
-import org.apache.flink.table.planner.factories.TestValuesTableFactory.{getResults, registerData}
+import org.apache.flink.table.planner.factories.TestValuesTableFactory.{getResultsAsStrings, registerData}
 import org.apache.flink.table.planner.runtime.utils.StreamingWithStateTestBase
 import org.apache.flink.table.planner.runtime.utils.StreamingWithStateTestBase.StateBackendMode
-import org.apache.flink.table.utils.LegacyRowResource
+import org.apache.flink.table.utils.LegacyRowExtension
+import org.apache.flink.testutils.junit.extensions.parameterized.ParameterizedTestExtension
 import org.apache.flink.types.Row
 
-import org.junit._
-import org.junit.Assert.assertEquals
-import org.junit.runner.RunWith
-import org.junit.runners.Parameterized
+import org.assertj.core.api.Assertions.{assertThat, assertThatThrownBy}
+import org.junit.jupiter.api.{BeforeEach, TestTemplate}
+import org.junit.jupiter.api.extension.{ExtendWith, RegisterExtension}
 
 import java.time.LocalDateTime
 import java.time.format.DateTimeParseException
 
 import scala.collection.JavaConversions._
 
-@RunWith(classOf[Parameterized])
+@ExtendWith(Array(classOf[ParameterizedTestExtension]))
 class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTestBase(state) {
 
-  @Rule
-  def usesLegacyRows: LegacyRowResource = LegacyRowResource.INSTANCE
+  @RegisterExtension private val _: EachCallbackWrapper[LegacyRowExtension] =
+    new EachCallbackWrapper[LegacyRowExtension](new LegacyRowExtension)
 
   // test data for Processing-Time temporal table join
   val procTimeOrderData = List(
@@ -127,7 +128,7 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
     changelogRow("+I", "US Dollar", "no1", 106L, "2020-08-16T00:02:00")
   )
 
-  @Before
+  @BeforeEach
   def prepare(): Unit = {
     val procTimeOrderDataId = registerData(procTimeOrderData)
     tEnv.executeSql(s"""
@@ -333,33 +334,35 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
    * the result here. Instead of that, here we are just testing whether there are no exceptions in a
    * full blown ITCase. Actual correctness is tested in unit tests.
    */
-  @Test
+  @TestTemplate
   def testProcTimeTemporalJoin(): Unit = {
     val sql = "INSERT INTO proctime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.proctime, r.rate, r.proctime " +
       " FROM orders_proctime AS o " +
       " JOIN currency_proctime FOR SYSTEM_TIME AS OF o.proctime as r " +
-      " ON o.currency = r.currency and o.currency_no = r.currency_no"
+      " ON o.currency = r.currency and o.currency_no = r.currency_no " +
+      "ON CONFLICT DO DEDUPLICATE"
 
-    expectedException.expect(classOf[TableException])
-    expectedException.expectMessage("Processing-time temporal join is not supported yet.")
-    tEnv.executeSql(sql).await()
+    assertThatThrownBy(() => tEnv.executeSql(sql).await())
+      .hasMessage("Processing-time temporal join is not supported yet.")
+      .isInstanceOf[TableException]
   }
 
-  @Test
+  @TestTemplate
   def testProcTimeLeftTemporalJoin(): Unit = {
     val sql = "INSERT INTO proctime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.proctime, r.rate, r.proctime " +
       " FROM orders_proctime AS o " +
       " LEFT JOIN currency_proctime FOR SYSTEM_TIME AS OF o.proctime as r " +
-      " ON o.currency = r.currency and o.currency_no = r.currency_no"
+      " ON o.currency = r.currency and o.currency_no = r.currency_no " +
+      "ON CONFLICT DO DEDUPLICATE"
 
-    expectedException.expect(classOf[TableException])
-    expectedException.expectMessage("Processing-time temporal join is not supported yet.")
-    tEnv.executeSql(sql).await()
+    assertThatThrownBy(() => tEnv.executeSql(sql).await())
+      .hasMessage("Processing-time temporal join is not supported yet.")
+      .isInstanceOf[TableException]
   }
 
-  @Test
+  @TestTemplate
   def testProcTimeTemporalJoinChangelogSource(): Unit = {
     createSinkTable(
       "proctime_sink1",
@@ -376,66 +379,70 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       " JOIN changelog_currency_proctime FOR SYSTEM_TIME AS OF o.proctime as r " +
       " ON o.currency = r.currency and o.currency_no = r.currency_no"
 
-    expectedException.expect(classOf[TableException])
-    expectedException.expectMessage("Processing-time temporal join is not supported yet.")
-    tEnv.executeSql(sql).await()
+    assertThatThrownBy(() => tEnv.executeSql(sql).await())
+      .hasMessage("Processing-time temporal join is not supported yet.")
+      .isInstanceOf[TableException]
   }
 
-  @Test
+  @TestTemplate
   def testProcTimeTemporalJoinWithView(): Unit = {
     val sql = "INSERT INTO proctime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.proctime, r.rate, r.proctime " +
       " FROM orders_proctime AS o " +
       " JOIN latest_rates FOR SYSTEM_TIME AS OF o.proctime as r " +
-      " ON o.currency = r.currency and o.currency_no = r.currency_no"
+      " ON o.currency = r.currency and o.currency_no = r.currency_no " +
+      "ON CONFLICT DO DEDUPLICATE"
 
-    expectedException.expect(classOf[TableException])
-    expectedException.expectMessage("Processing-time temporal join is not supported yet.")
-    tEnv.executeSql(sql).await()
+    assertThatThrownBy(() => tEnv.executeSql(sql).await())
+      .hasMessage("Processing-time temporal join is not supported yet.")
+      .isInstanceOf[TableException]
   }
 
-  @Test
+  @TestTemplate
   def testProcTimeLeftTemporalJoinWithView(): Unit = {
     val sql = "INSERT INTO proctime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.proctime, r.rate, r.proctime " +
       " FROM orders_proctime AS o " +
       " LEFT JOIN latest_rates FOR SYSTEM_TIME AS OF o.proctime as r " +
-      " ON o.currency = r.currency and o.currency_no = r.currency_no"
+      " ON o.currency = r.currency and o.currency_no = r.currency_no " +
+      "ON CONFLICT DO DEDUPLICATE"
 
-    expectedException.expect(classOf[TableException])
-    expectedException.expectMessage("Processing-time temporal join is not supported yet.")
-    tEnv.executeSql(sql).await()
+    assertThatThrownBy(() => tEnv.executeSql(sql).await())
+      .hasMessage("Processing-time temporal join is not supported yet.")
+      .isInstanceOf[TableException]
   }
 
-  @Test
+  @TestTemplate
   def testProcTimeTemporalJoinWithViewNonEqui(): Unit = {
     val sql = "INSERT INTO proctime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.proctime, r.rate, r.proctime " +
       " FROM orders_proctime AS o " +
       " JOIN latest_rates FOR SYSTEM_TIME AS OF o.proctime AS r " +
       " ON o.currency = r.currency and o.currency_no = r.currency_no " +
-      " AND o.amount > r.rate"
+      " AND o.amount > r.rate " +
+      "ON CONFLICT DO DEDUPLICATE"
 
-    expectedException.expect(classOf[TableException])
-    expectedException.expectMessage("Processing-time temporal join is not supported yet.")
-    tEnv.executeSql(sql).await()
+    assertThatThrownBy(() => tEnv.executeSql(sql).await())
+      .hasMessage("Processing-time temporal join is not supported yet.")
+      .isInstanceOf[TableException]
   }
 
-  @Test
+  @TestTemplate
   def testProcTimeLeftTemporalJoinWithViewWithPredicates(): Unit = {
     val sql = "INSERT INTO proctime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.proctime, r.rate, r.proctime " +
       " FROM orders_proctime AS o " +
       " LEFT JOIN latest_rates FOR SYSTEM_TIME AS OF o.proctime AS r " +
       " ON o.currency = r.currency and o.currency_no = r.currency_no" +
-      " AND o.amount > r.rate"
+      " AND o.amount > r.rate " +
+      "ON CONFLICT DO DEDUPLICATE"
 
-    expectedException.expect(classOf[TableException])
-    expectedException.expectMessage("Processing-time temporal join is not supported yet.")
-    tEnv.executeSql(sql).await()
+    assertThatThrownBy(() => tEnv.executeSql(sql).await())
+      .hasMessage("Processing-time temporal join is not supported yet.")
+      .isInstanceOf[TableException]
   }
 
-  @Test
+  @TestTemplate
   def testProcTimeMultiTemporalJoin(): Unit = {
     createSinkTable(
       "proctime_sink2",
@@ -455,20 +462,22 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       " JOIN latest_rates FOR SYSTEM_TIME AS OF o.proctime as r " +
       " ON o.currency = r.currency and o.currency_no = r.currency_no " +
       " JOIN currency_proctime FOR SYSTEM_TIME AS OF o.proctime as r1" +
-      " ON o.currency = r1.currency and o.currency_no = r1.currency_no"
+      " ON o.currency = r1.currency and o.currency_no = r1.currency_no " +
+      "ON CONFLICT DO DEDUPLICATE"
 
-    expectedException.expect(classOf[TableException])
-    expectedException.expectMessage("Processing-time temporal join is not supported yet.")
-    tEnv.executeSql(sql).await()
+    assertThatThrownBy(() => tEnv.executeSql(sql).await())
+      .hasMessage("Processing-time temporal join is not supported yet.")
+      .isInstanceOf[TableException]
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeTemporalJoin(): Unit = {
     val sql = "INSERT INTO rowtime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.order_time, r.rate, r.currency_time " +
       " FROM orders_rowtime AS o JOIN versioned_currency_with_single_key " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
-      " ON o.currency = r.currency"
+      " ON o.currency = r.currency " +
+      "ON CONFLICT DO DEDUPLICATE"
 
     tEnv.executeSql(sql).await()
     val expected = List(
@@ -477,16 +486,17 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       "3,RMB,40,2020-08-15T00:03,702,2020-08-15T00:00:04",
       "4,Euro,14,2020-08-16T00:04,118,2020-08-16T00:01"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeTemporalJoinThatJoinkeyContainsPk(): Unit = {
     val sql = "INSERT INTO rowtime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.order_time, r.rate, r.currency_time " +
       " FROM orders_rowtime AS o JOIN versioned_currency_with_single_key " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
-      " ON o.currency = r.currency AND o.currency_no = r.currency_no"
+      " ON o.currency = r.currency AND o.currency_no = r.currency_no " +
+      "ON CONFLICT DO DEDUPLICATE"
 
     tEnv.executeSql(sql).await()
     val expected = List(
@@ -495,10 +505,10 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       "3,RMB,40,2020-08-15T00:03,702,2020-08-15T00:00:04",
       "4,Euro,14,2020-08-16T00:04,118,2020-08-16T00:01"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeTemporalJoinWithFilter(): Unit = {
     tEnv.executeSql(
       "CREATE VIEW v1 AS" +
@@ -508,21 +518,23 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       " FROM orders_rowtime AS o " +
       " JOIN v1 FOR SYSTEM_TIME AS OF o.order_time as r " +
       " ON o.currency = r.currency" +
-      " WHERE rate < 115"
+      " WHERE rate < 115 " +
+      "ON CONFLICT DO DEDUPLICATE"
     tEnv.executeSql(sql).await()
     val expected = List(
       "1,Euro,12,2020-08-15T00:01,114,2020-08-15T00:00:01",
       "2,US Dollar,18,2020-08-16T00:03,106,2020-08-16T00:02")
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeLeftTemporalJoin(): Unit = {
     val sql = "INSERT INTO rowtime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.order_time, r.rate, r.currency_time " +
       " FROM orders_rowtime AS o LEFT JOIN versioned_currency_with_single_key " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
-      " ON o.currency = r.currency"
+      " ON o.currency = r.currency " +
+      "ON CONFLICT DO DEDUPLICATE"
     tEnv.executeSql(sql).await()
 
     val expected = List(
@@ -532,16 +544,17 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       "4,Euro,14,2020-08-16T00:04,118,2020-08-16T00:01",
       "5,RMB,40,2020-08-16T00:03,null,null"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeTemporalJoinChangelogUsingBeforeTime(): Unit = {
     val sql = "INSERT INTO rowtime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.order_time, r.rate, r.currency_time " +
       " FROM orders_rowtime AS o LEFT JOIN currency_using_update_before_time " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
-      " ON o.currency = r.currency"
+      " ON o.currency = r.currency " +
+      "ON CONFLICT DO DEDUPLICATE"
     tEnv.executeSql(sql).await()
 
     // Note: the event time semantics in delete event is when the delete event happened,
@@ -553,16 +566,17 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       "4,Euro,14,2020-08-16T00:04,118,2020-08-16T00:01",
       "5,RMB,40,2020-08-16T00:03,null,null"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeLeftTemporalJoinUpsertSource(): Unit = {
     val sql = "INSERT INTO rowtime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.order_time, r.rate, r.currency_time " +
       " FROM orders_rowtime AS o LEFT JOIN upsert_currency " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
-      " ON o.currency = r.currency "
+      " ON o.currency = r.currency " +
+      "ON CONFLICT DO DEDUPLICATE"
     tEnv.executeSql(sql).await()
 
     // Note: the event time semantics in delete event is when the delete event happened,
@@ -574,16 +588,17 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       "4,Euro,14,2020-08-16T00:04,118,2020-08-16T00:01",
       "5,RMB,40,2020-08-16T00:03,null,null"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeTemporalJoinWithMultiKeys(): Unit = {
     val sql = "INSERT INTO rowtime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.order_time, r.rate, r.currency_time " +
       " FROM orders_rowtime AS o JOIN versioned_currency_with_multi_key " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
-      " ON o.currency_no = r.currency_no AND o.currency = r.currency"
+      " ON o.currency_no = r.currency_no AND o.currency = r.currency " +
+      "ON CONFLICT DO DEDUPLICATE"
     tEnv.executeSql(sql).await()
 
     val expected = List(
@@ -592,43 +607,45 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       "3,RMB,40,2020-08-15T00:03,702,2020-08-15T00:00:04",
       "4,Euro,14,2020-08-16T00:04,118,2020-08-16T00:01"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeTemporalJoinWithNonEqualCondition(): Unit = {
     val sql = "INSERT INTO rowtime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.order_time, r.rate, r.currency_time " +
       " FROM orders_rowtime AS o JOIN currency_using_update_before_time " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
       " ON o.currency = r.currency and o.currency_no = r.currency_no " +
-      " and o.order_id < 5 and r.rate > 102"
+      " and o.order_id < 5 and r.rate > 102 " +
+      "ON CONFLICT DO DEDUPLICATE"
     tEnv.executeSql(sql).await()
     val expected = List(
       "1,Euro,12,2020-08-15T00:01,114,2020-08-15T00:00:01",
       "2,US Dollar,18,2020-08-16T00:03,106,2020-08-16T00:02",
       "4,Euro,14,2020-08-16T00:04,118,2020-08-16T00:01"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeTemporalJoinEqualConditionOnKey(): Unit = {
     val sql = "INSERT INTO rowtime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.order_time, r.rate, r.currency_time " +
       " FROM orders_rowtime AS o JOIN currency_using_update_before_time " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
       " ON o.currency = r.currency and o.currency_no = r.currency_no " +
-      " and o.currency = 'Euro' and r.rate > 102"
+      " and o.currency = 'Euro' and r.rate > 102 " +
+      "ON CONFLICT DO DEDUPLICATE"
     tEnv.executeSql(sql).await()
     val expected = List(
       "1,Euro,12,2020-08-15T00:01,114,2020-08-15T00:00:01",
       "4,Euro,14,2020-08-16T00:04,118,2020-08-16T00:01"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeMultiTemporalJoin(): Unit = {
     createSinkTable(
       "rowtime_sink1",
@@ -653,7 +670,8 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
       " ON o.currency = r.currency and o.currency_no = r.currency_no " +
       " LEFT JOIN versioned_currency_with_single_key  FOR SYSTEM_TIME AS OF o.order_time as r1 " +
-      " ON o.currency = r1.currency"
+      " ON o.currency = r1.currency " +
+      "ON CONFLICT DO DEDUPLICATE"
 
     tEnv.executeSql(sql).await()
     val expected = List(
@@ -663,17 +681,18 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       "4,Euro,14,2020-08-16T00:04,118,2020-08-16T00:01,118,2020-08-16T00:01",
       "5,RMB,40,2020-08-16T00:03,null,null,null,null"
     )
-    assertEquals(expected.sorted, getResults("rowtime_sink1").sorted)
+    assertThat(getResultsAsStrings("rowtime_sink1").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeTemporalJoinWithDeduplicateFirstView(): Unit = {
     val sql = "INSERT INTO rowtime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.order_time, r.rate, r.currency_time " +
       " FROM orders_rowtime AS o " +
       " LEFT JOIN currency_deduplicated_first_row " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
-      " ON o.currency = r.currency"
+      " ON o.currency = r.currency " +
+      "ON CONFLICT DO DEDUPLICATE"
 
     tEnv.executeSql(sql).await()
     val expected = List(
@@ -683,17 +702,18 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       "4,Euro,14,2020-08-16T00:04,114,2020-08-15T00:00:01",
       "5,RMB,40,2020-08-16T00:03,702,2020-08-15T00:00:04"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeTemporalJoinWithDeduplicateLastView(): Unit = {
     val sql = "INSERT INTO rowtime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.order_time, r.rate, r.currency_time " +
       " FROM orders_rowtime AS o " +
       " JOIN currency_deduplicated_last_row " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
-      " ON o.currency = r.currency"
+      " ON o.currency = r.currency " +
+      "ON CONFLICT DO DEDUPLICATE"
 
     tEnv.executeSql(sql).await()
     val expected = List(
@@ -703,17 +723,18 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       "4,Euro,14,2020-08-16T00:04,118,2020-08-16T00:01",
       "5,RMB,40,2020-08-16T00:03,702,2020-08-15T00:00:04"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testEventTimeLeftTemporalJoinWithView(): Unit = {
     val sql = "INSERT INTO rowtime_default_sink " +
       " SELECT o.order_id, o.currency, o.amount, o.order_time, r.rate, r.currency_time " +
       " FROM orders_rowtime AS o " +
       " LEFT JOIN currency_deduplicated_last_row " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
-      " ON o.currency = r.currency AND substr(o.currency, 1, 2) = 'US' "
+      " ON o.currency = r.currency AND substr(o.currency, 1, 2) = 'US' " +
+      "ON CONFLICT DO DEDUPLICATE"
 
     tEnv.executeSql(sql).await()
     val expected = List(
@@ -723,10 +744,10 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       "4,Euro,14,2020-08-16T00:04,null,null",
       "5,RMB,40,2020-08-16T00:03,null,null"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
-  @Test
+  @TestTemplate
   def testMiniBatchEventTimeViewTemporalJoin(): Unit = {
     tEnv.getConfig
       .set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, Boolean.box(true))
@@ -740,7 +761,8 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       " FROM orders_rowtime AS o JOIN " +
       " currency_deduplicated_last_row " +
       " FOR SYSTEM_TIME AS OF o.order_time as r " +
-      " ON o.currency = r.currency"
+      " ON o.currency = r.currency " +
+      "ON CONFLICT DO DEDUPLICATE"
 
     tEnv.executeSql(sql).await()
     val expected = List(
@@ -750,7 +772,7 @@ class TemporalJoinITCase(state: StateBackendMode) extends StreamingWithStateTest
       "4,Euro,14,2020-08-16T00:04,118,2020-08-16T00:01",
       "5,RMB,40,2020-08-16T00:03,702,2020-08-15T00:00:04"
     )
-    assertEquals(expected.sorted, getResults("rowtime_default_sink").sorted)
+    assertThat(getResultsAsStrings("rowtime_default_sink").sorted).isEqualTo(expected.sorted)
   }
 
   private def createSinkTable(tableName: String, columns: Option[String]): Unit = {

@@ -19,30 +19,29 @@
 package org.apache.flink.test.checkpointing;
 
 import org.apache.flink.FlinkVersion;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.contrib.streaming.state.EmbeddedRocksDBStateBackend;
 import org.apache.flink.runtime.state.StateBackendLoader;
-import org.apache.flink.runtime.state.hashmap.HashMapStateBackend;
-import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 import org.apache.flink.streaming.api.datastream.BroadcastStream;
 import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.KeyedBroadcastProcessFunction;
-import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.apache.flink.streaming.api.functions.source.legacy.SourceFunction;
+import org.apache.flink.streaming.util.RestartStrategyUtils;
+import org.apache.flink.streaming.util.StateBackendUtils;
 import org.apache.flink.test.checkpointing.utils.MigrationTestUtils;
 import org.apache.flink.test.checkpointing.utils.SnapshotMigrationTestBase;
 import org.apache.flink.test.util.MigrationTest;
+import org.apache.flink.testutils.junit.extensions.parameterized.Parameter;
+import org.apache.flink.testutils.junit.extensions.parameterized.ParameterizedTestExtension;
+import org.apache.flink.testutils.junit.extensions.parameterized.Parameters;
 import org.apache.flink.util.Collector;
 
-import org.junit.Assert;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
+import org.junit.jupiter.api.TestTemplate;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import javax.annotation.Nullable;
 
@@ -53,23 +52,25 @@ import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 /**
  * Migration ITCases for a stateful job with broadcast state. The tests are parameterized to
  * (potentially) cover migrating for multiple previous Flink versions, as well as for different
  * state backends.
  */
-@RunWith(Parameterized.class)
-public class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigrationTestBase
+@ExtendWith(ParameterizedTestExtension.class)
+class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigrationTestBase
         implements MigrationTest {
 
     private static final int NUM_SOURCE_ELEMENTS = 4;
 
-    @Parameterized.Parameters(name = "Test snapshot: {0}")
-    public static Collection<SnapshotSpec> createSpecsForTestRuns() {
+    @Parameters(name = "Test snapshot: {0}")
+    private static Collection<SnapshotSpec> createSpecsForTestRuns() {
         return internalParameters(null);
     }
 
-    public static Collection<SnapshotSpec> createSpecsForTestDataGeneration(
+    private static Collection<SnapshotSpec> createSpecsForTestDataGeneration(
             FlinkVersion targetVersion) {
         return internalParameters(targetVersion);
     }
@@ -88,11 +89,6 @@ public class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigration
                 };
 
         Collection<SnapshotSpec> parameters = new LinkedList<>();
-        parameters.addAll(
-                SnapshotSpec.withVersions(
-                        StateBackendLoader.MEMORY_STATE_BACKEND_NAME,
-                        SnapshotType.SAVEPOINT_CANONICAL,
-                        getFlinkVersions.apply(FlinkVersion.v1_8, FlinkVersion.v1_14)));
         parameters.addAll(
                 SnapshotSpec.withVersions(
                         StateBackendLoader.HASHMAP_STATE_BACKEND_NAME,
@@ -138,19 +134,15 @@ public class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigration
         return parameters;
     }
 
-    private final SnapshotSpec snapshotSpec;
-
-    public StatefulJobWBroadcastStateMigrationITCase(SnapshotSpec snapshotSpec) throws Exception {
-        this.snapshotSpec = snapshotSpec;
-    }
+    @Parameter private SnapshotSpec snapshotSpec;
 
     @ParameterizedSnapshotsGenerator("createSpecsForTestDataGeneration")
-    public void generateSnapshots(SnapshotSpec snapshotSpec) throws Exception {
+    private void generateSnapshots(SnapshotSpec snapshotSpec) throws Exception {
         testOrCreateSavepoint(ExecutionMode.CREATE_SNAPSHOT, snapshotSpec);
     }
 
-    @Test
-    public void testSavepoint() throws Exception {
+    @TestTemplate
+    void testSavepoint() throws Exception {
         testOrCreateSavepoint(ExecutionMode.VERIFY_SNAPSHOT, snapshotSpec);
     }
 
@@ -159,11 +151,11 @@ public class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigration
         final int parallelism = 4;
 
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.setRestartStrategy(RestartStrategies.noRestart());
+        RestartStrategyUtils.configureNoRestartStrategy(env);
 
         switch (snapshotSpec.getStateBackendType()) {
             case StateBackendLoader.ROCKSDB_STATE_BACKEND_NAME:
-                env.setStateBackend(new EmbeddedRocksDBStateBackend());
+                StateBackendUtils.configureRocksDBStateBackend(env);
 
                 if (executionMode == ExecutionMode.CREATE_SNAPSHOT) {
                     // disable changelog backend for now to ensure determinism in test data
@@ -171,11 +163,8 @@ public class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigration
                     env.enableChangelogStateBackend(false);
                 }
                 break;
-            case StateBackendLoader.MEMORY_STATE_BACKEND_NAME:
-                env.setStateBackend(new MemoryStateBackend());
-                break;
             case StateBackendLoader.HASHMAP_STATE_BACKEND_NAME:
-                env.setStateBackend(new HashMapStateBackend());
+                StateBackendUtils.configureHashMapStateBackend(env);
                 break;
             default:
                 throw new UnsupportedOperationException();
@@ -362,8 +351,8 @@ public class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigration
         private MapStateDescriptor<String, Long> secondStateDesc;
 
         @Override
-        public void open(Configuration parameters) throws Exception {
-            super.open(parameters);
+        public void open(OpenContext openContext) throws Exception {
+            super.open(openContext);
 
             firstStateDesc =
                     new MapStateDescriptor<>(
@@ -407,8 +396,8 @@ public class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigration
         private MapStateDescriptor<Long, String> stateDesc;
 
         @Override
-        public void open(Configuration parameters) throws Exception {
-            super.open(parameters);
+        public void open(OpenContext openContext) throws Exception {
+            super.open(openContext);
 
             stateDesc =
                     new MapStateDescriptor<>(
@@ -456,8 +445,8 @@ public class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigration
         }
 
         @Override
-        public void open(Configuration parameters) throws Exception {
-            super.open(parameters);
+        public void open(OpenContext openContext) throws Exception {
+            super.open(openContext);
 
             firstStateDesc =
                     new MapStateDescriptor<>(
@@ -482,14 +471,14 @@ public class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigration
                     ctx.getBroadcastState(firstStateDesc).immutableEntries()) {
                 actualFirstState.put(entry.getKey(), entry.getValue());
             }
-            Assert.assertEquals(expectedFirstState, actualFirstState);
+            assertThat(actualFirstState).isEqualTo(expectedFirstState);
 
             final Map<String, Long> actualSecondState = new HashMap<>();
             for (Map.Entry<String, Long> entry :
                     ctx.getBroadcastState(secondStateDesc).immutableEntries()) {
                 actualSecondState.put(entry.getKey(), entry.getValue());
             }
-            Assert.assertEquals(expectedSecondState, actualSecondState);
+            assertThat(actualSecondState).isEqualTo(expectedSecondState);
 
             out.collect(value);
         }
@@ -521,8 +510,8 @@ public class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigration
         }
 
         @Override
-        public void open(Configuration parameters) throws Exception {
-            super.open(parameters);
+        public void open(OpenContext openContext) throws Exception {
+            super.open(openContext);
 
             stateDesc =
                     new MapStateDescriptor<>(
@@ -540,7 +529,7 @@ public class StatefulJobWBroadcastStateMigrationITCase extends SnapshotMigration
                     ctx.getBroadcastState(stateDesc).immutableEntries()) {
                 actualState.put(entry.getKey(), entry.getValue());
             }
-            Assert.assertEquals(expectedState, actualState);
+            assertThat(actualState).isEqualTo(expectedState);
 
             out.collect(value);
         }

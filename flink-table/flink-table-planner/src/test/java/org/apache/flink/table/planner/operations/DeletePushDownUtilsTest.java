@@ -38,13 +38,19 @@ import org.apache.flink.table.planner.delegation.PlannerContext;
 import org.apache.flink.table.planner.factories.TestUpdateDeleteTableFactory;
 import org.apache.flink.table.planner.parse.CalciteParser;
 import org.apache.flink.table.planner.utils.PlannerMocks;
+import org.apache.flink.table.planner.utils.TestSimpleDynamicTableSourceFactory;
+import org.apache.flink.table.planner.utils.TimestampStringUtils;
 import org.apache.flink.table.utils.CatalogManagerMocks;
 
 import org.apache.calcite.rel.RelRoot;
 import org.apache.calcite.rel.logical.LogicalTableModify;
 import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.util.TimestampString;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -93,7 +99,7 @@ public class DeletePushDownUtilsTest {
                         tableId, catalog, catalogManager.resolveCatalogTable(catalogTable));
         LogicalTableModify tableModify = getTableModifyFromSql("DELETE FROM t");
         Optional<DynamicTableSink> optionalDynamicTableSink =
-                DeletePushDownUtils.getDynamicTableSink(resolvedTable, tableModify, catalogManager);
+                DeletePushDownUtils.getDynamicTableSink(resolvedTable, tableModify);
         // verify we can get the dynamic table sink
         assertThat(optionalDynamicTableSink).isPresent();
         assertThat(optionalDynamicTableSink.get())
@@ -109,7 +115,7 @@ public class DeletePushDownUtilsTest {
                         tableId, catalog, catalogManager.resolveCatalogTable(catalogTable));
         tableModify = getTableModifyFromSql("DELETE FROM t1");
         optionalDynamicTableSink =
-                DeletePushDownUtils.getDynamicTableSink(resolvedTable, tableModify, catalogManager);
+                DeletePushDownUtils.getDynamicTableSink(resolvedTable, tableModify);
         // verify it should be empty since it's not an instance of DynamicTableSink but is legacy
         // TableSink
         assertThat(optionalDynamicTableSink).isEmpty();
@@ -118,15 +124,22 @@ public class DeletePushDownUtilsTest {
     @Test
     public void testGetResolveFilterExpressions() {
         CatalogTable catalogTable =
-                CatalogTable.of(
-                        Schema.newBuilder()
-                                .column("f0", DataTypes.INT().notNull())
-                                .column("f1", DataTypes.STRING().nullable())
-                                .column("f2", DataTypes.BIGINT().nullable())
-                                .build(),
-                        null,
-                        Collections.emptyList(),
-                        Collections.emptyMap());
+                CatalogTable.newBuilder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("f0", DataTypes.INT().notNull())
+                                        .column("f1", DataTypes.STRING().nullable())
+                                        .column("f2", DataTypes.BIGINT().nullable())
+                                        .column(
+                                                "f3",
+                                                DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                                                        .nullable())
+                                        .build())
+                        .options(
+                                Map.of(
+                                        "connector",
+                                        TestSimpleDynamicTableSourceFactory.IDENTIFIER()))
+                        .build();
         catalogManager.createTable(
                 catalogTable, ObjectIdentifier.of("builtin", "default", "t"), false);
 
@@ -154,18 +167,29 @@ public class DeletePushDownUtilsTest {
         tableModify = getTableModifyFromSql("DELETE FROM t where f0 > (select count(1) from t)");
         optionalResolvedExpressions = DeletePushDownUtils.getResolvedFilterExpressions(tableModify);
         assertThat(optionalResolvedExpressions).isEmpty();
+
+        String dateTime = "2024-05-13 08:00:00";
+        tableModify =
+                getTableModifyFromSql(String.format("DELETE FROM t where f3 > '%s'", dateTime));
+        LocalDateTime ldt = TimestampStringUtils.toLocalDateTime(new TimestampString(dateTime));
+        Instant instant = ldt.toInstant(ZoneId.systemDefault().getRules().getOffset(ldt));
+        optionalResolvedExpressions = DeletePushDownUtils.getResolvedFilterExpressions(tableModify);
+        assertThat(optionalResolvedExpressions).isPresent();
+        verifyExpression(
+                optionalResolvedExpressions,
+                String.format("[greaterThan(f3, %s)]", instant.toString()));
     }
 
     private CatalogTable createTestCatalogTable(Map<String, String> options) {
-        return CatalogTable.of(
-                Schema.newBuilder()
-                        .column("f0", DataTypes.INT().notNull())
-                        .column("f1", DataTypes.STRING().nullable())
-                        .column("f2", DataTypes.BIGINT().nullable())
-                        .build(),
-                null,
-                Collections.emptyList(),
-                options);
+        return CatalogTable.newBuilder()
+                .schema(
+                        Schema.newBuilder()
+                                .column("f0", DataTypes.INT().notNull())
+                                .column("f1", DataTypes.STRING().nullable())
+                                .column("f2", DataTypes.BIGINT().nullable())
+                                .build())
+                .options(options)
+                .build();
     }
 
     private LogicalTableModify getTableModifyFromSql(String sql) {

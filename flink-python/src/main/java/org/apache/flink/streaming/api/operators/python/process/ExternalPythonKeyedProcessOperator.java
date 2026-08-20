@@ -139,7 +139,8 @@ public class ExternalPythonKeyedProcessOperator<OUT>
     @Override
     public PythonFunctionRunner createPythonFunctionRunner() throws Exception {
         return new BeamDataStreamPythonFunctionRunner(
-                getRuntimeContext().getTaskName(),
+                getContainingTask().getEnvironment(),
+                getRuntimeContext().getTaskInfo().getTaskName(),
                 createPythonEnvironmentManager(),
                 STATEFUL_FUNCTION_URN,
                 ProtoUtils.createUserDefinedDataStreamStatefulFunctionProtos(
@@ -169,6 +170,7 @@ public class ExternalPythonKeyedProcessOperator<OUT>
                 getOperatorConfig()
                         .getManagedMemoryFractionOperatorUseCaseOfSlot(
                                 ManagedMemoryUseCase.PYTHON,
+                                getContainingTask().getJobConfiguration(),
                                 getContainingTask()
                                         .getEnvironment()
                                         .getTaskManagerInfo()

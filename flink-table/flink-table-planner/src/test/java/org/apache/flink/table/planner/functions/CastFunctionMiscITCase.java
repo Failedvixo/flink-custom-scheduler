@@ -28,11 +28,13 @@ import org.apache.flink.types.Row;
 import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.Objects;
 import java.util.stream.Stream;
 
 import static org.apache.flink.table.api.DataTypes.ARRAY;
 import static org.apache.flink.table.api.DataTypes.BIGINT;
 import static org.apache.flink.table.api.DataTypes.BINARY;
+import static org.apache.flink.table.api.DataTypes.BITMAP;
 import static org.apache.flink.table.api.DataTypes.BOOLEAN;
 import static org.apache.flink.table.api.DataTypes.BYTES;
 import static org.apache.flink.table.api.DataTypes.FIELD;
@@ -93,16 +95,16 @@ class CastFunctionMiscITCase extends BuiltInFunctionTestBase {
                                                         FIELD(
                                                                 "r",
                                                                 ROW(
-                                                                        FIELD("s", STRING()),
+                                                                        FIELD(
+                                                                                "s",
+                                                                                STRING().notNull()),
                                                                         FIELD("b", BOOLEAN()),
                                                                         FIELD("i", INT()))),
                                                         FIELD("s", STRING()))),
                                 "CAST(f0 AS ROW<r ROW<s STRING NOT NULL, b BOOLEAN, i INT>, s STRING>)",
                                 Row.of(Row.of("12", true, null), "Hello"),
-                                // the inner NOT NULL is ignored in SQL because the outer ROW is
-                                // nullable and the cast does not allow setting the outer
-                                // nullability but derives it from the source operand
-                                DataTypes.of("ROW<r ROW<s STRING, b BOOLEAN, i INT>, s STRING>")),
+                                DataTypes.of(
+                                        "ROW<r ROW<s STRING NOT NULL, b BOOLEAN, i INT>, s STRING>")),
                 TestSetSpec.forFunction(
                                 BuiltInFunctionDefinitions.CAST,
                                 "explicit with nested rows and explicit nullability change")
@@ -124,8 +126,7 @@ class CastFunctionMiscITCase extends BuiltInFunctionTestBase {
                                 DataTypes.of(
                                         "ROW<r ROW<s STRING NOT NULL, b BOOLEAN, i INT>, s STRING>")),
                 TestSetSpec.forFunction(
-                                BuiltInFunctionDefinitions.CAST,
-                                "implicit between structured type and row")
+                                BuiltInFunctionDefinitions.CAST, "implicit from ROW to STRUCTURED")
                         .onFieldsWithData(12, "Ingo")
                         .withFunction(StructuredTypeConstructor.class)
                         .withFunction(RowToFirstField.class)
@@ -138,7 +139,32 @@ class CastFunctionMiscITCase extends BuiltInFunctionTestBase {
                                 INT()),
                 TestSetSpec.forFunction(
                                 BuiltInFunctionDefinitions.CAST,
-                                "explicit between structured type and row")
+                                "explicit from ROW to resolvable STRUCTURED")
+                        .onFieldsWithData(12, "Ingo")
+                        .testSqlResult(
+                                "CAST((f0, f1) AS STRUCTURED<'"
+                                        + UserPojo.class.getName()
+                                        + "', i INT, s STRING>)",
+                                new UserPojo(12, "Ingo"),
+                                DataTypes.STRUCTURED(
+                                                UserPojo.class,
+                                                FIELD("i", INT()),
+                                                FIELD("s", STRING()))
+                                        .notNull()),
+                TestSetSpec.forFunction(
+                                BuiltInFunctionDefinitions.CAST,
+                                "explicit from ROW to unresolvable STRUCTURED")
+                        .onFieldsWithData(12, "Ingo")
+                        .testSqlResult(
+                                "CAST((f0, f1) AS STRUCTURED<'MyUserPojo', i INT, s STRING>)",
+                                Row.of(12, "Ingo"),
+                                DataTypes.STRUCTURED(
+                                                "MyUserPojo",
+                                                FIELD("i", INT()),
+                                                FIELD("s", STRING()))
+                                        .notNull()),
+                TestSetSpec.forFunction(
+                                BuiltInFunctionDefinitions.CAST, "explicit from STRUCTURED to ROW")
                         .onFieldsWithData(12, "Ingo")
                         .withFunction(StructuredTypeConstructor.class)
                         .testTableApiResult(
@@ -223,6 +249,16 @@ class CastFunctionMiscITCase extends BuiltInFunctionTestBase {
                                 call("CreateMultiset", $("f0")).cast(STRING()),
                                 "{a=1, b=2}",
                                 STRING()),
+                TestSetSpec.forFunction(BuiltInFunctionDefinitions.CAST, "cast MULTISET to BITMAP")
+                        .onFieldsWithData(map(entry("a", 1), entry("b", 2)))
+                        .andDataTypes(MAP(STRING(), INT()))
+                        .withFunction(JsonFunctionsITCase.CreateMultiset.class)
+                        .testTableApiValidationError(
+                                call("CreateMultiset", $("f0")).cast(BITMAP()),
+                                "Unsupported cast from 'MULTISET<STRING>' to 'BITMAP'")
+                        .testSqlValidationError(
+                                "CAST(CreateMultiset(f0) AS BITMAP)",
+                                "Cast function cannot convert value of type VARCHAR(2147483647) MULTISET to type BITMAP"),
                 TestSetSpec.forFunction(BuiltInFunctionDefinitions.CAST, "cast RAW to STRING")
                         .onFieldsWithData("2020-11-11T18:08:01.123")
                         .andDataTypes(STRING())
@@ -348,6 +384,23 @@ class CastFunctionMiscITCase extends BuiltInFunctionTestBase {
         public UserPojo(Integer i, String s) {
             this.i = i;
             this.s = s;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            final UserPojo userPojo = (UserPojo) o;
+            return Objects.equals(i, userPojo.i) && Objects.equals(s, userPojo.s);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(i, s);
         }
     }
 

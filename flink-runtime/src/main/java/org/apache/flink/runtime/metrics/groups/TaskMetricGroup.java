@@ -26,10 +26,12 @@ import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.metrics.MetricRegistry;
 import org.apache.flink.runtime.metrics.dump.QueryScopeInfo;
 import org.apache.flink.runtime.metrics.scope.ScopeFormat;
+import org.apache.flink.runtime.metrics.util.MetricUtils;
 import org.apache.flink.util.AbstractID;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -44,8 +46,6 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 public class TaskMetricGroup extends ComponentMetricGroup<TaskManagerJobMetricGroup> {
 
     private final Map<String, InternalOperatorMetricGroup> operators = new HashMap<>();
-
-    static final int METRICS_OPERATOR_NAME_MAX_LENGTH = 80;
 
     private final TaskIOMetricGroup ioMetrics;
 
@@ -145,21 +145,13 @@ public class TaskMetricGroup extends ComponentMetricGroup<TaskManagerJobMetricGr
     // ------------------------------------------------------------------------
 
     public InternalOperatorMetricGroup getOrAddOperator(String operatorName) {
-        return getOrAddOperator(OperatorID.fromJobVertexID(vertexId), operatorName);
+        return getOrAddOperator(
+                OperatorID.fromJobVertexID(vertexId), operatorName, Collections.emptyMap());
     }
 
     public InternalOperatorMetricGroup getOrAddOperator(
-            OperatorID operatorID, String operatorName) {
-        final String truncatedOperatorName;
-        if (operatorName != null && operatorName.length() > METRICS_OPERATOR_NAME_MAX_LENGTH) {
-            LOG.warn(
-                    "The operator name {} exceeded the {} characters length limit and was truncated.",
-                    operatorName,
-                    METRICS_OPERATOR_NAME_MAX_LENGTH);
-            truncatedOperatorName = operatorName.substring(0, METRICS_OPERATOR_NAME_MAX_LENGTH);
-        } else {
-            truncatedOperatorName = operatorName;
-        }
+            OperatorID operatorID, String operatorName, Map<String, String> additionalVariables) {
+        final String truncatedOperatorName = MetricUtils.truncateOperatorName(operatorName);
 
         // unique OperatorIDs only exist in streaming, so we have to rely on the name for batch
         // operators
@@ -170,7 +162,11 @@ public class TaskMetricGroup extends ComponentMetricGroup<TaskManagerJobMetricGr
                     key,
                     operator ->
                             new InternalOperatorMetricGroup(
-                                    this.registry, this, operatorID, truncatedOperatorName));
+                                    this.registry,
+                                    this,
+                                    operatorID,
+                                    truncatedOperatorName,
+                                    additionalVariables));
         }
     }
 
@@ -195,7 +191,7 @@ public class TaskMetricGroup extends ComponentMetricGroup<TaskManagerJobMetricGr
     }
 
     @Override
-    protected Iterable<? extends ComponentMetricGroup> subComponents() {
+    protected Iterable<? extends ComponentMetricGroup<?>> subComponents() {
         return operators.values();
     }
 

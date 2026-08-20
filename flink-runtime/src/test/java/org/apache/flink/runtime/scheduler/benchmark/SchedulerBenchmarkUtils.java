@@ -21,7 +21,7 @@ package org.apache.flink.runtime.scheduler.benchmark;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.runtime.JobException;
 import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutor;
-import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutorServiceAdapter;
+import org.apache.flink.runtime.concurrent.NoMainThreadCheckComponentMainThreadExecutor;
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.executiongraph.AccessExecutionJobVertex;
 import org.apache.flink.runtime.executiongraph.Execution;
@@ -57,6 +57,7 @@ import java.util.concurrent.ScheduledExecutorService;
 
 import static org.apache.flink.runtime.scheduler.DefaultSchedulerBuilder.createCustomParallelismDecider;
 import static org.apache.flink.runtime.scheduler.adaptivebatch.AdaptiveBatchSchedulerFactory.loadInputConsumableDeciderFactory;
+import static org.apache.flink.runtime.util.JobVertexConnectionUtils.connectNewDataSetAsInput;
 
 /** Utilities for scheduler benchmarks. */
 public class SchedulerBenchmarkUtils {
@@ -75,7 +76,8 @@ public class SchedulerBenchmarkUtils {
         sink.setParallelism(jobConfiguration.getParallelism());
         jobVertices.add(sink);
 
-        sink.connectNewDataSetAsInput(
+        connectNewDataSetAsInput(
+                sink,
                 source,
                 jobConfiguration.getDistributionPattern(),
                 jobConfiguration.getResultPartitionType());
@@ -95,9 +97,7 @@ public class SchedulerBenchmarkUtils {
 
         jobGraph.setJobType(jobConfiguration.getJobType());
 
-        final ExecutionConfig executionConfig = new ExecutionConfig();
-        executionConfig.setExecutionMode(jobConfiguration.getExecutionMode());
-        jobGraph.setExecutionConfig(executionConfig);
+        jobGraph.setExecutionConfig(new ExecutionConfig());
 
         return jobGraph;
     }
@@ -111,7 +111,7 @@ public class SchedulerBenchmarkUtils {
         final JobGraph jobGraph = createJobGraph(jobVertices, jobConfiguration);
 
         final ComponentMainThreadExecutor mainThreadExecutor =
-                ComponentMainThreadExecutorServiceAdapter.forMainThread();
+                new NoMainThreadCheckComponentMainThreadExecutor();
 
         DefaultSchedulerBuilder schedulerBuilder =
                 new DefaultSchedulerBuilder(jobGraph, mainThreadExecutor, scheduledExecutorService)

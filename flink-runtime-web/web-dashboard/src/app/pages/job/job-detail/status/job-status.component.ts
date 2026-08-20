@@ -18,7 +18,7 @@
 
 import { DatePipe, NgIf } from '@angular/common';
 import { ChangeDetectionStrategy, ChangeDetectorRef, Component, Inject, Input, OnDestroy, OnInit } from '@angular/core';
-import { RouterLinkWithHref } from '@angular/router';
+import { Router, RouterLinkWithHref } from '@angular/router';
 import { merge, Subject } from 'rxjs';
 import { distinctUntilKeyChanged, mergeMap, take, takeUntil, tap } from 'rxjs/operators';
 
@@ -53,8 +53,7 @@ import { NzSkeletonModule } from 'ng-zorro-antd/skeleton';
     NavigationComponent,
     NzSkeletonModule,
     HumanizeDurationPipe
-  ],
-  standalone: true
+  ]
 })
 export class JobStatusComponent implements OnInit, OnDestroy {
   @Input() isLoading = true;
@@ -76,9 +75,11 @@ export class JobStatusComponent implements OnInit, OnDestroy {
     private readonly jobManagerService: JobManagerService,
     private readonly statusService: StatusService,
     private readonly cdr: ChangeDetectorRef,
+    private readonly router: Router,
     @Inject(JOB_MODULE_CONFIG) readonly moduleConfig: JobModuleConfig
   ) {
-    this.listOfNavigation = moduleConfig.routerTabs || JOB_MODULE_DEFAULT_CONFIG.routerTabs;
+    // Create a copy to avoid mutating the shared config
+    this.listOfNavigation = [...(moduleConfig.routerTabs || JOB_MODULE_DEFAULT_CONFIG.routerTabs)];
     this.checkpointIndexOfNavigation = this.checkpointIndexOfNav();
   }
 
@@ -126,17 +127,45 @@ export class JobStatusComponent implements OnInit, OnDestroy {
     return this.listOfNavigation.findIndex(item => item.path === 'checkpoints');
   }
 
+  rescalesIndexOfNav(): number {
+    return this.listOfNavigation.findIndex(item => item.path === 'rescales');
+  }
+
+  private getRescalesTabIndexAfter(path: string): number {
+    const index = this.listOfNavigation.findIndex(item => item.path === path);
+    return index >= 0 ? index + 1 : this.listOfNavigation.length;
+  }
+
   private handleJobDetailChanged(data: JobDetailCorrect): void {
     this.jobDetail = data;
-    const index = this.checkpointIndexOfNav();
-    if (data.plan.type == 'STREAMING' && index == -1) {
+    const checkpointNavIndex = this.checkpointIndexOfNav();
+    if (data.plan.type == 'STREAMING' && checkpointNavIndex == -1) {
       this.listOfNavigation.splice(this.checkpointIndexOfNavigation, 0, {
         path: 'checkpoints',
         title: 'Checkpoints'
       });
-    } else if (data.plan.type == 'BATCH' && index > -1) {
-      this.listOfNavigation.splice(index, 1);
+    } else if (data.plan.type == 'BATCH' && checkpointNavIndex > -1) {
+      this.listOfNavigation.splice(checkpointNavIndex, 1);
+    }
+
+    const rescalesNavIndex = this.rescalesIndexOfNav();
+    const shouldShowRescales = data.plan.type == 'STREAMING' && data.schedulerType == 'Adaptive';
+    if (!shouldShowRescales && rescalesNavIndex > -1) {
+      this.listOfNavigation.splice(rescalesNavIndex, 1);
+    } else if (shouldShowRescales && rescalesNavIndex == -1) {
+      // Insert deterministically after configuration to avoid stale index issues across job transitions.
+      const insertIndex = this.getRescalesTabIndexAfter('configuration');
+      this.listOfNavigation.splice(insertIndex, 0, {
+        path: 'rescales',
+        title: 'Rescales'
+      });
     }
     this.cdr.markForCheck();
+  }
+
+  navigateToApplication(): void {
+    if (this.jobDetail['application-id']) {
+      this.router.navigate(['/', 'application', 'running', this.jobDetail['application-id']]).then();
+    }
   }
 }

@@ -46,6 +46,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
 
+import static org.apache.flink.runtime.util.JobVertexConnectionUtils.connectNewDataSetAsInput;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -53,7 +54,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ExecutionGraphToInputsLocationsRetrieverAdapterTest {
 
     @RegisterExtension
-    static final TestExecutorExtension<ScheduledExecutorService> EXECUTOR_EXTENSION =
+    private static final TestExecutorExtension<ScheduledExecutorService> EXECUTOR_EXTENSION =
             TestingUtils.defaultExecutorExtension();
 
     @Test
@@ -62,13 +63,15 @@ class ExecutionGraphToInputsLocationsRetrieverAdapterTest {
         final JobVertex producer2 = ExecutionGraphTestUtils.createNoOpVertex(1);
         final JobVertex consumer = ExecutionGraphTestUtils.createNoOpVertex(1);
         final IntermediateDataSet dataSet1 =
-                consumer.connectNewDataSetAsInput(
+                connectNewDataSetAsInput(
+                                consumer,
                                 producer1,
                                 DistributionPattern.ALL_TO_ALL,
                                 ResultPartitionType.PIPELINED)
                         .getSource();
         final IntermediateDataSet dataSet2 =
-                consumer.connectNewDataSetAsInput(
+                connectNewDataSetAsInput(
+                                consumer,
                                 producer2,
                                 DistributionPattern.ALL_TO_ALL,
                                 ResultPartitionType.PIPELINED)

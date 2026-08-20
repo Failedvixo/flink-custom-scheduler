@@ -59,7 +59,7 @@ import java.util.function.Supplier;
 import static org.apache.calcite.jdbc.CalciteSchemaBuilder.asRootSchema;
 
 /** Test base for testing convert sql statement to operation. */
-public class SqlNodeToOperationConversionTestBase {
+class SqlNodeToOperationConversionTestBase {
     private final boolean isStreamingMode = false;
     private final TableConfig tableConfig = TableConfig.getDefault();
     protected final Catalog catalog = new GenericInMemoryCatalog("MockCatalog", "default");
@@ -96,10 +96,11 @@ public class SqlNodeToOperationConversionTestBase {
                     plannerContext.getRexFactory());
 
     @BeforeEach
-    public void before() throws TableAlreadyExistException, DatabaseNotExistException {
+    void before() throws TableAlreadyExistException, DatabaseNotExistException {
         catalogManager.initSchemaResolver(
                 isStreamingMode,
-                ExpressionResolverMocks.basicResolver(catalogManager, functionCatalog, parser));
+                ExpressionResolverMocks.basicResolver(catalogManager, functionCatalog, parser),
+                parser);
 
         final ObjectPath path1 = new ObjectPath(catalogManager.getCurrentDatabase(), "t1");
         final ObjectPath path2 = new ObjectPath(catalogManager.getCurrentDatabase(), "t2");
@@ -107,7 +108,7 @@ public class SqlNodeToOperationConversionTestBase {
                 Schema.newBuilder()
                         .fromResolvedSchema(
                                 ResolvedSchema.of(
-                                        Column.physical("a", DataTypes.BIGINT()),
+                                        Column.physical("a", DataTypes.BIGINT().notNull()),
                                         Column.physical("b", DataTypes.VARCHAR(Integer.MAX_VALUE)),
                                         Column.physical("c", DataTypes.INT()),
                                         Column.physical("d", DataTypes.VARCHAR(Integer.MAX_VALUE))))
@@ -115,13 +116,13 @@ public class SqlNodeToOperationConversionTestBase {
         Map<String, String> options = new HashMap<>();
         options.put("connector", "COLLECTION");
         final CatalogTable catalogTable =
-                CatalogTable.of(tableSchema, "", Collections.emptyList(), options);
+                CatalogTable.newBuilder().schema(tableSchema).comment("").options(options).build();
         catalog.createTable(path1, catalogTable, true);
         catalog.createTable(path2, catalogTable, true);
     }
 
     @AfterEach
-    public void after() throws TableNotExistException {
+    void after() throws TableNotExistException {
         final ObjectPath path1 = new ObjectPath(catalogManager.getCurrentDatabase(), "t1");
         final ObjectPath path2 = new ObjectPath(catalogManager.getCurrentDatabase(), "t2");
         catalog.dropTable(path1, true);

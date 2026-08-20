@@ -159,8 +159,8 @@ public class PythonOptions {
                     .defaultValue("python")
                     .withDescription(
                             "Specify the path of the python interpreter used to execute the python "
-                                    + "UDF worker. The python UDF worker depends on Python 3.7+, Apache Beam "
-                                    + "(version == 2.43.0), Pip (version >= 20.3) and SetupTools (version >= 37.0.0). "
+                                    + "UDF worker. The python UDF worker depends on Python 3.9+, Apache Beam "
+                                    + "(version >= 2.54.0, <= 2.61.0), Pip (version >= 20.3) and SetupTools (version >= 37.0.0). "
                                     + "Please ensure that the specified environment meets the above requirements. The "
                                     + "option is equivalent to the command line option \"-pyexec\".");
 
@@ -182,7 +182,7 @@ public class PythonOptions {
                                     .text("2. the command line option \"-pyclientexec\";")
                                     .linebreak()
                                     .text(
-                                            "3. the configuration 'python.client.executable' defined in flink-conf.yaml")
+                                            "3. the configuration 'python.client.executable' defined in config.yaml")
                                     .linebreak()
                                     .text("4. the environment variable PYFLINK_CLIENT_EXECUTABLE;")
                                     .build());
@@ -260,6 +260,28 @@ public class PythonOptions {
                                     + "The `thread` mode means that the Python user-defined functions will be executed in the same process of the Java operator. "
                                     + "Note that currently it still doesn't support to execute Python user-defined functions in `thread` mode in all places. "
                                     + "It will fall back to `process` mode in these cases.");
+
+    public static final ConfigOption<String> PYTHON_LOGGING_DEFAULT_LEVEL =
+            ConfigOptions.key("python.logging.default.level")
+                    .stringType()
+                    .defaultValue("INFO")
+                    .withDescription(
+                            "Controls the default log level of python loggers, available values: OFF, ERROR, WARN, INFO, DEBUG, TRACE.");
+
+    public static final ConfigOption<Map<String, String>> PYTHON_LOGGING_LEVEL_OVERRIDE =
+            ConfigOptions.key("python.logging.level.overrides")
+                    .mapType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "This option controls the log levels for specifically named loggers. "
+                                    + "The expected format is \"Name: LogLevel...\". Supports a logging "
+                                    + "hierarchy based off of names that are '.' separated. For example, by specifying the value "
+                                    + "\"a.b.c.Foo: DEBUG\", the logger for the class 'a.b.c.Foo' will be configured to "
+                                    + "output logs at the DEBUG level. Similarly, by specifying the value \"a.b.c:WARN\", "
+                                    + "all loggers underneath the 'a.b.c' package will be configured to output logs at the WARN "
+                                    + "level. System.out and System.err levels are configured via loggers of the corresponding "
+                                    + "name. Also, note that when multiple overrides are specified, the exact name followed by "
+                                    + "the closest parent takes precedence.");
 
     // ------------------------------------------------------------------------------------------
     // config options used for internal purpose

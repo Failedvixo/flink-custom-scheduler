@@ -20,10 +20,10 @@ package org.apache.flink.runtime.checkpoint;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobStatus;
+import org.apache.flink.core.execution.RecoveryClaimMode;
 import org.apache.flink.core.testutils.CommonTestUtils;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.OperatorID;
-import org.apache.flink.runtime.jobgraph.RestoreMode;
 import org.apache.flink.runtime.state.SharedStateRegistry;
 import org.apache.flink.runtime.state.SharedStateRegistryImpl;
 import org.apache.flink.runtime.state.testutils.EmptyStreamStateHandle;
@@ -230,7 +230,8 @@ public class CompletedCheckpointTest {
                         null);
 
         SharedStateRegistry sharedStateRegistry = new SharedStateRegistryImpl();
-        checkpoint.registerSharedStatesAfterRestored(sharedStateRegistry, RestoreMode.DEFAULT);
+        checkpoint.registerSharedStatesAfterRestored(
+                sharedStateRegistry, RecoveryClaimMode.DEFAULT);
         verify(state, times(1)).registerSharedStates(sharedStateRegistry, 0L);
     }
 
@@ -262,7 +263,8 @@ public class CompletedCheckpointTest {
                         null);
 
         SharedStateRegistry sharedStateRegistry = new SharedStateRegistryImpl();
-        checkpoint.registerSharedStatesAfterRestored(sharedStateRegistry, RestoreMode.DEFAULT);
+        checkpoint.registerSharedStatesAfterRestored(
+                sharedStateRegistry, RecoveryClaimMode.DEFAULT);
         verify(state, times(1)).registerSharedStates(sharedStateRegistry, 0L);
 
         // Subsume
@@ -368,6 +370,7 @@ public class CompletedCheckpointTest {
                         1,
                         1,
                         1,
+                        1,
                         true,
                         mock(SubtaskStateStats.class),
                         null);
@@ -407,6 +410,7 @@ public class CompletedCheckpointTest {
                         taskStats,
                         1337,
                         123129837912L,
+                        2222379996L,
                         42L,
                         44L,
                         true,
@@ -424,6 +428,7 @@ public class CompletedCheckpointTest {
                 .isEqualTo(completed.getNumberOfAcknowledgedSubtasks());
         assertThat(copy.getEndToEndDuration()).isEqualTo(completed.getEndToEndDuration());
         assertThat(copy.getStateSize()).isEqualTo(completed.getStateSize());
+        assertThat(copy.getMetadataSize()).isEqualTo(completed.getMetadataSize());
         assertThat(copy.getProcessedData()).isEqualTo(completed.getProcessedData());
         assertThat(copy.getPersistedData()).isEqualTo(completed.getPersistedData());
         assertThat(copy.isUnalignedCheckpoint()).isEqualTo(completed.isUnalignedCheckpoint());

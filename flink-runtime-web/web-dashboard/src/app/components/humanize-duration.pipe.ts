@@ -21,8 +21,7 @@ import { Pipe, PipeTransform } from '@angular/core';
 import { isNil } from '@flink-runtime-web/utils';
 
 @Pipe({
-  name: 'humanizeDuration',
-  standalone: true
+  name: 'humanizeDuration'
 })
 export class HumanizeDurationPipe implements PipeTransform {
   public transform(value: number, short: boolean = false): string {
@@ -46,10 +45,10 @@ export class HumanizeDurationPipe implements PipeTransform {
             if (seconds === 0) {
               return `${ms}ms`;
             } else {
-              return `${seconds}s`;
+              return `${seconds}s ${ms}ms`;
             }
           } else {
-            return `${minutes}m ${seconds}s`;
+            return `${minutes}m ${seconds}s ${ms}ms`;
           }
         } else {
           if (short) {

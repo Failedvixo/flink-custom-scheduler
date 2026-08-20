@@ -23,19 +23,17 @@ import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.configuration.RestOptions;
 import org.apache.flink.configuration.SchedulerExecutionMode;
 import org.apache.flink.configuration.WebOptions;
-import org.apache.flink.util.TestLoggerExtension;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link RestHandlerConfiguration}. */
-@ExtendWith(TestLoggerExtension.class)
 class RestHandlerConfigurationTest {
 
     @Test
@@ -75,7 +73,7 @@ class RestHandlerConfigurationTest {
             boolean reactiveMode,
             boolean expectedResult) {
         final Configuration config = new Configuration();
-        config.setBoolean(WebOptions.RESCALE_ENABLE, webRescaleEnabled);
+        config.set(WebOptions.RESCALE_ENABLE, webRescaleEnabled);
         if (adaptiveScheduler) {
             config.set(JobManagerOptions.SCHEDULER, JobManagerOptions.SchedulerType.Adaptive);
         } else {
@@ -91,7 +89,7 @@ class RestHandlerConfigurationTest {
 
     private static void testWebSubmitFeatureFlag(boolean webSubmitEnabled) {
         final Configuration config = new Configuration();
-        config.setBoolean(WebOptions.SUBMIT_ENABLE, webSubmitEnabled);
+        config.set(WebOptions.SUBMIT_ENABLE, webSubmitEnabled);
 
         RestHandlerConfiguration restHandlerConfiguration =
                 RestHandlerConfiguration.fromConfiguration(config);
@@ -100,7 +98,7 @@ class RestHandlerConfigurationTest {
 
     private static void testWebCancelFeatureFlag(boolean webCancelEnabled) {
         final Configuration config = new Configuration();
-        config.setBoolean(WebOptions.CANCEL_ENABLE, webCancelEnabled);
+        config.set(WebOptions.CANCEL_ENABLE, webCancelEnabled);
 
         RestHandlerConfiguration restHandlerConfiguration =
                 RestHandlerConfiguration.fromConfiguration(config);
@@ -108,22 +106,26 @@ class RestHandlerConfigurationTest {
     }
 
     @Test
-    public void testCheckpointCacheExpireAfterWrite() {
-        final Duration testDuration = Duration.ofMillis(100L);
+    void testCheckpointCacheExpireAfterWrite() {
         final Configuration config = new Configuration();
-        config.set(RestOptions.CACHE_CHECKPOINT_STATISTICS_TIMEOUT, testDuration);
-
+        final Duration defaultDuration = Duration.ofMillis(3000L);
         RestHandlerConfiguration restHandlerConfiguration =
                 RestHandlerConfiguration.fromConfiguration(config);
+        assertThat(restHandlerConfiguration.getCheckpointCacheExpireAfterWrite())
+                .isEqualTo(defaultDuration);
+
+        final Duration testDuration = Duration.ofMillis(100L);
+        config.set(RestOptions.CACHE_CHECKPOINT_STATISTICS_TIMEOUT, testDuration);
+        restHandlerConfiguration = RestHandlerConfiguration.fromConfiguration(config);
         assertThat(restHandlerConfiguration.getCheckpointCacheExpireAfterWrite())
                 .isEqualTo(testDuration);
     }
 
     @Test
-    public void testCheckpointCacheExpiryFallbackToRefreshInterval() {
+    void testCheckpointCacheExpiryFallbackToRefreshInterval() {
         final long refreshInterval = 1000L;
         final Configuration config = new Configuration();
-        config.set(WebOptions.REFRESH_INTERVAL, refreshInterval);
+        config.set(WebOptions.REFRESH_INTERVAL, Duration.ofMillis(refreshInterval));
 
         RestHandlerConfiguration restHandlerConfiguration =
                 RestHandlerConfiguration.fromConfiguration(config);
@@ -132,7 +134,7 @@ class RestHandlerConfigurationTest {
     }
 
     @Test
-    public void testCheckpointCacheSize() {
+    void testCheckpointCacheSize() {
         final int testCacheSize = 50;
         final Configuration config = new Configuration();
         config.set(RestOptions.CACHE_CHECKPOINT_STATISTICS_SIZE, testCacheSize);
@@ -140,5 +142,50 @@ class RestHandlerConfigurationTest {
         RestHandlerConfiguration restHandlerConfiguration =
                 RestHandlerConfiguration.fromConfiguration(config);
         assertThat(restHandlerConfiguration.getCheckpointCacheSize()).isEqualTo(testCacheSize);
+    }
+
+    /** Tests that ExecutionGraph cache TTL defaults to refresh interval when not set. */
+    @Test
+    void testExecutionGraphCacheTTLDefault() {
+        final Duration refreshInterval = Duration.ofMillis(5000L);
+        final Configuration config = new Configuration();
+        config.set(WebOptions.REFRESH_INTERVAL, refreshInterval);
+
+        RestHandlerConfiguration restHandlerConfiguration =
+                RestHandlerConfiguration.fromConfiguration(config);
+
+        // When CACHE_EXECUTION_GRAPH_TIMEOUT is not set, it should default to REFRESH_INTERVAL
+        assertThat(restHandlerConfiguration.getExecutionGraphCacheTTL()).isEqualTo(refreshInterval);
+    }
+
+    /** Tests that ExecutionGraph cache TTL can be configured independently, including zero. */
+    @ParameterizedTest
+    @CsvSource({"10000", "0"})
+    void testExecutionGraphCacheTTLCustomValue(long cacheTTLMillis) {
+        final Duration refreshInterval = Duration.ofMillis(5000L);
+        final Duration cacheTTL = Duration.ofMillis(cacheTTLMillis);
+        final Configuration config = new Configuration();
+        config.set(WebOptions.REFRESH_INTERVAL, refreshInterval);
+        config.set(RestOptions.CACHE_EXECUTION_GRAPH_TIMEOUT, cacheTTL);
+
+        RestHandlerConfiguration restHandlerConfiguration =
+                RestHandlerConfiguration.fromConfiguration(config);
+
+        // CACHE_EXECUTION_GRAPH_TIMEOUT should be independent of REFRESH_INTERVAL
+        assertThat(restHandlerConfiguration.getRefreshInterval())
+                .isEqualTo(refreshInterval.toMillis());
+        assertThat(restHandlerConfiguration.getExecutionGraphCacheTTL()).isEqualTo(cacheTTL);
+    }
+
+    /** Tests that negative ExecutionGraph cache TTL throws IllegalArgumentException. */
+    @Test
+    void testExecutionGraphCacheTTLNegativeValue() {
+        final Duration negativeCacheTTL = Duration.ofMillis(-1000L);
+        final Configuration config = new Configuration();
+        config.set(RestOptions.CACHE_EXECUTION_GRAPH_TIMEOUT, negativeCacheTTL);
+
+        assertThatThrownBy(() -> RestHandlerConfiguration.fromConfiguration(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("ExecutionGraph cache TTL should not be negative");
     }
 }

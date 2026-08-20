@@ -20,7 +20,8 @@ package org.apache.flink.table.planner.plan.stream.sql.join
 import org.apache.flink.table.api.TableException
 import org.apache.flink.table.planner.utils.{StreamTableTestUtil, TableTestBase}
 
-import org.junit.Test
+import org.assertj.core.api.Assertions.assertThatThrownBy
+import org.junit.jupiter.api.Test
 
 /** Tests for window join. */
 class WindowJoinTest extends TableTestBase {
@@ -133,6 +134,20 @@ class WindowJoinTest extends TableTestBase {
   }
 
   @Test
+  def testWindowJoinWithoutProjections(): Unit = {
+    val sql =
+      """
+        |SELECT *
+        |FROM
+        |  TABLE(TUMBLE(TABLE MyTable, DESCRIPTOR(rowtime), INTERVAL '15' MINUTE)) AS L
+        |JOIN
+        |  TABLE(TUMBLE(TABLE MyTable2, DESCRIPTOR(rowtime), INTERVAL '15' MINUTE)) AS R
+        |ON L.window_start = R.window_start AND L.window_end = R.window_end AND L.a = R.a
+      """.stripMargin
+    util.verifyRelPlan(sql)
+  }
+
+  @Test
   def testUnsupportedWindowTVF_TumbleOnProctime(): Unit = {
     val sql =
       """
@@ -148,9 +163,9 @@ class WindowJoinTest extends TableTestBase {
         |ON L.window_start = R.window_start AND L.window_end = R.window_end AND L.a = R.a
       """.stripMargin
 
-    thrown.expectMessage("Processing time Window Join is not supported yet.")
-    thrown.expect(classOf[TableException])
-    util.verifyExplain(sql)
+    assertThatThrownBy(() => util.verifyExplain(sql))
+      .hasMessageContaining("Processing time Window Join is not supported yet.")
+      .isInstanceOf[TableException]
   }
 
   @Test
@@ -255,9 +270,9 @@ class WindowJoinTest extends TableTestBase {
         |ON L.window_start = R.window_start AND L.window_end = R.window_end AND L.a = R.a
       """.stripMargin
 
-    thrown.expectMessage("Processing time Window Join is not supported yet.")
-    thrown.expect(classOf[TableException])
-    util.verifyExplain(sql)
+    assertThatThrownBy(() => util.verifyExplain(sql))
+      .hasMessageContaining("Processing time Window Join is not supported yet.")
+      .isInstanceOf[TableException]
   }
 
   @Test
@@ -362,9 +377,9 @@ class WindowJoinTest extends TableTestBase {
         |ON L.window_start = R.window_start AND L.window_end = R.window_end AND L.a = R.a
       """.stripMargin
 
-    thrown.expectMessage("Processing time Window Join is not supported yet.")
-    thrown.expect(classOf[TableException])
-    util.verifyExplain(sql)
+    assertThatThrownBy(() => util.verifyExplain(sql))
+      .hasMessageContaining("Processing time Window Join is not supported yet.")
+      .isInstanceOf[TableException]
   }
 
   // ----------------------------------------------------------------------------------------
@@ -1307,7 +1322,7 @@ class WindowJoinTest extends TableTestBase {
         |     ,DATE_FORMAT(food.window_end + INTERVAL '7' HOUR, 'yyyyMMdd') AS dt
         |     ,DATE_FORMAT(food.window_end + INTERVAL '7' HOUR, 'HH') AS `hour`
         |FROM food
-        |LEFT JOIN food AS a ON food.user_id = a.user_id
+        |JOIN food AS a ON food.user_id = a.user_id
         |AND food.window_start = a.window_start
         |AND food.window_end = a.window_end
         |""".stripMargin

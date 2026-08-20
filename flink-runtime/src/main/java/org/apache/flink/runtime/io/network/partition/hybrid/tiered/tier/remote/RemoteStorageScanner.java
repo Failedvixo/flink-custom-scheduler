@@ -24,7 +24,6 @@ import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.io.network.partition.hybrid.tiered.common.TieredStoragePartitionId;
 import org.apache.flink.runtime.io.network.partition.hybrid.tiered.common.TieredStorageSubpartitionId;
-import org.apache.flink.runtime.io.network.partition.hybrid.tiered.storage.AvailabilityNotifier;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FatalExitExceptionHandler;
 import org.apache.flink.util.concurrent.ExecutorThreadFactory;
@@ -42,6 +41,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BiConsumer;
 
 import static org.apache.flink.runtime.io.network.partition.hybrid.tiered.file.SegmentPartitionFile.getSegmentFinishDirPath;
 import static org.apache.flink.runtime.io.network.partition.hybrid.tiered.file.SegmentPartitionFile.getSegmentPath;
@@ -92,7 +92,8 @@ public class RemoteStorageScanner implements Runnable {
 
     private final FileSystem remoteFileSystem;
 
-    @Nullable private AvailabilityNotifier notifier;
+    @Nullable
+    private BiConsumer<TieredStoragePartitionId, TieredStorageSubpartitionId> availabilityNotifier;
 
     private int lastInterval = INITIAL_SCAN_INTERVAL_MS;
 
@@ -186,12 +187,14 @@ public class RemoteStorageScanner implements Runnable {
                 TieredStoragePartitionId partitionId = ids.getKey().f0;
                 TieredStorageSubpartitionId subpartitionId = ids.getKey().f1;
                 int requiredSegmentId = ids.getValue();
-                int maxSegmentId = scannedMaxSegmentIds.getOrDefault(ids.getKey(), -1);
+                int maxSegmentId =
+                        scannedMaxSegmentIds.getOrDefault(
+                                ids.getKey(), SubpartitionRemoteCacheManager.EMPTY_SEGMENT_ID);
                 if (maxSegmentId >= requiredSegmentId
                         && checkSegmentExist(partitionId, subpartitionId, requiredSegmentId)) {
                     scanned = true;
                     iterator.remove();
-                    checkNotNull(notifier).notifyAvailable(partitionId, subpartitionId);
+                    checkNotNull(availabilityNotifier).accept(partitionId, subpartitionId);
                 } else {
                     // The segment should be watched again because it's not found.
                     // If the segment belongs to other tiers and has been consumed, the segment will
@@ -210,8 +213,10 @@ public class RemoteStorageScanner implements Runnable {
         }
     }
 
-    public void registerAvailabilityAndPriorityNotifier(AvailabilityNotifier retriever) {
-        this.notifier = retriever;
+    public void registerAvailabilityAndPriorityNotifier(
+            BiConsumer<TieredStoragePartitionId, TieredStorageSubpartitionId>
+                    availabilityNotifier) {
+        this.availabilityNotifier = availabilityNotifier;
     }
 
     // ------------------------------------------------------------------------

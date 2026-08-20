@@ -18,6 +18,7 @@
 
 package org.apache.flink.yarn.configuration;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.DescribedEnum;
 import org.apache.flink.configuration.ExternalResourceOptions;
@@ -25,6 +26,7 @@ import org.apache.flink.configuration.SecurityOptions;
 import org.apache.flink.configuration.description.Description;
 import org.apache.flink.configuration.description.InlineElement;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.apache.flink.configuration.ConfigOptions.key;
@@ -38,6 +40,7 @@ import static org.apache.flink.yarn.configuration.YarnConfigOptions.UserJarInclu
  *
  * <p>These options are not expected to be ever configured by users explicitly.
  */
+@PublicEvolving
 public class YarnConfigOptions {
 
     /** The vcores used by YARN application master. */
@@ -87,9 +90,9 @@ public class YarnConfigOptions {
      * <p>>Note: This option returns a String since Integer options must have a static default
      * value.
      */
-    public static final ConfigOption<String> APPLICATION_ATTEMPTS =
+    public static final ConfigOption<Integer> APPLICATION_ATTEMPTS =
             key("yarn.application-attempts")
-                    .stringType()
+                    .intType()
                     .noDefaultValue()
                     .withDescription(
                             Description.builder()
@@ -133,14 +136,14 @@ public class YarnConfigOptions {
      * The heartbeat interval between the Application Master and the YARN Resource Manager if Flink
      * is requesting containers.
      */
-    public static final ConfigOption<Integer> CONTAINER_REQUEST_HEARTBEAT_INTERVAL_MILLISECONDS =
+    public static final ConfigOption<Duration> CONTAINER_REQUEST_HEARTBEAT_INTERVAL_MILLISECONDS =
             key("yarn.heartbeat.container-request-interval")
-                    .intType()
-                    .defaultValue(500)
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(500))
                     .withDescription(
                             new Description.DescriptionBuilder()
                                     .text(
-                                            "Time between heartbeats with the ResourceManager in milliseconds if Flink requests containers:")
+                                            "Time between heartbeats with the ResourceManager if Flink requests containers:")
                                     .list(
                                             text(
                                                     "The lower this value is, the faster Flink will get notified about container allocations since requests and allocations are transmitted via heartbeats."),
@@ -272,7 +275,12 @@ public class YarnConfigOptions {
                     .noDefaultValue()
                     .withDeprecatedKeys("yarn.ship-directories")
                     .withDescription(
-                            "A semicolon-separated list of files and/or directories to be shipped to the YARN cluster.");
+                            "A semicolon-separated list of files and/or directories to be shipped to the YARN "
+                                    + "cluster. These files/directories can come from the local path of flink client "
+                                    + "or HDFS. For example, "
+                                    + "\"/path/to/local/file;/path/to/local/directory;"
+                                    + "hdfs://$namenode_address/path/of/file;"
+                                    + "hdfs://$namenode_address/path/of/directory\"");
 
     public static final ConfigOption<List<String>> SHIP_ARCHIVES =
             key("yarn.ship-archives")
@@ -280,9 +288,12 @@ public class YarnConfigOptions {
                     .asList()
                     .noDefaultValue()
                     .withDescription(
-                            "A semicolon-separated list of archives to be shipped to the YARN cluster."
-                                    + " These archives will be un-packed when localizing and they can be any of the following types: "
-                                    + "\".tar.gz\", \".tar\", \".tgz\", \".dst\", \".jar\", \".zip\".");
+                            "A semicolon-separated list of archives to be shipped to the YARN cluster. "
+                                    + "These archives can come from the local path of flink client or HDFS. "
+                                    + "They will be un-packed when localizing and they can be any of the following "
+                                    + "types: \".tar.gz\", \".tar\", \".tgz\", \".dst\", \".jar\", \".zip\". "
+                                    + "For example, \"/path/to/local/archive.jar;"
+                                    + "hdfs://$namenode_address/path/to/archive.jar\"");
 
     public static final ConfigOption<String> FLINK_DIST_JAR =
             key("yarn.flink-dist-jar")
@@ -353,6 +364,16 @@ public class YarnConfigOptions {
                                     + "resource directory. If set to false, Flink"
                                     + " will try to directly locate the keytab from the path itself.");
 
+    public static final ConfigOption<List<String>> APP_MASTER_TOKEN_SERVICES =
+            key("yarn.security.appmaster.delegation.token.services")
+                    .stringType()
+                    .asList()
+                    .defaultValues("hadoopfs")
+                    .withDescription(
+                            "The delegation token provider services are allowed to pass obtained tokens to YARN application master."
+                                    + " For backward compatibility to make log aggregation to work, we add tokens obtained"
+                                    + " by `hadoopfs` provider to AM by default.");
+
     public static final ConfigOption<List<String>> PROVIDED_LIB_DIRS =
             key("yarn.provided.lib.dirs")
                     .stringType()
@@ -379,6 +400,26 @@ public class YarnConfigOptions {
                                     + "world-readable. Flink will use it to exclude the local usrlib directory(i.e. usrlib/ under the parent directory of FLINK_LIB_DIR)."
                                     + " Unlike yarn.provided.lib.dirs, YARN will not cache it on the nodes as it is for each application. An example could be "
                                     + "hdfs://$namenode_address/path/of/flink/usrlib");
+
+    public static final ConfigOption<String> ROLLED_LOGS_INCLUDE_PATTERN =
+            key("yarn.rolled-logs.include-pattern")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Java regular expression to match log file names for inclusion in rolling log aggregation."
+                                    + " This regex is used by YARN’s log aggregation mechanism to identify which log files to collect."
+                                    + " To enable rolling aggregation in YARN, set the `yarn.nodemanager.log-aggregation.roll-monitoring-interval-seconds` property in `yarn-site.xml`."
+                                    + " Ensure that Flink’s Log4J configuration uses FileAppender or a compatible appender that can handle file deletions during runtime."
+                                    + " The regex pattern (e.g., `jobmanager*`) must align with the log file names defined in the Log4J configuration (e.g., `jobmanager.log`) to ensure all relevant files will be aggregated.");
+
+    public static final ConfigOption<String> ROLLED_LOGS_EXCLUDE_PATTERN =
+            key("yarn.rolled-logs.exclude-pattern")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Java regular expression to exclude certain log files from rolling log aggregation."
+                                    + " Log files matching the defined exclude pattern will be ignored during aggregation."
+                                    + " If a log file matches both the include and exclude patterns, the exclude pattern takes precedence and the file will be excluded from aggregation.");
 
     @SuppressWarnings("unused")
     public static final ConfigOption<String> HADOOP_CONFIG_KEY =
@@ -413,6 +454,25 @@ public class YarnConfigOptions {
                                                     "yarn-default.xml"))
                                     .build());
 
+    public static final ConfigOption<String> YARN_CONTAINER_START_COMMAND_TEMPLATE =
+            key("yarn.container-start-command-template")
+                    .stringType()
+                    .defaultValue("%java% %jvmmem% %jvmopts% %logging% %class% %args% %redirects%")
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "This configuration parameter allows users to pass custom settings (such as JVM paths, arguments etc.) to start the YARN. The following placeholders will be replaced: ")
+                                    .list(
+                                            text("%java%: Path to the Java executable"),
+                                            text("%jvmmem%: JVM memory limits and tweaks"),
+                                            text("%jvmopts%: Options for the Java VM"),
+                                            text(
+                                                    "%logging%: Logging-related configuration settings"),
+                                            text("%class%: Main class to execute"),
+                                            text("%args%: Arguments for the main class"),
+                                            text("%redirects%: Output redirects"))
+                                    .build());
+
     /**
      * Defines the configuration key of that external resource in Yarn. This is used as a suffix in
      * an actual config.
@@ -442,7 +502,9 @@ public class YarnConfigOptions {
     /** This class is not meant to be instantiated. */
     private YarnConfigOptions() {}
 
-    /** @see YarnConfigOptions#CLASSPATH_INCLUDE_USER_JAR */
+    /**
+     * @see YarnConfigOptions#CLASSPATH_INCLUDE_USER_JAR
+     */
     public enum UserJarInclusion implements DescribedEnum {
         DISABLED(text("Exclude user jars from the system class path")),
         FIRST(text("Position at the beginning")),

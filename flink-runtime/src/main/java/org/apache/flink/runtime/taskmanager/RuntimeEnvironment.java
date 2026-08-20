@@ -20,6 +20,7 @@ package org.apache.flink.runtime.taskmanager;
 
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.JobInfo;
 import org.apache.flink.api.common.TaskInfo;
 import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.configuration.Configuration;
@@ -30,6 +31,7 @@ import org.apache.flink.runtime.checkpoint.CheckpointException;
 import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
 import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.checkpoint.channel.ChannelStateWriteRequestExecutorFactory;
+import org.apache.flink.runtime.checkpoint.channel.ChannelStateWriter;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
 import org.apache.flink.runtime.externalresource.ExternalResourceInfoProvider;
@@ -37,6 +39,7 @@ import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.network.TaskEventDispatcher;
 import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
 import org.apache.flink.runtime.io.network.partition.consumer.IndexedInputGate;
+import org.apache.flink.runtime.jobgraph.JobType;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.InputSplitProvider;
 import org.apache.flink.runtime.jobgraph.tasks.TaskOperatorEventGateway;
@@ -63,7 +66,12 @@ public class RuntimeEnvironment implements Environment {
 
     private final JobID jobId;
     private final JobVertexID jobVertexId;
+
+    private final JobType jobType;
+
     private final ExecutionAttemptID executionId;
+
+    private final JobInfo jobInfo;
 
     private final TaskInfo taskInfo;
 
@@ -111,13 +119,17 @@ public class RuntimeEnvironment implements Environment {
 
     ChannelStateWriteRequestExecutorFactory channelStateExecutorFactory;
 
+    @Nullable private ChannelStateWriter channelStateWriter;
+
     // ------------------------------------------------------------------------
 
     public RuntimeEnvironment(
             JobID jobId,
+            JobType jobType,
             JobVertexID jobVertexId,
             ExecutionAttemptID executionId,
             ExecutionConfig executionConfig,
+            JobInfo jobInfo,
             TaskInfo taskInfo,
             Configuration jobConfiguration,
             Configuration taskConfiguration,
@@ -145,8 +157,10 @@ public class RuntimeEnvironment implements Environment {
             TaskManagerActions taskManagerActions) {
 
         this.jobId = checkNotNull(jobId);
+        this.jobType = checkNotNull(jobType);
         this.jobVertexId = checkNotNull(jobVertexId);
         this.executionId = checkNotNull(executionId);
+        this.jobInfo = checkNotNull(jobInfo);
         this.taskInfo = checkNotNull(taskInfo);
         this.executionConfig = checkNotNull(executionConfig);
         this.jobConfiguration = checkNotNull(jobConfiguration);
@@ -188,6 +202,11 @@ public class RuntimeEnvironment implements Environment {
     }
 
     @Override
+    public JobType getJobType() {
+        return jobType;
+    }
+
+    @Override
     public JobVertexID getJobVertexId() {
         return jobVertexId;
     }
@@ -195,6 +214,11 @@ public class RuntimeEnvironment implements Environment {
     @Override
     public ExecutionAttemptID getExecutionId() {
         return executionId;
+    }
+
+    @Override
+    public JobInfo getJobInfo() {
+        return jobInfo;
     }
 
     @Override
@@ -386,5 +410,16 @@ public class RuntimeEnvironment implements Environment {
     @Override
     public ChannelStateWriteRequestExecutorFactory getChannelStateExecutorFactory() {
         return channelStateExecutorFactory;
+    }
+
+    public void setChannelStateWriter(ChannelStateWriter channelStateWriter) {
+        checkState(this.channelStateWriter == null, "Cannot set channelStateWriter twice!");
+        this.channelStateWriter = channelStateWriter;
+    }
+
+    @Override
+    @Nullable
+    public ChannelStateWriter getChannelStateWriter() {
+        return this.channelStateWriter;
     }
 }

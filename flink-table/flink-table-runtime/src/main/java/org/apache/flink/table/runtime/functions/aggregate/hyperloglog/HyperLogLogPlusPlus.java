@@ -4768,6 +4768,7 @@ public class HyperLogLogPlusPlus {
 
     /** the maximum estimation error allowed. */
     private final double relativeSD;
+
     /**
      * HLL++ uses 'p' bits for addressing. The more addressing bits we use, the more precise the
      * algorithm will be, and the more memory it will require. The 'p' value is based on the
@@ -4945,8 +4946,8 @@ public class HyperLogLogPlusPlus {
             int i = 0;
             int shift = 0;
             while (idx < m && i < REGISTERS_PER_WORD) {
-                long mIdx = (word >>> shift) & REGISTER_WORD_MASK;
-                zInverse += 1.0 / (1 << mIdx);
+                int mIdx = (int) ((word >>> shift) & REGISTER_WORD_MASK);
+                zInverse += 1.0 / (1L << mIdx);
                 if (mIdx == 0) {
                     v += 1.0d;
                 }

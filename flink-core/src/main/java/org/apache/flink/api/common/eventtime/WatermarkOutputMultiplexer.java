@@ -49,11 +49,13 @@ import static org.apache.flink.util.Preconditions.checkState;
 @Internal
 public class WatermarkOutputMultiplexer {
     /** A callback for propagating changes to split based watermarks. */
-    @FunctionalInterface
     @Internal
     public interface WatermarkUpdateListener {
         /** Called when the watermark increases. */
         void onWatermarkUpdate(long watermark);
+
+        /** Called when the idle state changes. */
+        void onIdleUpdate(boolean idle);
     }
 
     /**
@@ -93,6 +95,11 @@ public class WatermarkOutputMultiplexer {
         checkState(previouslyRegistered == null, "Already contains an output for ID %s", id);
 
         combinedWatermarkStatus.add(outputState);
+    }
+
+    /** Registers a new multiplexed output with a no-op listener. */
+    public void registerNewOutput(String id) {
+        registerNewOutput(id, new NoOpWatermarkUpdateListener());
     }
 
     public boolean unregisterOutput(String id) {
@@ -141,14 +148,18 @@ public class WatermarkOutputMultiplexer {
 
     /**
      * Checks whether we need to update the combined watermark. Should be called when a newly
-     * emitted per-output watermark is higher than the max so far or if we need to combined the
+     * emitted per-output watermark is higher than the max so far or if we need to combine the
      * deferred per-output updates.
+     *
+     * <p>It also handles scenarios where both emitting a watermark and entering the idle state
+     * occur within the same invocation.
      */
     private void updateCombinedWatermark() {
         if (combinedWatermarkStatus.updateCombinedWatermark()) {
             underlyingOutput.emitWatermark(
                     new Watermark(combinedWatermarkStatus.getCombinedWatermark()));
-        } else if (combinedWatermarkStatus.isIdle()) {
+        }
+        if (combinedWatermarkStatus.isIdle()) {
             underlyingOutput.markIdle();
         }
     }
@@ -222,5 +233,15 @@ public class WatermarkOutputMultiplexer {
         public void markActive() {
             state.setIdle(false);
         }
+    }
+
+    /** A No-op implementation of {@link WatermarkUpdateListener}. */
+    @Internal
+    public static class NoOpWatermarkUpdateListener implements WatermarkUpdateListener {
+        @Override
+        public void onWatermarkUpdate(long watermark) {}
+
+        @Override
+        public void onIdleUpdate(boolean idle) {}
     }
 }

@@ -1,6 +1,367 @@
 <table class="rest-api table table-bordered">
   <tbody>
     <tr>
+      <td class="text-left" colspan="2"><h5><strong>/applications/overview</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Returns an overview over all applications.</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "object",
+  "id" : "urn:jsonschema:org:apache:flink:runtime:messages:webmonitor:MultipleApplicationsDetails",
+  "properties" : {
+    "applications" : {
+      "type" : "array",
+      "items" : {
+        "type" : "object",
+        "id" : "urn:jsonschema:org:apache:flink:runtime:messages:webmonitor:ApplicationDetails",
+        "properties" : {
+          "duration" : {
+            "type" : "integer"
+          },
+          "end-time" : {
+            "type" : "integer"
+          },
+          "id" : {
+            "type" : "any"
+          },
+          "jobs" : {
+            "type" : "object",
+            "additionalProperties" : {
+              "type" : "integer"
+            }
+          },
+          "name" : {
+            "type" : "string"
+          },
+          "start-time" : {
+            "type" : "integer"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        }
+      }
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/applications/:applicationid</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Returns details of an application.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>applicationid</code> - 32-character hexadecimal string value that identifies an application.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "object",
+  "id" : "urn:jsonschema:org:apache:flink:runtime:messages:webmonitor:ApplicationDetailsInfo",
+  "properties" : {
+    "duration" : {
+      "type" : "integer"
+    },
+    "end-time" : {
+      "type" : "integer"
+    },
+    "id" : {
+      "type" : "any"
+    },
+    "jobs" : {
+      "type" : "array",
+      "items" : {
+        "type" : "object",
+        "id" : "urn:jsonschema:org:apache:flink:runtime:messages:webmonitor:JobDetails",
+        "properties" : {
+          "duration" : {
+            "type" : "integer"
+          },
+          "end-time" : {
+            "type" : "integer"
+          },
+          "jid" : {
+            "type" : "any"
+          },
+          "jobType" : {
+            "type" : "string",
+            "enum" : [ "BATCH", "STREAMING" ]
+          },
+          "last-modification" : {
+            "type" : "integer"
+          },
+          "name" : {
+            "type" : "string"
+          },
+          "pending-operators" : {
+            "type" : "integer"
+          },
+          "schedulerType" : {
+            "type" : "string",
+            "enum" : [ "Default", "Adaptive", "AdaptiveBatch" ]
+          },
+          "start-time" : {
+            "type" : "integer"
+          },
+          "state" : {
+            "type" : "string",
+            "enum" : [ "INITIALIZING", "CREATED", "RUNNING", "FAILING", "FAILED", "CANCELLING", "CANCELED", "FINISHED", "RESTARTING", "SUSPENDED", "RECONCILING" ]
+          },
+          "tasks" : {
+            "type" : "object",
+            "additionalProperties" : {
+              "type" : "integer"
+            }
+          }
+        }
+      }
+    },
+    "name" : {
+      "type" : "string"
+    },
+    "start-time" : {
+      "type" : "integer"
+    },
+    "status" : {
+      "type" : "string"
+    },
+    "timestamps" : {
+      "type" : "object",
+      "additionalProperties" : {
+        "type" : "integer"
+      }
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/applications/:applicationid/cancel</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>POST</code></td>
+      <td class="text-left">Response code: <code>202 Accepted</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Terminates an application.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>applicationid</code> - 32-character hexadecimal string value that identifies an application.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/applications/:applicationid/exceptions</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Returns exception history for an application.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>applicationid</code> - 32-character hexadecimal string value that identifies an application.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "object",
+  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:ApplicationExceptionsInfoWithHistory",
+  "properties" : {
+    "exceptionHistory" : {
+      "type" : "object",
+      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:ApplicationExceptionsInfoWithHistory:ApplicationExceptionHistory",
+      "properties" : {
+        "entries" : {
+          "type" : "array",
+          "items" : {
+            "type" : "object",
+            "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:ApplicationExceptionsInfoWithHistory:ApplicationExceptionInfo",
+            "properties" : {
+              "exceptionName" : {
+                "type" : "string"
+              },
+              "jobId" : {
+                "type" : "any"
+              },
+              "stacktrace" : {
+                "type" : "string"
+              },
+              "timestamp" : {
+                "type" : "integer"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/applications/:applicationid/jobmanager/config</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Returns the jobmanager's configuration of a specific application.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>applicationid</code> - 32-character hexadecimal string value that identifies an application.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "array",
+  "items" : {
+    "type" : "object",
+    "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:ConfigurationInfoEntry",
+    "properties" : {
+      "key" : {
+        "type" : "string"
+      },
+      "value" : {
+        "type" : "string"
+      }
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
       <td class="text-left" colspan="2"><h5><strong>/cluster</strong></h5></td>
     </tr>
     <tr>
@@ -457,7 +818,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     <tr>
       <td colspan="2">
         <ul>
-<li><code>program-args</code> (optional): Deprecated, please use 'programArg' instead. String value that specifies the arguments for the program or plan</li>
 <li><code>programArg</code> (optional): Comma-separated list of program arguments.</li>
 <li><code>entry-class</code> (optional): String value that specifies the fully qualified name of the entry point class. Overrides the class defined in the jar file manifest.</li>
 <li><code>parallelism</code> (optional): Positive integer value that specifies the desired parallelism for the job.</li>
@@ -488,9 +848,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "parallelism" : {
       "type" : "integer"
     },
-    "programArgs" : {
-      "type" : "string"
-    },
     "programArgsList" : {
       "type" : "array",
       "items" : {
@@ -513,7 +870,73 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
   "properties" : {
     "plan" : {
       "type" : "object",
-      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:RawJson"
+      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:Plan",
+      "properties" : {
+        "jid" : {
+          "type" : "string"
+        },
+        "name" : {
+          "type" : "string"
+        },
+        "nodes" : {
+          "type" : "array",
+          "items" : {
+            "type" : "object",
+            "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:Plan:Node",
+            "properties" : {
+              "description" : {
+                "type" : "string"
+              },
+              "id" : {
+                "type" : "string"
+              },
+              "inputs" : {
+                "type" : "array",
+                "items" : {
+                  "type" : "object",
+                  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:Plan:Node:Input",
+                  "properties" : {
+                    "caching" : {
+                      "type" : "string"
+                    },
+                    "exchange" : {
+                      "type" : "string"
+                    },
+                    "id" : {
+                      "type" : "string"
+                    },
+                    "local_strategy" : {
+                      "type" : "string"
+                    },
+                    "num" : {
+                      "type" : "integer"
+                    },
+                    "ship_strategy" : {
+                      "type" : "string"
+                    }
+                  }
+                }
+              },
+              "operator" : {
+                "type" : "string"
+              },
+              "operator_strategy" : {
+                "type" : "string"
+              },
+              "optimizer_properties" : {
+                "type" : "object",
+                "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:RawJson"
+              },
+              "parallelism" : {
+                "type" : "integer"
+              }
+            }
+          }
+        },
+        "type" : {
+          "type" : "string"
+        }
+      }
     }
   }
 }</code></pre>
@@ -552,7 +975,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
         <ul>
 <li><code>allowNonRestoredState</code> (optional): Boolean value that specifies whether the job submission should be rejected if the savepoint contains state that cannot be mapped back to the job.</li>
 <li><code>savepointPath</code> (optional): String value that specifies the path of the savepoint to restore the job from.</li>
-<li><code>program-args</code> (optional): Deprecated, please use 'programArg' instead. String value that specifies the arguments for the program or plan</li>
 <li><code>programArg</code> (optional): Comma-separated list of program arguments.</li>
 <li><code>entry-class</code> (optional): String value that specifies the fully qualified name of the entry point class. Overrides the class defined in the jar file manifest.</li>
 <li><code>parallelism</code> (optional): Positive integer value that specifies the desired parallelism for the job.</li>
@@ -571,6 +993,10 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "allowNonRestoredState" : {
       "type" : "boolean"
     },
+    "claimMode" : {
+      "type" : "string",
+      "enum" : [ "CLAIM", "NO_CLAIM", "LEGACY" ]
+    },
     "entryClass" : {
       "type" : "string"
     },
@@ -585,9 +1011,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     },
     "parallelism" : {
       "type" : "integer"
-    },
-    "programArgs" : {
-      "type" : "string"
     },
     "programArgsList" : {
       "type" : "array",
@@ -616,7 +1039,113 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
   "type" : "object",
   "id" : "urn:jsonschema:org:apache:flink:runtime:webmonitor:handlers:JarRunResponseBody",
   "properties" : {
+    "applicationId" : {
+      "type" : "any"
+    },
     "jobid" : {
+      "type" : "any"
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/jars/:jarid/run-application</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>POST</code></td>
+      <td class="text-left">Response code: <code>202 Accepted</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Submits an application by running a jar previously uploaded via '/jars/upload'. </td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>jarid</code> - String value that identifies a jar. When uploading the jar a path is returned, where the filename is the ID. This value is equivalent to the `id` field in the list of uploaded jars (/jars).</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">Query parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>allowNonRestoredState</code> (optional): Boolean value that specifies whether the job submission should be rejected if the savepoint contains state that cannot be mapped back to the job.</li>
+<li><code>savepointPath</code> (optional): String value that specifies the path of the savepoint to restore the job from.</li>
+<li><code>programArg</code> (optional): Comma-separated list of program arguments.</li>
+<li><code>entry-class</code> (optional): String value that specifies the fully qualified name of the entry point class. Overrides the class defined in the jar file manifest.</li>
+<li><code>parallelism</code> (optional): Positive integer value that specifies the desired parallelism for the job.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{
+  "type" : "object",
+  "id" : "urn:jsonschema:org:apache:flink:runtime:webmonitor:handlers:JarRunApplicationRequestBody",
+  "properties" : {
+    "allowNonRestoredState" : {
+      "type" : "boolean"
+    },
+    "applicationId" : {
+      "type" : "any"
+    },
+    "claimMode" : {
+      "type" : "string",
+      "enum" : [ "CLAIM", "NO_CLAIM", "LEGACY" ]
+    },
+    "entryClass" : {
+      "type" : "string"
+    },
+    "flinkConfiguration" : {
+      "type" : "object",
+      "additionalProperties" : {
+        "type" : "string"
+      }
+    },
+    "jobId" : {
+      "type" : "any"
+    },
+    "parallelism" : {
+      "type" : "integer"
+    },
+    "programArgsList" : {
+      "type" : "array",
+      "items" : {
+        "type" : "string"
+      }
+    },
+    "savepointPath" : {
+      "type" : "string"
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "object",
+  "id" : "urn:jsonschema:org:apache:flink:runtime:webmonitor:handlers:JarRunApplicationResponseBody",
+  "properties" : {
+    "applicationid" : {
       "type" : "any"
     }
   }
@@ -940,75 +1469,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
 <table class="rest-api table table-bordered">
   <tbody>
     <tr>
-      <td class="text-left" colspan="2"><h5><strong>/jobs</strong></h5></td>
-    </tr>
-    <tr>
-      <td class="text-left" style="width: 20%">Verb: <code>POST</code></td>
-      <td class="text-left">Response code: <code>202 Accepted</code></td>
-    </tr>
-    <tr>
-      <td colspan="2">Submits a job. This call is primarily intended to be used by the Flink client. This call expects a multipart/form-data request that consists of file uploads for the serialized JobGraph, jars and distributed cache artifacts and an attribute named "request" for the JSON payload.</td>
-    </tr>
-    <tr>
-      <td colspan="2">
-        <label>
-          <details>
-          <summary>Request</summary>
-          <pre><code>{
-  "type" : "object",
-  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:JobSubmitRequestBody",
-  "properties" : {
-    "jobArtifactFileNames" : {
-      "type" : "array",
-      "items" : {
-        "type" : "object",
-        "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:JobSubmitRequestBody:DistributedCacheFile",
-        "properties" : {
-          "entryName" : {
-            "type" : "string"
-          },
-          "fileName" : {
-            "type" : "string"
-          }
-        }
-      }
-    },
-    "jobGraphFileName" : {
-      "type" : "string"
-    },
-    "jobJarFileNames" : {
-      "type" : "array",
-      "items" : {
-        "type" : "string"
-      }
-    }
-  }
-}</code></pre>
-        </label>
-      </td>
-    </tr>
-    <tr>
-      <td colspan="2">
-        <label>
-          <details>
-          <summary>Response</summary>
-          <pre><code>{
-  "type" : "object",
-  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:JobSubmitResponseBody",
-  "properties" : {
-    "jobUrl" : {
-      "type" : "string"
-    }
-  }
-}</code></pre>
-        </label>
-      </td>
-    </tr>
-  </tbody>
-</table>
-<table class="rest-api table table-bordered">
-  <tbody>
-    <tr>
       <td class="text-left" colspan="2"><h5><strong>/jobs/metrics</strong></h5></td>
     </tr>
     <tr>
@@ -1025,7 +1485,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       <td colspan="2">
         <ul>
 <li><code>get</code> (optional): Comma-separated list of string values to select specific metrics.</li>
-<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg".</li>
+<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg, skew".</li>
 <li><code>jobs</code> (optional): Comma-separated list of 32-character hexadecimal strings to select specific jobs.</li>
         </ul>
       </td>
@@ -1097,11 +1557,22 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "jid" : {
             "type" : "any"
           },
+          "jobType" : {
+            "type" : "string",
+            "enum" : [ "BATCH", "STREAMING" ]
+          },
           "last-modification" : {
             "type" : "integer"
           },
           "name" : {
             "type" : "string"
+          },
+          "pending-operators" : {
+            "type" : "integer"
+          },
+          "schedulerType" : {
+            "type" : "string",
+            "enum" : [ "Default", "Adaptive", "AdaptiveBatch" ]
           },
           "start-time" : {
             "type" : "integer"
@@ -1166,6 +1637,9 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
   "type" : "object",
   "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:JobDetailsInfo",
   "properties" : {
+    "application-id" : {
+      "type" : "any"
+    },
     "duration" : {
       "type" : "integer"
     },
@@ -1178,6 +1652,10 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "jid" : {
       "type" : "any"
     },
+    "job-type" : {
+      "type" : "string",
+      "enum" : [ "BATCH", "STREAMING" ]
+    },
     "maxParallelism" : {
       "type" : "integer"
     },
@@ -1187,9 +1665,82 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "now" : {
       "type" : "integer"
     },
+    "pending-operators" : {
+      "type" : "integer"
+    },
     "plan" : {
       "type" : "object",
-      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:RawJson"
+      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:Plan",
+      "properties" : {
+        "jid" : {
+          "type" : "string"
+        },
+        "name" : {
+          "type" : "string"
+        },
+        "nodes" : {
+          "type" : "array",
+          "items" : {
+            "type" : "object",
+            "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:Plan:Node",
+            "properties" : {
+              "description" : {
+                "type" : "string"
+              },
+              "id" : {
+                "type" : "string"
+              },
+              "inputs" : {
+                "type" : "array",
+                "items" : {
+                  "type" : "object",
+                  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:Plan:Node:Input",
+                  "properties" : {
+                    "caching" : {
+                      "type" : "string"
+                    },
+                    "exchange" : {
+                      "type" : "string"
+                    },
+                    "id" : {
+                      "type" : "string"
+                    },
+                    "local_strategy" : {
+                      "type" : "string"
+                    },
+                    "num" : {
+                      "type" : "integer"
+                    },
+                    "ship_strategy" : {
+                      "type" : "string"
+                    }
+                  }
+                }
+              },
+              "operator" : {
+                "type" : "string"
+              },
+              "operator_strategy" : {
+                "type" : "string"
+              },
+              "optimizer_properties" : {
+                "type" : "object",
+                "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:RawJson"
+              },
+              "parallelism" : {
+                "type" : "integer"
+              }
+            }
+          }
+        },
+        "type" : {
+          "type" : "string"
+        }
+      }
+    },
+    "schedulerType" : {
+      "type" : "string",
+      "enum" : [ "Default", "Adaptive", "AdaptiveBatch" ]
     },
     "start-time" : {
       "type" : "integer"
@@ -1203,6 +1754,10 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       "additionalProperties" : {
         "type" : "integer"
       }
+    },
+    "stream-graph" : {
+      "type" : "object",
+      "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:RawJson"
     },
     "timestamps" : {
       "type" : "object",
@@ -1272,6 +1827,9 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           },
           "parallelism" : {
             "type" : "integer"
+          },
+          "slotSharingGroupId" : {
+            "type" : "any"
           },
           "start-time" : {
             "type" : "integer"
@@ -1762,11 +2320,11 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       "properties" : {
         "alignment_buffered" : {
           "type" : "object",
-          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
         },
         "checkpointed_size" : {
           "type" : "object",
-          "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto",
+          "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto",
           "properties" : {
             "avg" : {
               "type" : "integer"
@@ -1796,19 +2354,19 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
         },
         "end_to_end_duration" : {
           "type" : "object",
-          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
         },
         "persisted_data" : {
           "type" : "object",
-          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
         },
         "processed_data" : {
           "type" : "object",
-          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
         },
         "state_size" : {
           "type" : "object",
-          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
         }
       }
     }
@@ -1829,7 +2387,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       <td class="text-left">Response code: <code>202 Accepted</code></td>
     </tr>
     <tr>
-      <td colspan="2">Triggers a checkpoint. This async operation would return a 'triggerid' for further query identifier.</td>
+      <td colspan="2">Triggers a checkpoint. The 'checkpointType' parameter does not support 'INCREMENTAL' option for now. See FLINK-33723. This async operation would return a 'triggerid' for further query identifier.</td>
     </tr>
     <tr>
       <td colspan="2">Path parameters</td>
@@ -2221,19 +2779,19 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "properties" : {
             "buffered" : {
               "type" : "object",
-              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
             },
             "duration" : {
               "type" : "object",
-              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
             },
             "persisted" : {
               "type" : "object",
-              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
             },
             "processed" : {
               "type" : "object",
-              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
             }
           }
         },
@@ -2243,17 +2801,17 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "properties" : {
             "async" : {
               "type" : "object",
-              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
             },
             "sync" : {
               "type" : "object",
-              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
             }
           }
         },
         "checkpointed_size" : {
           "type" : "object",
-          "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto",
+          "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto",
           "properties" : {
             "avg" : {
               "type" : "integer"
@@ -2283,15 +2841,15 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
         },
         "end_to_end_duration" : {
           "type" : "object",
-          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
         },
         "start_delay" : {
           "type" : "object",
-          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
         },
         "state_size" : {
           "type" : "object",
-          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:checkpoints:StatsSummaryDto"
+          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
         }
       }
     }
@@ -2518,30 +3076,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
   "type" : "object",
   "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobExceptionsInfoWithHistory",
   "properties" : {
-    "all-exceptions" : {
-      "type" : "array",
-      "items" : {
-        "type" : "object",
-        "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobExceptionsInfo:ExecutionExceptionInfo",
-        "properties" : {
-          "exception" : {
-            "type" : "string"
-          },
-          "location" : {
-            "type" : "string"
-          },
-          "task" : {
-            "type" : "string"
-          },
-          "taskManagerId" : {
-            "type" : "string"
-          },
-          "timestamp" : {
-            "type" : "integer"
-          }
-        }
-      }
-    },
     "exceptionHistory" : {
       "type" : "object",
       "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobExceptionsInfoWithHistory:JobExceptionHistory",
@@ -2558,6 +3092,9 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
                   "type" : "object",
                   "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobExceptionsInfoWithHistory:ExceptionInfo",
                   "properties" : {
+                    "endpoint" : {
+                      "type" : "string"
+                    },
                     "exceptionName" : {
                       "type" : "string"
                     },
@@ -2566,9 +3103,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
                       "additionalProperties" : {
                         "type" : "string"
                       }
-                    },
-                    "location" : {
-                      "type" : "string"
                     },
                     "stacktrace" : {
                       "type" : "string"
@@ -2585,6 +3119,9 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
                   }
                 }
               },
+              "endpoint" : {
+                "type" : "string"
+              },
               "exceptionName" : {
                 "type" : "string"
               },
@@ -2593,9 +3130,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
                 "additionalProperties" : {
                   "type" : "string"
                 }
-              },
-              "location" : {
-                "type" : "string"
               },
               "stacktrace" : {
                 "type" : "string"
@@ -2616,15 +3150,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "type" : "boolean"
         }
       }
-    },
-    "root-exception" : {
-      "type" : "string"
-    },
-    "timestamp" : {
-      "type" : "integer"
-    },
-    "truncated" : {
-      "type" : "boolean"
     }
   }
 }</code></pre>
@@ -2968,7 +3493,864 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
   "properties" : {
     "plan" : {
       "type" : "object",
-      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:RawJson"
+      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:Plan",
+      "properties" : {
+        "jid" : {
+          "type" : "string"
+        },
+        "name" : {
+          "type" : "string"
+        },
+        "nodes" : {
+          "type" : "array",
+          "items" : {
+            "type" : "object",
+            "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:Plan:Node",
+            "properties" : {
+              "description" : {
+                "type" : "string"
+              },
+              "id" : {
+                "type" : "string"
+              },
+              "inputs" : {
+                "type" : "array",
+                "items" : {
+                  "type" : "object",
+                  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:Plan:Node:Input",
+                  "properties" : {
+                    "caching" : {
+                      "type" : "string"
+                    },
+                    "exchange" : {
+                      "type" : "string"
+                    },
+                    "id" : {
+                      "type" : "string"
+                    },
+                    "local_strategy" : {
+                      "type" : "string"
+                    },
+                    "num" : {
+                      "type" : "integer"
+                    },
+                    "ship_strategy" : {
+                      "type" : "string"
+                    }
+                  }
+                }
+              },
+              "operator" : {
+                "type" : "string"
+              },
+              "operator_strategy" : {
+                "type" : "string"
+              },
+              "optimizer_properties" : {
+                "type" : "object",
+                "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:JobPlanInfo:RawJson"
+              },
+              "parallelism" : {
+                "type" : "integer"
+              }
+            }
+          }
+        },
+        "type" : {
+          "type" : "string"
+        }
+      }
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/jobs/:jobid/rescales/config</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Returns the job rescale configuration.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>jobid</code> - 32-character hexadecimal string value that identifies a job.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "object",
+  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleConfigInfo",
+  "properties" : {
+    "executingCooldownTimeoutInMillis" : {
+      "type" : "integer"
+    },
+    "executingResourceStabilizationTimeoutInMillis" : {
+      "type" : "integer"
+    },
+    "maximumDelayForTriggeringRescaleInMillis" : {
+      "type" : "integer"
+    },
+    "rescaleHistoryMax" : {
+      "type" : "integer"
+    },
+    "rescaleOnFailedCheckpointCount" : {
+      "type" : "integer"
+    },
+    "schedulerExecutionMode" : {
+      "type" : "string",
+      "enum" : [ "REACTIVE" ]
+    },
+    "slotIdleTimeoutInMillis" : {
+      "type" : "integer"
+    },
+    "submissionResourceStabilizationTimeoutInMillis" : {
+      "type" : "integer"
+    },
+    "submissionResourceWaitTimeoutInMillis" : {
+      "type" : "integer"
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/jobs/:jobid/rescales/details/:rescaleuuid</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Return a job rescale details.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>jobid</code> - 32-character hexadecimal string value that identifies a job.</li>
+<li><code>rescaleuuid</code> - String value that identifies a job rescale.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "object",
+  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleDetails",
+  "properties" : {
+    "endTimestampInMillis" : {
+      "type" : "integer"
+    },
+    "rescaleAttemptId" : {
+      "type" : "integer"
+    },
+    "rescaleUuid" : {
+      "type" : "string"
+    },
+    "resourceRequirementsUuid" : {
+      "type" : "string"
+    },
+    "schedulerStates" : {
+      "type" : "array",
+      "items" : {
+        "type" : "object",
+        "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:SchedulerStateSpan",
+        "properties" : {
+          "durationInMillis" : {
+            "type" : "integer"
+          },
+          "enterTimestampInMillis" : {
+            "type" : "integer"
+          },
+          "leaveTimestampInMillis" : {
+            "type" : "integer"
+          },
+          "state" : {
+            "type" : "string"
+          },
+          "stringifiedException" : {
+            "type" : "string"
+          }
+        }
+      }
+    },
+    "slots" : {
+      "type" : "object",
+      "additionalProperties" : {
+        "type" : "object",
+        "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleDetails:SlotSharingGroupRescaleInfo",
+        "properties" : {
+          "acquiredResourceProfile" : {
+            "type" : "object",
+            "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:ResourceProfileInfo"
+          },
+          "desiredSlots" : {
+            "type" : "integer"
+          },
+          "minimalRequiredSlots" : {
+            "type" : "integer"
+          },
+          "postRescaleSlots" : {
+            "type" : "integer"
+          },
+          "preRescaleSlots" : {
+            "type" : "integer"
+          },
+          "requestResourceProfile" : {
+            "type" : "object",
+            "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:ResourceProfileInfo",
+            "properties" : {
+              "cpuCores" : {
+                "type" : "number"
+              },
+              "extendedResources" : {
+                "type" : "object",
+                "additionalProperties" : {
+                  "type" : "number"
+                }
+              },
+              "managedMemory" : {
+                "type" : "integer"
+              },
+              "networkMemory" : {
+                "type" : "integer"
+              },
+              "taskHeapMemory" : {
+                "type" : "integer"
+              },
+              "taskOffHeapMemory" : {
+                "type" : "integer"
+              }
+            }
+          },
+          "slotSharingGroupId" : {
+            "type" : "any"
+          },
+          "slotSharingGroupName" : {
+            "type" : "string"
+          }
+        }
+      }
+    },
+    "startTimestampInMillis" : {
+      "type" : "integer"
+    },
+    "terminalState" : {
+      "type" : "string",
+      "enum" : [ "COMPLETED", "FAILED", "IGNORED" ]
+    },
+    "terminatedReason" : {
+      "type" : "string",
+      "enum" : [ "SUCCEEDED", "EXCEPTION_OCCURRED", "RESOURCE_REQUIREMENTS_UPDATED", "NO_RESOURCES_OR_PARALLELISMS_CHANGE", "JOB_FINISHED", "JOB_FAILED", "JOB_CANCELED", "JOB_FAILOVER_RESTARTING" ]
+    },
+    "triggerCause" : {
+      "type" : "string",
+      "enum" : [ "INITIAL_SCHEDULE", "UPDATE_REQUIREMENT", "NEW_RESOURCE_AVAILABLE", "RECOVERABLE_FAILOVER" ]
+    },
+    "vertices" : {
+      "type" : "object",
+      "additionalProperties" : {
+        "type" : "object",
+        "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleDetails:VertexParallelismRescaleInfo",
+        "properties" : {
+          "desiredParallelism" : {
+            "type" : "integer"
+          },
+          "jobVertexId" : {
+            "type" : "any"
+          },
+          "jobVertexName" : {
+            "type" : "string"
+          },
+          "postRescaleParallelism" : {
+            "type" : "integer"
+          },
+          "preRescaleParallelism" : {
+            "type" : "integer"
+          },
+          "slotSharingGroupId" : {
+            "type" : "any"
+          },
+          "slotSharingGroupName" : {
+            "type" : "string"
+          },
+          "sufficientParallelism" : {
+            "type" : "integer"
+          }
+        }
+      }
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/jobs/:jobid/rescales/history</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Return job rescales history.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>jobid</code> - 32-character hexadecimal string value that identifies a job.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "array",
+  "items" : {
+    "type" : "object",
+    "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleDetails",
+    "properties" : {
+      "endTimestampInMillis" : {
+        "type" : "integer"
+      },
+      "rescaleAttemptId" : {
+        "type" : "integer"
+      },
+      "rescaleUuid" : {
+        "type" : "string"
+      },
+      "resourceRequirementsUuid" : {
+        "type" : "string"
+      },
+      "schedulerStates" : {
+        "type" : "array",
+        "items" : {
+          "type" : "object",
+          "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:SchedulerStateSpan",
+          "properties" : {
+            "durationInMillis" : {
+              "type" : "integer"
+            },
+            "enterTimestampInMillis" : {
+              "type" : "integer"
+            },
+            "leaveTimestampInMillis" : {
+              "type" : "integer"
+            },
+            "state" : {
+              "type" : "string"
+            },
+            "stringifiedException" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
+      "slots" : {
+        "type" : "object",
+        "additionalProperties" : {
+          "type" : "object",
+          "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleDetails:SlotSharingGroupRescaleInfo",
+          "properties" : {
+            "acquiredResourceProfile" : {
+              "type" : "object",
+              "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:ResourceProfileInfo"
+            },
+            "desiredSlots" : {
+              "type" : "integer"
+            },
+            "minimalRequiredSlots" : {
+              "type" : "integer"
+            },
+            "postRescaleSlots" : {
+              "type" : "integer"
+            },
+            "preRescaleSlots" : {
+              "type" : "integer"
+            },
+            "requestResourceProfile" : {
+              "type" : "object",
+              "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:ResourceProfileInfo",
+              "properties" : {
+                "cpuCores" : {
+                  "type" : "number"
+                },
+                "extendedResources" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "number"
+                  }
+                },
+                "managedMemory" : {
+                  "type" : "integer"
+                },
+                "networkMemory" : {
+                  "type" : "integer"
+                },
+                "taskHeapMemory" : {
+                  "type" : "integer"
+                },
+                "taskOffHeapMemory" : {
+                  "type" : "integer"
+                }
+              }
+            },
+            "slotSharingGroupId" : {
+              "type" : "any"
+            },
+            "slotSharingGroupName" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
+      "startTimestampInMillis" : {
+        "type" : "integer"
+      },
+      "terminalState" : {
+        "type" : "string",
+        "enum" : [ "COMPLETED", "FAILED", "IGNORED" ]
+      },
+      "terminatedReason" : {
+        "type" : "string",
+        "enum" : [ "SUCCEEDED", "EXCEPTION_OCCURRED", "RESOURCE_REQUIREMENTS_UPDATED", "NO_RESOURCES_OR_PARALLELISMS_CHANGE", "JOB_FINISHED", "JOB_FAILED", "JOB_CANCELED", "JOB_FAILOVER_RESTARTING" ]
+      },
+      "triggerCause" : {
+        "type" : "string",
+        "enum" : [ "INITIAL_SCHEDULE", "UPDATE_REQUIREMENT", "NEW_RESOURCE_AVAILABLE", "RECOVERABLE_FAILOVER" ]
+      },
+      "vertices" : {
+        "type" : "object",
+        "additionalProperties" : {
+          "type" : "object",
+          "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleDetails:VertexParallelismRescaleInfo",
+          "properties" : {
+            "desiredParallelism" : {
+              "type" : "integer"
+            },
+            "jobVertexId" : {
+              "type" : "any"
+            },
+            "jobVertexName" : {
+              "type" : "string"
+            },
+            "postRescaleParallelism" : {
+              "type" : "integer"
+            },
+            "preRescaleParallelism" : {
+              "type" : "integer"
+            },
+            "slotSharingGroupId" : {
+              "type" : "any"
+            },
+            "slotSharingGroupName" : {
+              "type" : "string"
+            },
+            "sufficientParallelism" : {
+              "type" : "integer"
+            }
+          }
+        }
+      }
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/jobs/:jobid/rescales/overview</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Return job rescales overview.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>jobid</code> - 32-character hexadecimal string value that identifies a job.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "object",
+  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescalesOverview",
+  "properties" : {
+    "latest" : {
+      "type" : "object",
+      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescalesOverview:LatestRescales",
+      "properties" : {
+        "completed" : {
+          "type" : "object",
+          "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleDetails",
+          "properties" : {
+            "endTimestampInMillis" : {
+              "type" : "integer"
+            },
+            "rescaleAttemptId" : {
+              "type" : "integer"
+            },
+            "rescaleUuid" : {
+              "type" : "string"
+            },
+            "resourceRequirementsUuid" : {
+              "type" : "string"
+            },
+            "schedulerStates" : {
+              "type" : "array",
+              "items" : {
+                "type" : "object",
+                "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:SchedulerStateSpan",
+                "properties" : {
+                  "durationInMillis" : {
+                    "type" : "integer"
+                  },
+                  "enterTimestampInMillis" : {
+                    "type" : "integer"
+                  },
+                  "leaveTimestampInMillis" : {
+                    "type" : "integer"
+                  },
+                  "state" : {
+                    "type" : "string"
+                  },
+                  "stringifiedException" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            },
+            "slots" : {
+              "type" : "object",
+              "additionalProperties" : {
+                "type" : "object",
+                "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleDetails:SlotSharingGroupRescaleInfo",
+                "properties" : {
+                  "acquiredResourceProfile" : {
+                    "type" : "object",
+                    "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:ResourceProfileInfo"
+                  },
+                  "desiredSlots" : {
+                    "type" : "integer"
+                  },
+                  "minimalRequiredSlots" : {
+                    "type" : "integer"
+                  },
+                  "postRescaleSlots" : {
+                    "type" : "integer"
+                  },
+                  "preRescaleSlots" : {
+                    "type" : "integer"
+                  },
+                  "requestResourceProfile" : {
+                    "type" : "object",
+                    "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:ResourceProfileInfo",
+                    "properties" : {
+                      "cpuCores" : {
+                        "type" : "number"
+                      },
+                      "extendedResources" : {
+                        "type" : "object",
+                        "additionalProperties" : {
+                          "type" : "number"
+                        }
+                      },
+                      "managedMemory" : {
+                        "type" : "integer"
+                      },
+                      "networkMemory" : {
+                        "type" : "integer"
+                      },
+                      "taskHeapMemory" : {
+                        "type" : "integer"
+                      },
+                      "taskOffHeapMemory" : {
+                        "type" : "integer"
+                      }
+                    }
+                  },
+                  "slotSharingGroupId" : {
+                    "type" : "any"
+                  },
+                  "slotSharingGroupName" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            },
+            "startTimestampInMillis" : {
+              "type" : "integer"
+            },
+            "terminalState" : {
+              "type" : "string",
+              "enum" : [ "COMPLETED", "FAILED", "IGNORED" ]
+            },
+            "terminatedReason" : {
+              "type" : "string",
+              "enum" : [ "SUCCEEDED", "EXCEPTION_OCCURRED", "RESOURCE_REQUIREMENTS_UPDATED", "NO_RESOURCES_OR_PARALLELISMS_CHANGE", "JOB_FINISHED", "JOB_FAILED", "JOB_CANCELED", "JOB_FAILOVER_RESTARTING" ]
+            },
+            "triggerCause" : {
+              "type" : "string",
+              "enum" : [ "INITIAL_SCHEDULE", "UPDATE_REQUIREMENT", "NEW_RESOURCE_AVAILABLE", "RECOVERABLE_FAILOVER" ]
+            },
+            "vertices" : {
+              "type" : "object",
+              "additionalProperties" : {
+                "type" : "object",
+                "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleDetails:VertexParallelismRescaleInfo",
+                "properties" : {
+                  "desiredParallelism" : {
+                    "type" : "integer"
+                  },
+                  "jobVertexId" : {
+                    "type" : "any"
+                  },
+                  "jobVertexName" : {
+                    "type" : "string"
+                  },
+                  "postRescaleParallelism" : {
+                    "type" : "integer"
+                  },
+                  "preRescaleParallelism" : {
+                    "type" : "integer"
+                  },
+                  "slotSharingGroupId" : {
+                    "type" : "any"
+                  },
+                  "slotSharingGroupName" : {
+                    "type" : "string"
+                  },
+                  "sufficientParallelism" : {
+                    "type" : "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "failed" : {
+          "type" : "object",
+          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleDetails"
+        },
+        "ignored" : {
+          "type" : "object",
+          "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescaleDetails"
+        }
+      }
+    },
+    "rescalesCounts" : {
+      "type" : "object",
+      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescalesOverview:RescalesCounts",
+      "properties" : {
+        "completed" : {
+          "type" : "integer"
+        },
+        "failed" : {
+          "type" : "integer"
+        },
+        "ignored" : {
+          "type" : "integer"
+        },
+        "inProgress" : {
+          "type" : "integer"
+        }
+      }
+    }
+  }
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
+      <td class="text-left" colspan="2"><h5><strong>/jobs/:jobid/rescales/summary</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Return job rescales summary.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>jobid</code> - 32-character hexadecimal string value that identifies a job.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "object",
+  "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescalesSummary",
+  "properties" : {
+    "completedRescalesDurationStatsInMillis" : {
+      "type" : "object",
+      "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
+    },
+    "failedRescalesDurationStatsInMillis" : {
+      "type" : "object",
+      "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
+    },
+    "ignoredRescalesDurationStatsInMillis" : {
+      "type" : "object",
+      "$ref" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto"
+    },
+    "rescalesCounts" : {
+      "type" : "object",
+      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:job:rescales:JobRescalesOverview:RescalesCounts",
+      "properties" : {
+        "completed" : {
+          "type" : "integer"
+        },
+        "failed" : {
+          "type" : "integer"
+        },
+        "ignored" : {
+          "type" : "integer"
+        },
+        "inProgress" : {
+          "type" : "integer"
+        }
+      }
+    },
+    "rescalesDurationStatsInMillis" : {
+      "type" : "object",
+      "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:util:stats:StatsSummaryDto",
+      "properties" : {
+        "avg" : {
+          "type" : "integer"
+        },
+        "max" : {
+          "type" : "integer"
+        },
+        "min" : {
+          "type" : "integer"
+        },
+        "p50" : {
+          "type" : "number"
+        },
+        "p90" : {
+          "type" : "number"
+        },
+        "p95" : {
+          "type" : "number"
+        },
+        "p99" : {
+          "type" : "number"
+        },
+        "p999" : {
+          "type" : "number"
+        }
+      }
     }
   }
 }</code></pre>
@@ -3161,6 +4543,29 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
         }
       }
     }
+  },
+  "properties" : {
+    "jobVertexResourceRequirements" : {
+      "type" : "object",
+      "additionalProperties" : {
+        "type" : "object",
+        "id" : "urn:jsonschema:org:apache:flink:runtime:jobgraph:JobVertexResourceRequirements",
+        "properties" : {
+          "parallelism" : {
+            "type" : "object",
+            "id" : "urn:jsonschema:org:apache:flink:runtime:jobgraph:JobVertexResourceRequirements:Parallelism",
+            "properties" : {
+              "lowerBound" : {
+                "type" : "integer"
+              },
+              "upperBound" : {
+                "type" : "integer"
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }</code></pre>
         </label>
@@ -3211,6 +4616,29 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           },
           "upperBound" : {
             "type" : "integer"
+          }
+        }
+      }
+    }
+  },
+  "properties" : {
+    "jobVertexResourceRequirements" : {
+      "type" : "object",
+      "additionalProperties" : {
+        "type" : "object",
+        "id" : "urn:jsonschema:org:apache:flink:runtime:jobgraph:JobVertexResourceRequirements",
+        "properties" : {
+          "parallelism" : {
+            "type" : "object",
+            "id" : "urn:jsonschema:org:apache:flink:runtime:jobgraph:JobVertexResourceRequirements:Parallelism",
+            "properties" : {
+              "lowerBound" : {
+                "type" : "integer"
+              },
+              "upperBound" : {
+                "type" : "integer"
+              }
+            }
           }
         }
       }
@@ -3635,7 +5063,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "end-time" : {
             "type" : "integer"
           },
-          "host" : {
+          "endpoint" : {
             "type" : "string"
           },
           "metrics" : {
@@ -3971,6 +5399,61 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
 <table class="rest-api table table-bordered">
   <tbody>
     <tr>
+      <td class="text-left" colspan="2"><h5><strong>/jobs/:jobid/vertices/:vertexid/jm-operator-metrics</strong></h5></td>
+    </tr>
+    <tr>
+      <td class="text-left" style="width: 20%">Verb: <code>GET</code></td>
+      <td class="text-left">Response code: <code>200 OK</code></td>
+    </tr>
+    <tr>
+      <td colspan="2">Provides access to jobmanager operator metrics. This is an operator that executes on the jobmanager and the coordinator for FLIP 27 sources is one example of such an operator.</td>
+    </tr>
+    <tr>
+      <td colspan="2">Path parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>jobid</code> - 32-character hexadecimal string value that identifies a job.</li>
+<li><code>vertexid</code> - 32-character hexadecimal string value that identifies a job vertex.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">Query parameters</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <ul>
+<li><code>get</code> (optional): Comma-separated list of string values to select specific metrics.</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Request</summary>
+          <pre><code>{}</code></pre>
+        </label>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <label>
+          <details>
+          <summary>Response</summary>
+          <pre><code>{
+  "type" : "any"
+}</code></pre>
+        </label>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<table class="rest-api table table-bordered">
+  <tbody>
+    <tr>
       <td class="text-left" colspan="2"><h5><strong>/jobs/:jobid/vertices/:vertexid/metrics</strong></h5></td>
     </tr>
     <tr>
@@ -4079,7 +5562,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "attempt" : {
             "type" : "integer"
           },
-          "host" : {
+          "endpoint" : {
             "type" : "string"
           },
           "subtask" : {
@@ -4143,7 +5626,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       <td colspan="2">
         <ul>
 <li><code>get</code> (optional): Comma-separated list of string values to select specific metrics.</li>
-<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg".</li>
+<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg, skew".</li>
 <li><code>subtasks</code> (optional): Comma-separated list of integer ranges (e.g. "1,3,5-9") to select specific subtasks.</li>
         </ul>
       </td>
@@ -4221,7 +5704,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "end-time" : {
       "type" : "integer"
     },
-    "host" : {
+    "endpoint" : {
       "type" : "string"
     },
     "metrics" : {
@@ -4351,7 +5834,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
     "end-time" : {
       "type" : "integer"
     },
-    "host" : {
+    "endpoint" : {
       "type" : "string"
     },
     "metrics" : {
@@ -4621,7 +6104,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "duration" : {
             "type" : "integer"
           },
-          "host" : {
+          "endpoint" : {
             "type" : "string"
           },
           "subtask" : {
@@ -4729,7 +6212,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "end-time" : {
             "type" : "integer"
           },
-          "host" : {
+          "endpoint" : {
             "type" : "string"
           },
           "metrics" : {
@@ -5063,6 +6546,9 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
         "type" : "object",
         "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:taskmanager:TaskManagerInfo",
         "properties" : {
+          "assignedTasks" : {
+            "type" : "integer"
+          },
           "blocked" : {
             "type" : "boolean"
           },
@@ -5201,7 +6687,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       <td colspan="2">
         <ul>
 <li><code>get</code> (optional): Comma-separated list of string values to select specific metrics.</li>
-<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg".</li>
+<li><code>agg</code> (optional): Comma-separated list of aggregation modes which should be calculated. Available aggregations are: "min, max, sum, avg, skew".</li>
 <li><code>taskmanagers</code> (optional): Comma-separated list of 32-character hexadecimal strings to select specific task managers.</li>
         </ul>
       </td>
@@ -5238,7 +6724,7 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
       <td class="text-left">Response code: <code>200 OK</code></td>
     </tr>
     <tr>
-      <td colspan="2">Returns details for a task manager. "metrics.memorySegmentsAvailable" and "metrics.memorySegmentsTotal" are deprecated. Please use "metrics.nettyShuffleMemorySegmentsAvailable" and "metrics.nettyShuffleMemorySegmentsTotal" instead.</td>
+      <td colspan="2">Returns details for a task manager.</td>
     </tr>
     <tr>
       <td colspan="2">Path parameters</td>
@@ -5274,6 +6760,9 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
         "type" : "object",
         "id" : "urn:jsonschema:org:apache:flink:runtime:rest:messages:taskmanager:SlotInfo",
         "properties" : {
+          "assignedTasks" : {
+            "type" : "integer"
+          },
           "jobId" : {
             "type" : "any"
           },
@@ -5283,6 +6772,9 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           }
         }
       }
+    },
+    "assignedTasks" : {
+      "type" : "integer"
     },
     "blocked" : {
       "type" : "boolean"
@@ -5404,12 +6896,6 @@ Using 'curl' you can upload a jar via 'curl -X POST -H "Expect:" -F "jarfile=@pa
           "type" : "integer"
         },
         "mappedUsed" : {
-          "type" : "integer"
-        },
-        "memorySegmentsAvailable" : {
-          "type" : "integer"
-        },
-        "memorySegmentsTotal" : {
           "type" : "integer"
         },
         "nettyShuffleMemoryAvailable" : {

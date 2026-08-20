@@ -28,6 +28,7 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.InsertConflictStrategy;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.StatementSet;
 import org.apache.flink.table.api.Table;
@@ -37,10 +38,6 @@ import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.expressions.Expression;
-import org.apache.flink.table.functions.AggregateFunction;
-import org.apache.flink.table.functions.TableAggregateFunction;
-import org.apache.flink.table.functions.TableFunction;
-import org.apache.flink.table.functions.UserDefinedFunction;
 import org.apache.flink.table.types.AbstractDataType;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.types.Row;
@@ -121,56 +118,6 @@ public interface StreamTableEnvironment extends TableEnvironment {
             StreamExecutionEnvironment executionEnvironment, EnvironmentSettings settings) {
         return StreamTableEnvironmentImpl.create(executionEnvironment, settings);
     }
-
-    /**
-     * Registers a {@link TableFunction} under a unique name in the TableEnvironment's catalog.
-     * Registered functions can be referenced in Table API and SQL queries.
-     *
-     * @param name The name under which the function is registered.
-     * @param tableFunction The TableFunction to register.
-     * @param <T> The type of the output row.
-     * @deprecated Use {@link #createTemporarySystemFunction(String, UserDefinedFunction)} instead.
-     *     Please note that the new method also uses the new type system and reflective extraction
-     *     logic. It might be necessary to update the function implementation as well. See the
-     *     documentation of {@link TableFunction} for more information on the new function design.
-     */
-    @Deprecated
-    <T> void registerFunction(String name, TableFunction<T> tableFunction);
-
-    /**
-     * Registers an {@link AggregateFunction} under a unique name in the TableEnvironment's catalog.
-     * Registered functions can be referenced in Table API and SQL queries.
-     *
-     * @param name The name under which the function is registered.
-     * @param aggregateFunction The AggregateFunction to register.
-     * @param <T> The type of the output value.
-     * @param <ACC> The type of aggregate accumulator.
-     * @deprecated Use {@link #createTemporarySystemFunction(String, UserDefinedFunction)} instead.
-     *     Please note that the new method also uses the new type system and reflective extraction
-     *     logic. It might be necessary to update the function implementation as well. See the
-     *     documentation of {@link AggregateFunction} for more information on the new function
-     *     design.
-     */
-    @Deprecated
-    <T, ACC> void registerFunction(String name, AggregateFunction<T, ACC> aggregateFunction);
-
-    /**
-     * Registers an {@link TableAggregateFunction} under a unique name in the TableEnvironment's
-     * catalog. Registered functions can only be referenced in Table API.
-     *
-     * @param name The name under which the function is registered.
-     * @param tableAggregateFunction The TableAggregateFunction to register.
-     * @param <T> The type of the output value.
-     * @param <ACC> The type of aggregate accumulator.
-     * @deprecated Use {@link #createTemporarySystemFunction(String, UserDefinedFunction)} instead.
-     *     Please note that the new method also uses the new type system and reflective extraction
-     *     logic. It might be necessary to update the function implementation as well. See the
-     *     documentation of {@link TableAggregateFunction} for more information on the new function
-     *     design.
-     */
-    @Deprecated
-    <T, ACC> void registerFunction(
-            String name, TableAggregateFunction<T, ACC> tableAggregateFunction);
 
     /**
      * Converts the given {@link DataStream} into a {@link Table}.
@@ -687,6 +634,42 @@ public interface StreamTableEnvironment extends TableEnvironment {
             Table table, Schema targetSchema, ChangelogMode changelogMode);
 
     /**
+     * Converts the given {@link Table} into a {@link DataStream} of changelog entries.
+     *
+     * <p>Compared to {@link #toDataStream(Table)}, this method produces instances of {@link Row}
+     * and sets the {@link RowKind} flag that is contained in every record during runtime. The
+     * runtime behavior is similar to that of a {@link DynamicTableSink}.
+     *
+     * <p>This method requires an explicitly declared {@link ChangelogMode}. For example, use {@link
+     * ChangelogMode#upsert()} if the stream will not contain {@link RowKind#UPDATE_BEFORE}, or
+     * {@link ChangelogMode#insertOnly()} for non-updating streams.
+     *
+     * <p>Note that the type system of the table ecosystem is richer than the one of the DataStream
+     * API. The table runtime will make sure to properly serialize the output records to the first
+     * operator of the DataStream API. Afterwards, the {@link Types} semantics of the DataStream API
+     * need to be considered.
+     *
+     * <p>If the input table contains a single rowtime column, it will be propagated into a stream
+     * record's timestamp. Watermarks will be propagated as well. However, it is also possible to
+     * write out the rowtime as a metadata column. See {@link #toChangelogStream(Table, Schema)} for
+     * more information and examples on how to declare a {@link Schema}.
+     *
+     * @param table The {@link Table} to convert. It can be updating or insert-only.
+     * @param targetSchema The {@link Schema} that decides about the final external representation
+     *     in {@link DataStream} records.
+     * @param changelogMode The required kinds of changes in the result changelog. An exception will
+     *     be thrown if the given updating table cannot be represented in this changelog mode.
+     * @param conflictStrategy Conflict strategy to use for conflicts when an upsert key differs
+     *     from the primary key of the sink.
+     * @return The converted changelog stream of {@link Row}.
+     */
+    DataStream<Row> toChangelogStream(
+            Table table,
+            Schema targetSchema,
+            ChangelogMode changelogMode,
+            InsertConflictStrategy conflictStrategy);
+
+    /**
      * Returns a {@link StatementSet} that integrates with the Java-specific {@link DataStream} API.
      *
      * <p>It accepts pipelines defined by DML statements or {@link Table} objects. The planner can
@@ -752,28 +735,6 @@ public interface StreamTableEnvironment extends TableEnvironment {
      */
     @Deprecated
     <T> Table fromDataStream(DataStream<T> dataStream, Expression... fields);
-
-    /**
-     * Creates a view from the given {@link DataStream}. Registered views can be referenced in SQL
-     * queries.
-     *
-     * <p>The field names of the {@link Table} are automatically derived from the type of the {@link
-     * DataStream}.
-     *
-     * <p>The view is registered in the namespace of the current catalog and database. To register
-     * the view in a different catalog use {@link #createTemporaryView(String, DataStream)}.
-     *
-     * <p>Temporary objects can shadow permanent ones. If a permanent object in a given path exists,
-     * it will be inaccessible in the current session. To make the permanent object available again
-     * you can drop the corresponding temporary object.
-     *
-     * @param name The name under which the {@link DataStream} is registered in the catalog.
-     * @param dataStream The {@link DataStream} to register.
-     * @param <T> The type of the {@link DataStream} to register.
-     * @deprecated use {@link #createTemporaryView(String, DataStream)}
-     */
-    @Deprecated
-    <T> void registerDataStream(String name, DataStream<T> dataStream);
 
     /**
      * Creates a view from the given {@link DataStream} in a given path with specified field names.

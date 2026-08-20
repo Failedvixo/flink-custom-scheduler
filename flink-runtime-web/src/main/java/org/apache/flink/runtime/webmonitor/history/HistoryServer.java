@@ -19,15 +19,13 @@
 package org.apache.flink.runtime.webmonitor.history;
 
 import org.apache.flink.annotation.VisibleForTesting;
-import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.configuration.HistoryServerOptions;
-import org.apache.flink.configuration.IllegalConfigurationException;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.core.plugin.PluginUtils;
-import org.apache.flink.runtime.history.FsJobArchivist;
+import org.apache.flink.runtime.history.FsJsonArchivist;
 import org.apache.flink.runtime.io.network.netty.SSLHandlerFactory;
 import org.apache.flink.runtime.net.SSLUtils;
 import org.apache.flink.runtime.rest.handler.job.GeneratedLogUrlHandler;
@@ -39,6 +37,7 @@ import org.apache.flink.runtime.security.SecurityConfiguration;
 import org.apache.flink.runtime.security.SecurityUtils;
 import org.apache.flink.runtime.util.EnvironmentInformation;
 import org.apache.flink.runtime.util.Runnables;
+import org.apache.flink.runtime.webmonitor.history.retaining.CompositeArchiveRetainedStrategy;
 import org.apache.flink.runtime.webmonitor.utils.LogUrlUtil;
 import org.apache.flink.runtime.webmonitor.utils.WebFrontendBootstrap;
 import org.apache.flink.util.ExceptionUtils;
@@ -46,6 +45,7 @@ import org.apache.flink.util.ExecutorUtils;
 import org.apache.flink.util.FatalExitExceptionHandler;
 import org.apache.flink.util.FileUtils;
 import org.apache.flink.util.FlinkException;
+import org.apache.flink.util.ParameterTool;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.ShutdownHookUtil;
 import org.apache.flink.util.concurrent.ExecutorThreadFactory;
@@ -81,7 +81,7 @@ import java.util.function.Consumer;
  * jobs for which the JobManager may have already shut down.
  *
  * <p>The HistoryServer regularly checks a set of directories for job archives created by the {@link
- * FsJobArchivist} and caches these in a local directory. See {@link HistoryServerArchiveFetcher}.
+ * FsJsonArchivist} and caches these in a local directory. See {@link HistoryServerArchiveFetcher}.
  *
  * <p>All configuration options are defined in{@link HistoryServerOptions}.
  *
@@ -93,6 +93,8 @@ import java.util.function.Consumer;
  *   <li>/config
  *   <li>/joboverview
  *   <li>/jobs/:jobid/*
+ *   <li>/applications/overview
+ *   <li>/applications/:applicationid/*
  * </ul>
  *
  * <p>and relies on static files that are served by the {@link
@@ -110,7 +112,17 @@ public class HistoryServer {
     private final long webRefreshIntervalMillis;
     private final File webDir;
 
+    /**
+     * The archive fetcher is responsible for fetching job archives that are not part of an
+     * application (legacy jobs created before application archiving was introduced in FLINK-38761).
+     */
     private final HistoryServerArchiveFetcher archiveFetcher;
+
+    /**
+     * The archive fetcher is responsible for fetching application archives and their associated job
+     * archives.
+     */
+    private final HistoryServerApplicationArchiveFetcher applicationArchiveFetcher;
 
     @Nullable private final SSLHandlerFactory serverSSLFactory;
     private WebFrontendBootstrap netty;
@@ -161,7 +173,7 @@ public class HistoryServer {
     }
 
     public HistoryServer(Configuration config) throws IOException, FlinkException {
-        this(config, (event) -> {});
+        this(config, (event) -> {}, (event) -> {});
     }
 
     /**
@@ -175,7 +187,9 @@ public class HistoryServer {
      */
     public HistoryServer(
             Configuration config,
-            Consumer<HistoryServerArchiveFetcher.ArchiveEvent> jobArchiveEventListener)
+            Consumer<HistoryServerArchiveFetcher.ArchiveEvent> jobArchiveEventListener,
+            Consumer<HistoryServerApplicationArchiveFetcher.ArchiveEvent>
+                    applicationArchiveEventListener)
             throws IOException, FlinkException {
         Preconditions.checkNotNull(config);
         Preconditions.checkNotNull(jobArchiveEventListener);
@@ -192,26 +206,19 @@ public class HistoryServer {
             this.serverSSLFactory = null;
         }
 
-        webAddress = config.getString(HistoryServerOptions.HISTORY_SERVER_WEB_ADDRESS);
-        webPort = config.getInteger(HistoryServerOptions.HISTORY_SERVER_WEB_PORT);
+        webAddress = config.get(HistoryServerOptions.HISTORY_SERVER_WEB_ADDRESS);
+        webPort = config.get(HistoryServerOptions.HISTORY_SERVER_WEB_PORT);
         webRefreshIntervalMillis =
-                config.getLong(HistoryServerOptions.HISTORY_SERVER_WEB_REFRESH_INTERVAL);
+                config.get(HistoryServerOptions.HISTORY_SERVER_WEB_REFRESH_INTERVAL).toMillis();
 
-        String webDirectory = config.getString(HistoryServerOptions.HISTORY_SERVER_WEB_DIR);
-        if (webDirectory == null) {
-            webDirectory =
-                    System.getProperty("java.io.tmpdir")
-                            + File.separator
-                            + "flink-web-history-"
-                            + UUID.randomUUID();
-        }
-        webDir = new File(webDirectory);
+        webDir = clearWebDir(config);
 
-        boolean cleanupExpiredArchives =
-                config.getBoolean(HistoryServerOptions.HISTORY_SERVER_CLEANUP_EXPIRED_JOBS);
+        boolean cleanupExpiredJobs =
+                config.get(HistoryServerOptions.HISTORY_SERVER_CLEANUP_EXPIRED_JOBS);
+        boolean cleanupExpiredApplications =
+                config.get(HistoryServerOptions.HISTORY_SERVER_CLEANUP_EXPIRED_APPLICATIONS);
 
-        String refreshDirectories =
-                config.getString(HistoryServerOptions.HISTORY_SERVER_ARCHIVE_DIRS);
+        String refreshDirectories = config.get(HistoryServerOptions.HISTORY_SERVER_ARCHIVE_DIRS);
         if (refreshDirectories == null) {
             throw new FlinkException(
                     HistoryServerOptions.HISTORY_SERVER_ARCHIVE_DIRS + " was not configured.");
@@ -238,24 +245,53 @@ public class HistoryServer {
         }
 
         refreshIntervalMillis =
-                config.getLong(HistoryServerOptions.HISTORY_SERVER_ARCHIVE_REFRESH_INTERVAL);
-        int maxHistorySize = config.getInteger(HistoryServerOptions.HISTORY_SERVER_RETAINED_JOBS);
-        if (maxHistorySize == 0 || maxHistorySize < -1) {
-            throw new IllegalConfigurationException(
-                    "Cannot set %s to 0 or less than -1",
-                    HistoryServerOptions.HISTORY_SERVER_RETAINED_JOBS.key());
-        }
+                config.get(HistoryServerOptions.HISTORY_SERVER_ARCHIVE_REFRESH_INTERVAL).toMillis();
         archiveFetcher =
                 new HistoryServerArchiveFetcher(
                         refreshDirs,
                         webDir,
                         jobArchiveEventListener,
-                        cleanupExpiredArchives,
-                        maxHistorySize);
+                        cleanupExpiredJobs,
+                        CompositeArchiveRetainedStrategy.createForJobFromConfig(config));
+        applicationArchiveFetcher =
+                new HistoryServerApplicationArchiveFetcher(
+                        refreshDirs,
+                        webDir,
+                        applicationArchiveEventListener,
+                        cleanupExpiredApplications,
+                        CompositeArchiveRetainedStrategy.createForApplicationFromConfig(config));
 
         this.shutdownHook =
                 ShutdownHookUtil.addShutdownHook(
                         HistoryServer.this::stop, HistoryServer.class.getSimpleName(), LOG);
+    }
+
+    private File clearWebDir(Configuration config) throws IOException {
+        String webDirectory = config.get(HistoryServerOptions.HISTORY_SERVER_WEB_DIR);
+        if (webDirectory == null) {
+            webDirectory =
+                    System.getProperty("java.io.tmpdir")
+                            + File.separator
+                            + "flink-web-history-"
+                            + UUID.randomUUID();
+        }
+        final File webDir = new File(webDirectory);
+        LOG.info("Clear the web directory {}", webDir);
+        if (webDir.exists() && webDir.isDirectory() && webDir.listFiles() != null) {
+            // Reset the current working directory to eliminate the risk of local file leakage.
+            // This is because when the current process is forcibly terminated by an external
+            // command,
+            // the hook methods for cleaning up local files will not be called.
+            for (File subFile : webDir.listFiles()) {
+                FileUtils.deleteFileOrDirectory(subFile);
+            }
+        }
+        return webDir;
+    }
+
+    @VisibleForTesting
+    File getWebDir() {
+        return webDir;
     }
 
     @VisibleForTesting
@@ -326,7 +362,11 @@ public class HistoryServer {
 
     private Runnable getArchiveFetchingRunnable() {
         return Runnables.withUncaughtExceptionHandler(
-                () -> archiveFetcher.fetchArchives(), FatalExitExceptionHandler.INSTANCE);
+                () -> {
+                    archiveFetcher.fetchArchives();
+                    applicationArchiveFetcher.fetchArchives();
+                },
+                FatalExitExceptionHandler.INSTANCE);
     }
 
     void stop() {

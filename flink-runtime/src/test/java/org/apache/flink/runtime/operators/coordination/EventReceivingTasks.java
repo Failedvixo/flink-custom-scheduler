@@ -18,18 +18,13 @@
 
 package org.apache.flink.runtime.operators.coordination;
 
-import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutor;
+import org.apache.flink.runtime.concurrent.NoMainThreadCheckComponentMainThreadExecutor;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.messages.Acknowledge;
 import org.apache.flink.runtime.operators.coordination.util.IncompleteFuturesTracker;
-import org.apache.flink.runtime.testutils.DirectScheduledExecutorService;
 import org.apache.flink.util.SerializedValue;
 import org.apache.flink.util.concurrent.FutureUtils;
-import org.apache.flink.util.concurrent.ScheduledExecutor;
-import org.apache.flink.util.concurrent.ScheduledExecutorServiceAdapter;
-
-import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -39,8 +34,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.runtime.executiongraph.ExecutionGraphTestUtils.createExecutionAttemptId;
@@ -96,10 +89,13 @@ public class EventReceivingTasks implements SubtaskAccess.SubtaskAccessFactory {
     }
 
     public List<OperatorEvent> getSentEventsForSubtask(int subtaskIndex) {
-        return events.stream()
-                .filter((evt) -> evt.subtask == subtaskIndex)
-                .map((evt) -> evt.event)
-                .collect(Collectors.toList());
+
+        // Create a new array list to avoid concurrent modification during processing the events
+        return new ArrayList<>(events)
+                .stream()
+                        .filter((evt) -> evt.subtask == subtaskIndex)
+                        .map((evt) -> evt.event)
+                        .collect(Collectors.toList());
     }
 
     // ------------------------------------------------------------------------
@@ -135,7 +131,7 @@ public class EventReceivingTasks implements SubtaskAccess.SubtaskAccessFactory {
     // ------------------------------------------------------------------------
 
     /** A combination of an {@link OperatorEvent} and the target subtask it is sent to. */
-    public static final class EventWithSubtask {
+    static final class EventWithSubtask {
 
         public final OperatorEvent event;
         public final int subtask;
@@ -170,11 +166,12 @@ public class EventReceivingTasks implements SubtaskAccess.SubtaskAccessFactory {
 
     // ------------------------------------------------------------------------
 
-    private final class TestSubtaskAccess implements SubtaskAccess {
+    final class TestSubtaskAccess implements SubtaskAccess {
 
         private final ExecutionAttemptID executionAttemptId;
         private final CompletableFuture<?> running;
         private final int subtaskIndex;
+        private final List<Throwable> taskFailoverReasons = new ArrayList<>();
 
         private TestSubtaskAccess(int subtaskIndex, int attemptNumber, boolean isRunning) {
             this.subtaskIndex = subtaskIndex;
@@ -231,51 +228,11 @@ public class EventReceivingTasks implements SubtaskAccess.SubtaskAccessFactory {
 
         @Override
         public void triggerTaskFailover(Throwable cause) {
-            // ignore this in the tests
-        }
-    }
-
-    /**
-     * An implementation of {@link ComponentMainThreadExecutor} that executes Runnables with a
-     * wrapped {@link ScheduledExecutor} and disables {@link #assertRunningInMainThread()} checks.
-     */
-    private static class NoMainThreadCheckComponentMainThreadExecutor
-            implements ComponentMainThreadExecutor {
-        private final ScheduledExecutor scheduledExecutor;
-
-        private NoMainThreadCheckComponentMainThreadExecutor() {
-            this.scheduledExecutor =
-                    new ScheduledExecutorServiceAdapter(new DirectScheduledExecutorService());
+            taskFailoverReasons.add(cause);
         }
 
-        @Override
-        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
-            return scheduledExecutor.schedule(command, delay, unit);
-        }
-
-        @Override
-        public <V> ScheduledFuture<V> schedule(Callable<V> callable, long delay, TimeUnit unit) {
-            return scheduledExecutor.schedule(callable, delay, unit);
-        }
-
-        @Override
-        public ScheduledFuture<?> scheduleAtFixedRate(
-                Runnable command, long initialDelay, long period, TimeUnit unit) {
-            return scheduledExecutor.scheduleAtFixedRate(command, initialDelay, period, unit);
-        }
-
-        @Override
-        public ScheduledFuture<?> scheduleWithFixedDelay(
-                Runnable command, long initialDelay, long delay, TimeUnit unit) {
-            return scheduledExecutor.scheduleAtFixedRate(command, initialDelay, delay, unit);
-        }
-
-        @Override
-        public void assertRunningInMainThread() {}
-
-        @Override
-        public void execute(@NotNull Runnable command) {
-            scheduledExecutor.execute(command);
+        public List<Throwable> getTaskFailoverReasons() {
+            return taskFailoverReasons;
         }
     }
 }

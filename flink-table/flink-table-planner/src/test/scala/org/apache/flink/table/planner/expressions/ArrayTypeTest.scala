@@ -17,11 +17,13 @@
  */
 package org.apache.flink.table.planner.expressions
 
+import org.apache.flink.core.testutils.FlinkAssertions.anyCauseMatches
 import org.apache.flink.table.api._
 import org.apache.flink.table.planner.expressions.utils.ArrayTypeTestBase
 import org.apache.flink.table.planner.utils.DateTimeTestUtil.{localDate, localDateTime, localTime => gLocalTime}
 
-import org.junit.Test
+import org.assertj.core.api.Assertions.assertThatThrownBy
+import org.junit.jupiter.api.Test
 
 import java.time.{LocalDateTime => JLocalDateTime}
 
@@ -188,17 +190,6 @@ class ArrayTypeTest extends ArrayTypeTestBase {
 
     testAllApis('f11.cardinality(), "CARDINALITY(f11)", "1")
 
-    // element
-    testAllApis('f9.element(), "ELEMENT(f9)", "1")
-
-    testAllApis('f8.element(), "ELEMENT(f8)", "4.0")
-
-    testAllApis('f10.element(), "ELEMENT(f10)", "NULL")
-
-    testAllApis('f4.element(), "ELEMENT(f4)", "NULL")
-
-    testAllApis('f11.element(), "ELEMENT(f11)", "1")
-
     // comparison
     testAllApis('f2 === 'f5.at(1), "f2 = f5[1]", "TRUE")
 
@@ -226,16 +217,18 @@ class ArrayTypeTest extends ArrayTypeTestBase {
 
   @Test
   def testArrayIndexStaticCheckForTable(): Unit = {
-    thrown.expect(classOf[ValidationException])
-    thrown.expectMessage("Array element access needs an index starting at 1 but was 0.")
-    testTableApi('f2.at(0), "1")
+    assertThatThrownBy(() => testTableApi('f2.at(0), "1"))
+      .satisfies(
+        anyCauseMatches(
+          classOf[ValidationException],
+          "The provided index must be a valid SQL index starting from 1"))
   }
 
   @Test
   def testArrayIndexStaticCheckForSql(): Unit = {
-    thrown.expect(classOf[ValidationException])
-    thrown.expectMessage("Array element access needs an index starting at 1 but was 0.")
-    testSqlApi("f2[0]", "1")
+    testExpectedSqlException(
+      "f2[0]",
+      "Array element access needs an index starting at 1 but was 0.")
   }
 
   @Test

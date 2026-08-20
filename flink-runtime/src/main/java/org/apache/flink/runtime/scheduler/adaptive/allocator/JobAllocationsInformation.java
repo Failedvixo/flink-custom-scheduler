@@ -18,6 +18,7 @@
 package org.apache.flink.runtime.scheduler.adaptive.allocator;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.runtime.checkpoint.CompletedCheckpoint;
 import org.apache.flink.runtime.clusterframework.types.AllocationID;
 import org.apache.flink.runtime.executiongraph.ExecutionGraph;
 import org.apache.flink.runtime.executiongraph.ExecutionJobVertex;
@@ -25,8 +26,6 @@ import org.apache.flink.runtime.executiongraph.ExecutionVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.KeyGroupRangeAssignment;
-
-import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -47,8 +46,11 @@ public class JobAllocationsInformation {
         this.vertexAllocations = vertexAllocations;
     }
 
-    public static JobAllocationsInformation fromGraph(@Nullable ExecutionGraph graph) {
-        return graph == null ? empty() : new JobAllocationsInformation(calculateAllocations(graph));
+    public static JobAllocationsInformation fromGraphAndState(
+            final ExecutionGraph graph, final CompletedCheckpoint latestCheckpoint) {
+        return new JobAllocationsInformation(
+                calculateAllocations(
+                        graph, StateSizeEstimates.fromGraphAndState(graph, latestCheckpoint)));
     }
 
     public List<VertexAllocationInformation> getAllocations(JobVertexID jobVertexID) {
@@ -56,11 +58,12 @@ public class JobAllocationsInformation {
     }
 
     private static Map<JobVertexID, List<VertexAllocationInformation>> calculateAllocations(
-            ExecutionGraph graph) {
+            ExecutionGraph graph, StateSizeEstimates stateSizeEstimates) {
         final Map<JobVertexID, List<VertexAllocationInformation>> allocations = new HashMap<>();
         for (ExecutionJobVertex vertex : graph.getVerticesTopologically()) {
             JobVertexID jobVertexId = vertex.getJobVertexId();
             for (ExecutionVertex executionVertex : vertex.getTaskVertices()) {
+                long stateSize = stateSizeEstimates.estimate(executionVertex.getID()).orElse(0L);
                 AllocationID allocationId =
                         executionVertex.getCurrentExecutionAttempt().getAssignedAllocationID();
                 KeyGroupRange kgr =
@@ -70,7 +73,9 @@ public class JobAllocationsInformation {
                                 executionVertex.getParallelSubtaskIndex());
                 allocations
                         .computeIfAbsent(jobVertexId, ignored -> new ArrayList<>())
-                        .add(new VertexAllocationInformation(allocationId, jobVertexId, kgr));
+                        .add(
+                                new VertexAllocationInformation(
+                                        allocationId, jobVertexId, kgr, stateSize));
             }
         }
         return allocations;
@@ -89,12 +94,17 @@ public class JobAllocationsInformation {
         private final AllocationID allocationID;
         private final JobVertexID jobVertexID;
         private final KeyGroupRange keyGroupRange;
+        public final long stateSizeInBytes;
 
         public VertexAllocationInformation(
-                AllocationID allocationID, JobVertexID jobVertexID, KeyGroupRange keyGroupRange) {
+                AllocationID allocationID,
+                JobVertexID jobVertexID,
+                KeyGroupRange keyGroupRange,
+                long stateSizeInBytes) {
             this.allocationID = allocationID;
             this.jobVertexID = jobVertexID;
             this.keyGroupRange = keyGroupRange;
+            this.stateSizeInBytes = stateSizeInBytes;
         }
 
         public AllocationID getAllocationID() {

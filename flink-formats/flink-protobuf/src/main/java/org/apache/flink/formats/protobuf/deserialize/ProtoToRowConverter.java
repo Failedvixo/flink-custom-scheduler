@@ -18,6 +18,7 @@
 
 package org.apache.flink.formats.protobuf.deserialize;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.formats.protobuf.PbCodegenException;
 import org.apache.flink.formats.protobuf.PbConstant;
 import org.apache.flink.formats.protobuf.PbFormatConfig;
@@ -35,7 +36,8 @@ import org.apache.flink.table.types.logical.RowType;
 
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Descriptors;
-import com.google.protobuf.Descriptors.FileDescriptor.Syntax;
+import com.google.protobuf.DiscardUnknownFieldsParser;
+import com.google.protobuf.Parser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,8 +54,9 @@ import java.util.UUID;
  */
 public class ProtoToRowConverter {
     private static final Logger LOG = LoggerFactory.getLogger(ProtoToRowConverter.class);
-    private final Method parseFromMethod;
     private final Method decodeMethod;
+    private final Parser<?> protoParser;
+    private boolean isCodeSplit = false;
 
     public ProtoToRowConverter(RowType rowType, PbFormatConfig formatConfig)
             throws PbCodegenException {
@@ -66,18 +69,15 @@ public class ProtoToRowConverter {
                             true,
                             Thread.currentThread().getContextClassLoader());
             String fullMessageClassName = PbFormatUtils.getFullJavaName(descriptor);
-            if (descriptor.getFile().getSyntax() == Syntax.PROTO3) {
-                // pb3 always read default values
-                formatConfig =
-                        new PbFormatConfig(
-                                formatConfig.getMessageClassName(),
-                                formatConfig.isIgnoreParseErrors(),
-                                true,
-                                formatConfig.getWriteNullStringLiterals());
+            boolean readDefaultValuesForPrimitiveTypes = formatConfig.isReadDefaultValues();
+            if ("proto3".equals(descriptor.getFile().toProto().getSyntax())) {
+                // pb3 always read default values for primitive types
+                readDefaultValuesForPrimitiveTypes = true;
             }
             PbCodegenAppender codegenAppender = new PbCodegenAppender();
-            PbFormatContext pbFormatContext = new PbFormatContext(formatConfig);
-            String uuid = UUID.randomUUID().toString().replaceAll("\\-", "");
+            PbFormatContext pbFormatContext =
+                    new PbFormatContext(formatConfig, readDefaultValuesForPrimitiveTypes);
+            String uuid = UUID.randomUUID().toString().replace("-", "");
             String generatedClassName = "GeneratedProtoToRow_" + uuid;
             String generatedPackageName = ProtoToRowConverter.class.getPackage().getName();
             codegenAppender.appendLine("package " + generatedPackageName);
@@ -108,6 +108,12 @@ public class ProtoToRowConverter {
             codegenAppender.appendSegment(genCode);
             codegenAppender.appendLine("return rowData");
             codegenAppender.appendSegment("}");
+            if (!pbFormatContext.getSplitMethodStack().isEmpty()) {
+                isCodeSplit = true;
+                for (String splitMethod : pbFormatContext.getSplitMethodStack()) {
+                    codegenAppender.appendSegment(splitMethod);
+                }
+            }
             codegenAppender.appendSegment("}");
 
             String printCode = codegenAppender.printWithLineNumber();
@@ -119,14 +125,21 @@ public class ProtoToRowConverter {
                             codegenAppender.code());
             decodeMethod =
                     generatedClass.getMethod(PbConstant.GENERATED_DECODE_METHOD, messageClass);
-            parseFromMethod = messageClass.getMethod(PbConstant.PB_METHOD_PARSE_FROM, byte[].class);
+            Method parserMethod = messageClass.getMethod(PbConstant.PB_METHOD_PARSER);
+            Parser originalProtoParser = (Parser) parserMethod.invoke(null);
+            protoParser = DiscardUnknownFieldsParser.wrap(originalProtoParser);
         } catch (Exception ex) {
             throw new PbCodegenException(ex);
         }
     }
 
     public RowData convertProtoBinaryToRow(byte[] data) throws Exception {
-        Object messageObj = parseFromMethod.invoke(null, data);
+        Object messageObj = protoParser.parseFrom(data);
         return (RowData) decodeMethod.invoke(null, messageObj);
+    }
+
+    @VisibleForTesting
+    protected boolean isCodeSplit() {
+        return isCodeSplit;
     }
 }

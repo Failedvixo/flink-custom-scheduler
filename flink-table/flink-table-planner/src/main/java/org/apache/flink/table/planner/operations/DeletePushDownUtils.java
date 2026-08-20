@@ -21,7 +21,6 @@ package org.apache.flink.table.planner.operations;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
-import org.apache.flink.table.catalog.CatalogManager;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ContextResolvedTable;
 import org.apache.flink.table.catalog.ObjectIdentifier;
@@ -38,7 +37,6 @@ import org.apache.flink.table.planner.plan.rules.logical.SimplifyFilterCondition
 import org.apache.flink.table.planner.plan.utils.FlinkRexUtil;
 import org.apache.flink.table.planner.plan.utils.RexNodeToExpressionConverter;
 import org.apache.flink.table.planner.utils.ShortcutUtils;
-import org.apache.flink.table.planner.utils.TableConfigUtils;
 
 import org.apache.calcite.plan.RelOptPredicateList;
 import org.apache.calcite.plan.RelOptRuleCall;
@@ -56,7 +54,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.TimeZone;
 import java.util.stream.Collectors;
 
 import scala.Option;
@@ -70,9 +67,7 @@ public class DeletePushDownUtils {
      * can't get the {@link DynamicTableSink}.
      */
     public static Optional<DynamicTableSink> getDynamicTableSink(
-            ContextResolvedTable contextResolvedTable,
-            LogicalTableModify tableModify,
-            CatalogManager catalogManager) {
+            ContextResolvedTable contextResolvedTable, LogicalTableModify tableModify) {
         final FlinkContext context = ShortcutUtils.unwrapContext(tableModify.getCluster());
 
         CatalogBaseTable catalogBaseTable = contextResolvedTable.getTable();
@@ -85,9 +80,6 @@ public class DeletePushDownUtils {
             // only consider the CatalogTable that doesn't use legacy connector sink option
             if (!contextResolvedTable.isAnonymous()
                     && !TableFactoryUtil.isLegacyConnectorOptions(
-                            catalogManager
-                                    .getCatalog(objectIdentifier.getCatalogName())
-                                    .orElse(null),
                             context.getTableConfig(),
                             !context.isBatchMode(),
                             objectIdentifier,
@@ -146,7 +138,7 @@ public class DeletePushDownUtils {
         // we try to reduce and simplify the filter
         ReduceExpressionsRuleProxy reduceExpressionsRuleProxy = ReduceExpressionsRuleProxy.INSTANCE;
         SimplifyFilterConditionRule simplifyFilterConditionRule =
-                SimplifyFilterConditionRule.INSTANCE();
+                SimplifyFilterConditionRule.INSTANCE;
         // max iteration num for reducing and simplifying filter,
         // we use 5 as the max iteration num which is same with the iteration num in Flink's plan
         // optimizing.
@@ -169,9 +161,9 @@ public class DeletePushDownUtils {
             // create a new filter
             filter = filter.copy(filter.getTraitSet(), filter.getInput(), newCondition);
             // then apply the rule to simplify filter
-            Option<Filter> changedFilter =
+            Optional<Filter> changedFilter =
                     simplifyFilterConditionRule.simplify(filter, new boolean[] {false});
-            if (changedFilter.isDefined()) {
+            if (changedFilter.isPresent()) {
                 filter = changedFilter.get();
                 changed = true;
             }
@@ -229,9 +221,7 @@ public class DeletePushDownUtils {
                         filter.getCluster().getRexBuilder(),
                         filter.getInput().getRowType().getFieldNames().toArray(new String[0]),
                         context.getFunctionCatalog(),
-                        context.getCatalogManager(),
-                        TimeZone.getTimeZone(
-                                TableConfigUtils.getLocalTimeZone(context.getTableConfig())));
+                        context.getCatalogManager());
         List<Expression> filters =
                 Arrays.stream(convertiblePredicates)
                         .map(

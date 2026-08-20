@@ -18,22 +18,24 @@
 
 package org.apache.flink.runtime.dispatcher.runner;
 
-import org.apache.flink.api.common.time.Time;
+import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.HighAvailabilityOptions;
 import org.apache.flink.core.testutils.AllCallbackWrapper;
+import org.apache.flink.runtime.application.SingleJobApplication;
 import org.apache.flink.runtime.blob.BlobServer;
 import org.apache.flink.runtime.blob.BlobUtils;
 import org.apache.flink.runtime.blob.PermanentBlobKey;
-import org.apache.flink.runtime.clusterframework.ApplicationStatus;
 import org.apache.flink.runtime.dispatcher.DispatcherGateway;
 import org.apache.flink.runtime.dispatcher.DispatcherId;
 import org.apache.flink.runtime.dispatcher.DispatcherOperationCaches;
-import org.apache.flink.runtime.dispatcher.MemoryExecutionGraphInfoStore;
+import org.apache.flink.runtime.dispatcher.MemoryArchivedApplicationStore;
 import org.apache.flink.runtime.dispatcher.PartialDispatcherServices;
 import org.apache.flink.runtime.dispatcher.SessionDispatcherFactory;
 import org.apache.flink.runtime.dispatcher.VoidHistoryServerArchivist;
 import org.apache.flink.runtime.heartbeat.TestingHeartbeatServices;
+import org.apache.flink.runtime.highavailability.ApplicationResultStore;
+import org.apache.flink.runtime.highavailability.EmbeddedApplicationResultStore;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServicesUtils;
 import org.apache.flink.runtime.highavailability.JobResultStore;
 import org.apache.flink.runtime.highavailability.TestingHighAvailabilityServices;
@@ -43,8 +45,10 @@ import org.apache.flink.runtime.highavailability.zookeeper.CuratorFrameworkWithU
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobGraphTestUtils;
 import org.apache.flink.runtime.jobgraph.JobVertex;
-import org.apache.flink.runtime.jobmanager.JobGraphStore;
-import org.apache.flink.runtime.jobmanager.JobPersistenceComponentFactory;
+import org.apache.flink.runtime.jobmanager.ApplicationStore;
+import org.apache.flink.runtime.jobmanager.ExecutionPlanStore;
+import org.apache.flink.runtime.jobmanager.PersistenceComponentFactory;
+import org.apache.flink.runtime.jobmanager.StandaloneApplicationStore;
 import org.apache.flink.runtime.jobmaster.JobResult;
 import org.apache.flink.runtime.leaderelection.LeaderElection;
 import org.apache.flink.runtime.leaderelection.TestingLeaderElection;
@@ -74,6 +78,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -88,7 +93,7 @@ class ZooKeeperDefaultDispatcherRunnerTest {
     private static final Logger LOG =
             LoggerFactory.getLogger(ZooKeeperDefaultDispatcherRunnerTest.class);
 
-    private static final Time TESTING_TIMEOUT = Time.seconds(10L);
+    private static final Duration TESTING_TIMEOUT = Duration.ofSeconds(10L);
 
     @RegisterExtension
     public static AllCallbackWrapper<ZooKeeperExtension> zooKeeperExtensionWrapper =
@@ -116,11 +121,11 @@ class ZooKeeperDefaultDispatcherRunnerTest {
     void setup() throws IOException {
         fatalErrorHandler = new TestingFatalErrorHandler();
         configuration = new Configuration();
-        configuration.setString(HighAvailabilityOptions.HA_MODE, "zookeeper");
-        configuration.setString(
+        configuration.set(HighAvailabilityOptions.HA_MODE, "zookeeper");
+        configuration.set(
                 HighAvailabilityOptions.HA_ZOOKEEPER_QUORUM,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
-        configuration.setString(
+        configuration.set(
                 HighAvailabilityOptions.HA_STORAGE_PATH,
                 TempDirUtils.newFolder(temporaryFolder).getAbsolutePath());
 
@@ -174,7 +179,7 @@ class ZooKeeperDefaultDispatcherRunnerTest {
                             blobServer,
                             new TestingHeartbeatServices(),
                             UnregisteredMetricGroups::createUnregisteredJobManagerMetricGroup,
-                            new MemoryExecutionGraphInfoStore(),
+                            new MemoryArchivedApplicationStore(),
                             fatalErrorHandler,
                             VoidHistoryServerArchivist.INSTANCE,
                             null,
@@ -190,16 +195,26 @@ class ZooKeeperDefaultDispatcherRunnerTest {
                     createDispatcherRunner(
                             rpcService,
                             dispatcherLeaderElection,
-                            new JobPersistenceComponentFactory() {
+                            new PersistenceComponentFactory() {
                                 @Override
-                                public JobGraphStore createJobGraphStore() {
-                                    return createZooKeeperJobGraphStore(
+                                public ExecutionPlanStore createExecutionPlanStore() {
+                                    return createZooKeeperExecutionPlanStore(
                                             curatorFrameworkWrapper.asCuratorFramework());
                                 }
 
                                 @Override
                                 public JobResultStore createJobResultStore() {
                                     return new EmbeddedJobResultStore();
+                                }
+
+                                @Override
+                                public ApplicationStore createApplicationStore() {
+                                    return new StandaloneApplicationStore();
+                                }
+
+                                @Override
+                                public ApplicationResultStore createApplicationResultStore() {
+                                    return new EmbeddedApplicationResultStore();
                                 }
                             },
                             partialDispatcherServices,
@@ -210,7 +225,9 @@ class ZooKeeperDefaultDispatcherRunnerTest {
 
                 final JobGraph jobGraph = createJobGraphWithBlobs();
                 LOG.info("Initial job submission {}.", jobGraph.getJobID());
-                dispatcherGateway.submitJob(jobGraph, TESTING_TIMEOUT).get();
+                dispatcherGateway
+                        .submitApplication(new SingleJobApplication(jobGraph), TESTING_TIMEOUT)
+                        .get();
 
                 dispatcherLeaderElection.notLeader();
 
@@ -227,16 +244,17 @@ class ZooKeeperDefaultDispatcherRunnerTest {
                 // a successful cancellation should eventually remove all job information
                 final JobResult jobResult = jobResultFuture.get();
 
-                assertThat(jobResult.getApplicationStatus()).isEqualTo(ApplicationStatus.CANCELED);
+                assertThat(jobResult.getJobStatus().orElse(null)).isEqualTo(JobStatus.CANCELED);
 
                 dispatcherLeaderElection.notLeader();
 
                 // check that the job has been removed from ZooKeeper
-                final JobGraphStore submittedJobGraphStore =
-                        createZooKeeperJobGraphStore(curatorFrameworkWrapper.asCuratorFramework());
+                final ExecutionPlanStore submittedExecutionPlanStore =
+                        createZooKeeperExecutionPlanStore(
+                                curatorFrameworkWrapper.asCuratorFramework());
 
                 CommonTestUtils.waitUntilCondition(
-                        () -> submittedJobGraphStore.getJobIds().isEmpty(), 20L);
+                        () -> submittedExecutionPlanStore.getJobIds().isEmpty(), 20L);
             }
         }
 
@@ -247,22 +265,22 @@ class ZooKeeperDefaultDispatcherRunnerTest {
     private DispatcherRunner createDispatcherRunner(
             TestingRpcService rpcService,
             LeaderElection dispatcherLeaderElection,
-            JobPersistenceComponentFactory jobPersistenceComponentFactory,
+            PersistenceComponentFactory persistenceComponentFactory,
             PartialDispatcherServices partialDispatcherServices,
             DispatcherRunnerFactory dispatcherRunnerFactory)
             throws Exception {
         return dispatcherRunnerFactory.createDispatcherRunner(
                 dispatcherLeaderElection,
                 fatalErrorHandler,
-                jobPersistenceComponentFactory,
+                persistenceComponentFactory,
                 EXECUTOR_EXTENSION.getExecutor(),
                 rpcService,
                 partialDispatcherServices);
     }
 
-    private JobGraphStore createZooKeeperJobGraphStore(CuratorFramework client) {
+    private ExecutionPlanStore createZooKeeperExecutionPlanStore(CuratorFramework client) {
         try {
-            return ZooKeeperUtils.createJobGraphs(client, configuration);
+            return ZooKeeperUtils.createExecutionPlans(client, configuration);
         } catch (Exception e) {
             ExceptionUtils.rethrow(e);
             return null;

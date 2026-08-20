@@ -62,8 +62,8 @@ class JarSubmissionITCase {
                 TestingDispatcherGateway.newBuilder()
                         .setBlobServerPort(
                                 blobServerExtension.getCustomExtension().getBlobServerPort())
-                        .setSubmitFunction(
-                                jobGraph -> CompletableFuture.completedFuture(Acknowledge.get()))
+                        .setSubmitApplicationFunction(
+                                application -> CompletableFuture.completedFuture(Acknowledge.get()))
                         .build();
 
         final JarHandlers handlers =
@@ -94,7 +94,7 @@ class JarSubmissionITCase {
         final JobPlanInfo planResponse = showPlan(planHandler, storedJarName, restfulGateway);
         // we're only interested in the core functionality so checking for a small detail is
         // sufficient
-        assertThat(planResponse.getJsonPlan()).contains("TestProgram.java:28");
+        assertThat(planResponse.getPlan().getName()).isEqualTo("Flink Streaming Job");
 
         runJar(runHandler, storedJarName, restfulGateway);
 

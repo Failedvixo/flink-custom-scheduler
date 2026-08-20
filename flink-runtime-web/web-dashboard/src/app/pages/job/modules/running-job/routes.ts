@@ -53,6 +53,14 @@ export const RUNNING_JOB_ROUTES: Routes = [
         }
       },
       {
+        path: 'dataskew',
+        loadComponent: () =>
+          import('@flink-runtime-web/pages/job/dataskew/data-skew.component').then(m => m.DataSkewComponent),
+        data: {
+          path: 'dataskew'
+        }
+      },
+      {
         path: 'checkpoints',
         loadComponent: () =>
           import('@flink-runtime-web/pages/job/checkpoints/job-checkpoints.component').then(
@@ -70,6 +78,14 @@ export const RUNNING_JOB_ROUTES: Routes = [
           ),
         data: {
           path: 'configuration'
+        }
+      },
+      {
+        path: 'rescales',
+        loadComponent: () =>
+          import('@flink-runtime-web/pages/job/rescales/job-rescales.component').then(m => m.JobRescalesComponent),
+        data: {
+          path: 'rescales'
         }
       },
       { path: '**', redirectTo: 'overview', pathMatch: 'full' }

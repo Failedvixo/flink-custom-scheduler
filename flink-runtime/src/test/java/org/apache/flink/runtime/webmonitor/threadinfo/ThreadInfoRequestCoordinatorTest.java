@@ -25,7 +25,7 @@ import org.apache.flink.runtime.taskexecutor.IdleTestTask;
 import org.apache.flink.runtime.taskexecutor.TaskExecutorThreadInfoGateway;
 import org.apache.flink.runtime.util.JvmUtils;
 
-import org.apache.flink.shaded.guava31.com.google.common.collect.ImmutableSet;
+import org.apache.flink.shaded.guava33.com.google.common.collect.ImmutableSet;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -70,12 +70,12 @@ class ThreadInfoRequestCoordinatorTest {
     private ThreadInfoRequestCoordinator coordinator;
 
     @BeforeAll
-    static void setUp() throws Exception {
+    static void setUp() {
         executorService = new ScheduledThreadPoolExecutor(1);
     }
 
     @AfterAll
-    static void tearDown() throws Exception {
+    static void tearDown() {
         if (executorService != null) {
             executorService.shutdown();
         }
@@ -242,7 +242,8 @@ class ThreadInfoRequestCoordinatorTest {
 
                             Map<ExecutionAttemptID, Collection<ThreadInfoSample>> threadInfoSample =
                                     JvmUtils.createThreadInfoSample(threads.keySet(), 100)
-                                            .entrySet().stream()
+                                            .entrySet()
+                                            .stream()
                                             .collect(
                                                     Collectors.toMap(
                                                             entry -> threads.get(entry.getKey()),

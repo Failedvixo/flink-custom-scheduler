@@ -18,18 +18,24 @@
 package org.apache.flink.api.datastream;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
+import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ExecutionOptions;
+import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.operators.collect.CollectSinkFunction;
+import org.apache.flink.streaming.api.operators.collect.CollectSinkOperator;
+import org.apache.flink.streaming.api.operators.collect.CollectSinkOperatorFactory;
+import org.apache.flink.streaming.api.transformations.LegacySinkTransformation;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
-import org.apache.flink.util.TestLogger;
+import org.apache.flink.util.TestLoggerExtension;
 
-import org.hamcrest.Matchers;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -41,44 +47,43 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p><b>Important:</b> This test does not use a shared {@code MiniCluster} to validate collection
  * on bounded streams after the Flink session has completed.
  */
-public class DataStreamCollectTestITCase extends TestLogger {
+@ExtendWith(TestLoggerExtension.class)
+class DataStreamCollectTestITCase {
 
     @Test
-    public void testStreamingCollect() throws Exception {
+    void testStreamingCollect() throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(4);
 
-        DataStream<Integer> stream = env.fromElements(1, 2, 3);
+        DataStream<Integer> stream = env.fromData(1, 2, 3);
 
         try (CloseableIterator<Integer> iterator = stream.executeAndCollect()) {
             List<Integer> results = CollectionUtil.iteratorToList(iterator);
-            Assert.assertThat(
-                    "Failed to collect all data from the stream",
-                    results,
-                    Matchers.containsInAnyOrder(1, 2, 3));
+            assertThat(results)
+                    .as("Failed to collect all data from the stream")
+                    .containsExactlyInAnyOrder(1, 2, 3);
         }
     }
 
     @Test
-    public void testStreamingCollectAndLimit() throws Exception {
+    void testStreamingCollectAndLimit() throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(4);
 
-        DataStream<Integer> stream = env.fromElements(1, 2, 3, 4, 5);
+        DataStream<Integer> stream = env.fromData(1, 2, 3, 4, 5);
 
         List<Integer> results = stream.executeAndCollect(1);
-        Assert.assertEquals(
-                "Failed to collect the correct number of elements from the stream",
-                1,
-                results.size());
+        assertThat(results)
+                .as("Failed to collect the correct number of elements from the stream")
+                .hasSize(1);
     }
 
     @Test
-    public void testBoundedCollect() throws Exception {
+    void testBoundedCollect() throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(4);
 
-        DataStream<Integer> stream = env.fromElements(1, 2, 3);
+        DataStream<Integer> stream = env.fromData(1, 2, 3);
 
         Configuration config = new Configuration();
         config.set(ExecutionOptions.RUNTIME_MODE, RuntimeExecutionMode.BATCH);
@@ -86,15 +91,14 @@ public class DataStreamCollectTestITCase extends TestLogger {
 
         try (CloseableIterator<Integer> iterator = stream.executeAndCollect()) {
             List<Integer> results = CollectionUtil.iteratorToList(iterator);
-            Assert.assertThat(
-                    "Failed to collect all data from the stream",
-                    results,
-                    Matchers.containsInAnyOrder(1, 2, 3));
+            assertThat(results)
+                    .as("Failed to collect all data from the stream")
+                    .containsExactlyInAnyOrder(1, 2, 3);
         }
     }
 
     @Test
-    public void testBoundedCollectAndLimit() throws Exception {
+    void testBoundedCollectAndLimit() throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(4);
 
@@ -102,21 +106,45 @@ public class DataStreamCollectTestITCase extends TestLogger {
         config.set(ExecutionOptions.RUNTIME_MODE, RuntimeExecutionMode.BATCH);
         env.configure(config, DataStreamCollectTestITCase.class.getClassLoader());
 
-        DataStream<Integer> stream = env.fromElements(1, 2, 3, 4, 5);
+        DataStream<Integer> stream = env.fromData(1, 2, 3, 4, 5);
 
         List<Integer> results = stream.executeAndCollect(1);
-        Assert.assertEquals(
-                "Failed to collect the correct number of elements from the stream",
-                1,
-                results.size());
+        assertThat(results)
+                .as("Failed to collect the correct number of elements from the stream")
+                .hasSize(1);
     }
 
     @Test
-    public void testAsyncCollect() throws Exception {
+    void testAsyncCollectWithSinkConfigs() {
+        Configuration configuration = new Configuration();
+        configuration.set(CollectSinkOperatorFactory.SOCKET_TIMEOUT, Duration.ofMillis(2));
+        configuration.set(CollectSinkOperatorFactory.MAX_BATCH_SIZE, new MemorySize(3));
+        final StreamExecutionEnvironment env =
+                StreamExecutionEnvironment.getExecutionEnvironment(configuration);
+
+        final DataStream<Integer> stream = env.fromData(1, 2, 3, 4, 5);
+        stream.collectAsync();
+
+        List<Transformation<?>> transformations = env.getTransformations();
+        assertThat(transformations).hasSize(1);
+        LegacySinkTransformation<?> transformation =
+                (LegacySinkTransformation<?>) transformations.get(transformations.size() - 1);
+        CollectSinkOperatorFactory<?> collectSinkOperatorFactory =
+                (CollectSinkOperatorFactory<?>) transformation.getOperatorFactory();
+        CollectSinkFunction<?> collectSinkFunction =
+                ((CollectSinkFunction<?>)
+                        ((CollectSinkOperator<?>) collectSinkOperatorFactory.getOperator())
+                                .getUserFunction());
+        assertThat(collectSinkOperatorFactory.getSocketTimeoutMillis()).isEqualTo(2);
+        assertThat(collectSinkFunction.getMaxBytesPerBatch()).isEqualTo(3);
+    }
+
+    @Test
+    void testAsyncCollect() throws Exception {
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
-        final DataStream<Integer> stream1 = env.fromElements(1, 2, 3, 4, 5);
-        final DataStream<Integer> stream2 = env.fromElements(6, 7, 8, 9, 10);
+        final DataStream<Integer> stream1 = env.fromData(1, 2, 3, 4, 5);
+        final DataStream<Integer> stream2 = env.fromData(6, 7, 8, 9, 10);
 
         try (final CloseableIterator<Integer> iterator1 = stream1.collectAsync();
                 final CloseableIterator<Integer> iterator2 = stream2.collectAsync()) {
@@ -135,7 +163,7 @@ public class DataStreamCollectTestITCase extends TestLogger {
     }
 
     @Test
-    public void testAsyncCollectWithCollector() throws Exception {
+    void testAsyncCollectWithCollector() throws Exception {
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
         final DataStream.Collector<Integer> collector1 = new DataStream.Collector<>();
@@ -174,8 +202,8 @@ public class DataStreamCollectTestITCase extends TestLogger {
             Consumer<DataStream<Integer>> sink1Applier,
             Consumer<DataStream<Integer>> sink2Applier) {
 
-        final DataStream<Integer> stream1 = env.fromElements(1, 2, 3, 4, 5);
-        final DataStream<Integer> stream2 = env.fromElements(6, 7, 8, 9, 10);
+        final DataStream<Integer> stream1 = env.fromData(1, 2, 3, 4, 5);
+        final DataStream<Integer> stream2 = env.fromData(6, 7, 8, 9, 10);
 
         sink1Applier.accept(stream1);
         sink2Applier.accept(stream2);

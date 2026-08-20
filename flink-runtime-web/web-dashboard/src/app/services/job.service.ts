@@ -26,6 +26,11 @@ import {
   CheckpointConfig,
   CheckpointDetail,
   CheckpointSubTask,
+  RescalesOverview,
+  RescalesSummary,
+  RescalesHistory,
+  JobRescaleDetails,
+  JobRescaleConfigInfo,
   JobAccumulators,
   JobBackpressure,
   JobConfig,
@@ -42,7 +47,8 @@ import {
   TaskStatus,
   UserAccumulators,
   VerticesLink,
-  JobVertexSubTaskDetail
+  JobVertexSubTaskDetail,
+  NodesItemLink
 } from '@flink-runtime-web/interfaces';
 import { JobResourceRequirements } from '@flink-runtime-web/interfaces/job-resource-requirements';
 
@@ -71,6 +77,7 @@ export class JobService {
             job.tasks[upperCaseKey] = job.tasks[key as keyof TaskStatus];
             delete job.tasks[key as keyof TaskStatus];
           }
+          job.tasks['PENDING'] = job['pending-operators'] || 0;
           job.completed = ['FINISHED', 'FAILED', 'CANCELED'].indexOf(job.state) > -1;
         });
         return data.jobs || [];
@@ -176,6 +183,28 @@ export class JobService {
     );
   }
 
+  public loadRescalesOverview(jobId: string): Observable<RescalesOverview> {
+    return this.httpClient.get<RescalesOverview>(`${this.configService.BASE_URL}/jobs/${jobId}/rescales/overview`);
+  }
+
+  public loadRescalesSummary(jobId: string): Observable<RescalesSummary> {
+    return this.httpClient.get<RescalesSummary>(`${this.configService.BASE_URL}/jobs/${jobId}/rescales/summary`);
+  }
+
+  public loadRescalesHistory(jobId: string): Observable<RescalesHistory> {
+    return this.httpClient.get<RescalesHistory>(`${this.configService.BASE_URL}/jobs/${jobId}/rescales/history`);
+  }
+
+  public loadRescaleDetail(jobId: string, rescaleUuid: string): Observable<JobRescaleDetails> {
+    return this.httpClient.get<JobRescaleDetails>(
+      `${this.configService.BASE_URL}/jobs/${jobId}/rescales/details/${rescaleUuid}`
+    );
+  }
+
+  public loadRescalesConfig(jobId: string): Observable<JobRescaleConfigInfo> {
+    return this.httpClient.get<JobRescaleConfigInfo>(`${this.configService.BASE_URL}/jobs/${jobId}/rescales/config`);
+  }
+
   public loadJobResourceRequirements(jobId: string): Observable<JobResourceRequirements> {
     return this.httpClient.get<JobResourceRequirements>(
       `${this.configService.BASE_URL}/jobs/${jobId}/resource-requirements`
@@ -217,7 +246,8 @@ export class JobService {
         }
         return {
           ...node,
-          detail
+          detail,
+          job_vertex_id: node.id
         };
       });
       nodes.forEach(node => {
@@ -230,12 +260,34 @@ export class JobService {
       const listOfVerticesId = job.vertices.map(item => item.id);
       nodes.sort((pre, next) => listOfVerticesId.indexOf(pre.id) - listOfVerticesId.indexOf(next.id));
     }
+    // initializing stream graph
+    const streamLinks: NodesItemLink[] = [];
+    let streamNodes: NodesItemCorrect[] = [];
+    if (job['stream-graph']) {
+      // update pending status counts
+      job['status-counts']['PENDING'] = job['pending-operators'];
+      streamNodes = job['stream-graph'].nodes;
+      streamNodes.forEach(node => {
+        if (node.inputs && node.inputs.length) {
+          node.inputs.forEach(input => {
+            streamLinks.push({
+              ...input,
+              source: input.id,
+              target: node.id,
+              id: `${input.id}-${node.id}`
+            });
+          });
+        }
+      });
+    }
     return {
       ...job,
       plan: {
         ...job.plan,
         nodes,
-        links
+        links,
+        streamNodes,
+        streamLinks
       }
     };
   }

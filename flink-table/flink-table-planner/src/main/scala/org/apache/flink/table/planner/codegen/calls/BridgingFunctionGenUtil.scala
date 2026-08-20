@@ -17,7 +17,7 @@
  */
 package org.apache.flink.table.planner.codegen.calls
 
-import org.apache.flink.api.common.functions.{AbstractRichFunction, RichFunction}
+import org.apache.flink.api.common.functions.{AbstractRichFunction, OpenContext, RichFunction}
 import org.apache.flink.configuration.{Configuration, ReadableConfig}
 import org.apache.flink.table.api.{DataTypes, TableException}
 import org.apache.flink.table.api.Expressions.callSql
@@ -27,7 +27,7 @@ import org.apache.flink.table.expressions.ApiExpressionUtils.{typeLiteral, unres
 import org.apache.flink.table.expressions.Expression
 import org.apache.flink.table.functions._
 import org.apache.flink.table.functions.SpecializedFunction.{ExpressionEvaluator, ExpressionEvaluatorFactory}
-import org.apache.flink.table.functions.UserDefinedFunctionHelper.{validateClassForRuntime, ASYNC_TABLE_EVAL, SCALAR_EVAL, TABLE_EVAL}
+import org.apache.flink.table.functions.UserDefinedFunctionHelper.{validateClassForRuntime, ASYNC_SCALAR_EVAL, ASYNC_TABLE_EVAL, SCALAR_EVAL, TABLE_EVAL}
 import org.apache.flink.table.planner.calcite.{FlinkTypeFactory, RexFactory}
 import org.apache.flink.table.planner.codegen._
 import org.apache.flink.table.planner.codegen.CodeGenUtils._
@@ -36,7 +36,7 @@ import org.apache.flink.table.planner.utils.JavaScalaConversionUtil.toScala
 import org.apache.flink.table.runtime.collector.WrappingCollector
 import org.apache.flink.table.runtime.functions.DefaultExpressionEvaluator
 import org.apache.flink.table.runtime.generated.GeneratedFunction
-import org.apache.flink.table.runtime.operators.join.lookup.DelegatingResultFuture
+import org.apache.flink.table.runtime.operators.correlate.async.DelegatingAsyncTableResultFuture
 import org.apache.flink.table.types.DataType
 import org.apache.flink.table.types.extraction.ExtractionUtils.primitiveToWrapper
 import org.apache.flink.table.types.inference.{CallContext, TypeInference, TypeInferenceUtil}
@@ -44,16 +44,19 @@ import org.apache.flink.table.types.logical.{LogicalType, LogicalTypeRoot, RowTy
 import org.apache.flink.table.types.logical.RowType.RowField
 import org.apache.flink.table.types.logical.utils.LogicalTypeCasts.supportsAvoidingCast
 import org.apache.flink.table.types.logical.utils.LogicalTypeChecks.isCompositeType
+import org.apache.flink.table.types.utils.DataTypeUtils
 import org.apache.flink.table.types.utils.DataTypeUtils.{isInternal, validateInputDataType, validateOutputDataType}
 import org.apache.flink.util.Preconditions
+
+import AsyncCodeGenerator.{generateFunction, DEFAULT_DELEGATING_FUTURE_TERM}
 
 import java.util.concurrent.CompletableFuture
 
 import scala.collection.JavaConverters._
 
 /**
- * Helps in generating a call to a user-defined [[ScalarFunction]], [[TableFunction]], or
- * [[AsyncTableFunction]].
+ * Helps in generating a call to a user-defined [[ScalarFunction]], [[TableFunction]],
+ * [[ProcessTableFunction]] or [[AsyncTableFunction]].
  *
  * Table functions are a special case because they are using a collector. Thus, the result of the
  * generation will be a reference to a [[WrappingCollector]]. Furthermore, atomic types are wrapped
@@ -97,13 +100,13 @@ object BridgingFunctionGenUtil {
       skipIfArgsNull: Boolean): (GeneratedExpression, DataType) = {
 
     // enrich argument types with conversion class
-    val adaptedCallContext = TypeInferenceUtil.adaptArguments(inference, callContext, null)
-    val enrichedArgumentDataTypes = toScala(adaptedCallContext.getArgumentDataTypes)
+    val castCallContext = TypeInferenceUtil.castArguments(inference, callContext, null)
+    val enrichedArgumentDataTypes = toScala(castCallContext.getArgumentDataTypes)
     verifyArgumentTypes(operands.map(_.resultType), enrichedArgumentDataTypes)
 
     // enrich output types with conversion class
     val enrichedOutputDataType =
-      TypeInferenceUtil.inferOutputType(adaptedCallContext, inference.getOutputTypeStrategy)
+      TypeInferenceUtil.inferOutputType(castCallContext, inference.getOutputTypeStrategy)
     verifyFunctionAwareOutputType(returnType, enrichedOutputDataType, udf)
 
     // find runtime method and generate call
@@ -119,7 +122,8 @@ object BridgingFunctionGenUtil {
       enrichedOutputDataType,
       returnType,
       udf,
-      skipIfArgsNull)
+      skipIfArgsNull,
+      None)
     (call, enrichedOutputDataType)
   }
 
@@ -130,35 +134,51 @@ object BridgingFunctionGenUtil {
       outputDataType: DataType,
       returnType: LogicalType,
       udf: UserDefinedFunction,
-      skipIfArgsNull: Boolean): GeneratedExpression = {
+      skipIfArgsNull: Boolean,
+      contextTerm: Option[String]): GeneratedExpression = {
 
     val functionTerm = ctx.addReusableFunction(udf)
 
     // operand conversion
     val externalOperands = prepareExternalOperands(ctx, operands, argumentDataTypes)
 
-    if (udf.getKind == FunctionKind.TABLE) {
+    if (udf.getKind == FunctionKind.TABLE || udf.getKind == FunctionKind.PROCESS_TABLE) {
       generateTableFunctionCall(
         ctx,
         functionTerm,
         externalOperands,
         outputDataType,
         returnType,
-        skipIfArgsNull)
+        skipIfArgsNull,
+        contextTerm
+      )
     } else if (udf.getKind == FunctionKind.ASYNC_TABLE) {
-      generateAsyncTableFunctionCall(functionTerm, externalOperands, returnType)
+      generateAsyncTableFunctionCall(
+        functionTerm,
+        externalOperands,
+        returnType,
+        outputDataType,
+        skipIfArgsNull)
+    } else if (udf.getKind == FunctionKind.ASYNC_SCALAR) {
+      generateAsyncScalarFunctionCall(
+        ctx,
+        functionTerm,
+        externalOperands,
+        returnType,
+        outputDataType)
     } else {
       generateScalarFunctionCall(ctx, functionTerm, externalOperands, outputDataType)
     }
   }
 
-  private def generateTableFunctionCall(
+  def generateTableFunctionCall(
       ctx: CodeGeneratorContext,
       functionTerm: String,
       externalOperands: Seq[GeneratedExpression],
       functionOutputDataType: DataType,
       outputType: LogicalType,
-      skipIfArgsNull: Boolean): GeneratedExpression = {
+      skipIfArgsNull: Boolean,
+      contextTerm: Option[String] = None): GeneratedExpression = {
     val resultCollectorTerm = generateResultCollector(ctx, functionOutputDataType, outputType)
 
     val setCollectorCode = s"""
@@ -166,19 +186,21 @@ object BridgingFunctionGenUtil {
                               |""".stripMargin
     ctx.addReusableOpenStatement(setCollectorCode)
 
+    val contextOperand = contextTerm.map(c => c + ", ").getOrElse("")
+
     val functionCallCode = if (skipIfArgsNull) {
       s"""
          |${externalOperands.map(_.code).mkString("\n")}
          |if (${externalOperands.map(_.nullTerm).mkString(" || ")}) {
          |  // skip
          |} else {
-         |  $functionTerm.eval(${externalOperands.map(_.resultTerm).mkString(", ")});
+         |  $functionTerm.eval($contextOperand${externalOperands.map(_.resultTerm).mkString(", ")});
          |}
          |""".stripMargin
     } else {
       s"""
          |${externalOperands.map(_.code).mkString("\n")}
-         |$functionTerm.eval(${externalOperands.map(_.resultTerm).mkString(", ")});
+         |$functionTerm.eval($contextOperand${externalOperands.map(_.resultTerm).mkString(", ")});
          |""".stripMargin
     }
 
@@ -189,24 +211,68 @@ object BridgingFunctionGenUtil {
   private def generateAsyncTableFunctionCall(
       functionTerm: String,
       externalOperands: Seq[GeneratedExpression],
-      outputType: LogicalType): GeneratedExpression = {
+      returnType: LogicalType,
+      outputDataType: DataType,
+      skipIfArgsNull: Boolean): GeneratedExpression = {
 
-    val DELEGATE = className[DelegatingResultFuture[_]]
+    val DELEGATE_ASYNC_TABLE = className[DelegatingAsyncTableResultFuture]
+    val outputType = outputDataType.getLogicalType
 
+    // If we need to wrap data in a row, it's done in the delegating class.
+    val needsWrapping = !isCompositeType(outputType)
+    val isInternal = DataTypeUtils.isInternal(outputDataType);
+    val arguments = Seq(
+      s"""
+         |delegates.getCompletableFuture()
+         |""".stripMargin
+    ) ++ externalOperands.map(_.resultTerm)
+    val anyNull = externalOperands.map(_.nullTerm) ++ Seq("false")
+
+    val functionCallCode = {
+      if (skipIfArgsNull) {
+        s"""
+           |${externalOperands.map(_.code).mkString("\n")}
+           |if (${anyNull.mkString(" || ")}) {
+           |  $DEFAULT_COLLECTOR_TERM.complete(java.util.Collections.emptyList());
+           |} else {
+           |  $DELEGATE_ASYNC_TABLE delegates = new $DELEGATE_ASYNC_TABLE($DEFAULT_COLLECTOR_TERM,
+           |      $needsWrapping, $isInternal);
+           |  $functionTerm.eval(${arguments.mkString(", ")});
+           |}
+           |""".stripMargin
+      } else {
+        s"""
+           |${externalOperands.map(_.code).mkString("\n")}
+           |$DELEGATE_ASYNC_TABLE delegates = new $DELEGATE_ASYNC_TABLE($DEFAULT_COLLECTOR_TERM,
+           |      $needsWrapping, $isInternal);
+           |  $functionTerm.eval(${arguments.mkString(", ")});
+           |""".stripMargin
+      }
+    }
+
+    // has no result
+    GeneratedExpression(NO_CODE, NEVER_NULL, functionCallCode, returnType)
+  }
+
+  private def generateAsyncScalarFunctionCall(
+      ctx: CodeGeneratorContext,
+      functionTerm: String,
+      externalOperands: Seq[GeneratedExpression],
+      outputType: LogicalType,
+      outputDataType: DataType): GeneratedExpression = {
+    val converterTerm = ctx.addReusableConverter(outputDataType)
     val functionCallCode =
       s"""
          |${externalOperands.map(_.code).mkString("\n")}
          |if (${externalOperands.map(_.nullTerm).mkString(" || ")}) {
-         |  $DEFAULT_COLLECTOR_TERM.complete(java.util.Collections.emptyList());
+         |  $DEFAULT_DELEGATING_FUTURE_TERM.createAsyncFuture($converterTerm).complete(null);
          |} else {
-         |  $DELEGATE delegates = new $DELEGATE($DEFAULT_COLLECTOR_TERM);
          |  $functionTerm.eval(
-         |    delegates.getCompletableFuture(),
+         |    $DEFAULT_DELEGATING_FUTURE_TERM.createAsyncFuture($converterTerm),
          |    ${externalOperands.map(_.resultTerm).mkString(", ")});
          |}
          |""".stripMargin
 
-    // has no result
     GeneratedExpression(NO_CODE, NEVER_NULL, functionCallCode, outputType)
   }
 
@@ -214,14 +280,14 @@ object BridgingFunctionGenUtil {
    * Generates a collector that converts the output of a table function (possibly as an atomic type)
    * into an internal row type. Returns a collector term for referencing the collector.
    */
-  private def generateResultCollector(
+  def generateResultCollector(
       ctx: CodeGeneratorContext,
       outputDataType: DataType,
       returnType: LogicalType): String = {
     val outputType = outputDataType.getLogicalType
 
-    val collectorCtx = new CodeGeneratorContext(ctx.tableConfig, ctx.classLoader)
-    val externalResultTerm = newName("externalResult")
+    val collectorCtx = new CodeGeneratorContext(ctx.tableConfig, ctx.classLoader, ctx)
+    val externalResultTerm = newName(ctx, "externalResult")
 
     // code for wrapping atomic types
     val collectorCode = if (!isCompositeType(outputType)) {
@@ -252,7 +318,7 @@ object BridgingFunctionGenUtil {
       genToInternalConverter(ctx, outputDataType),
       collectorCode
     )
-    val resultCollectorTerm = newName("resultConverterCollector")
+    val resultCollectorTerm = newName(ctx, "resultConverterCollector")
     CollectorCodeGenerator.addToContext(ctx, resultCollectorTerm, resultCollector)
 
     resultCollectorTerm
@@ -298,7 +364,7 @@ object BridgingFunctionGenUtil {
       copy)
   }
 
-  private def prepareExternalOperands(
+  def prepareExternalOperands(
       ctx: CodeGeneratorContext,
       operands: Seq[GeneratedExpression],
       argumentDataTypes: Seq[DataType]): Seq[GeneratedExpression] = {
@@ -333,12 +399,15 @@ object BridgingFunctionGenUtil {
     enrichedDataTypes.foreach(validateOutputDataType)
   }
 
-  private def verifyFunctionAwareOutputType(
+  def verifyFunctionAwareOutputType(
       returnType: LogicalType,
       enrichedDataType: DataType,
       udf: UserDefinedFunction): Unit = {
     val enrichedType = enrichedDataType.getLogicalType
-    if (udf.getKind == FunctionKind.TABLE && !isCompositeType(enrichedType)) {
+    if (
+      (udf.getKind == FunctionKind.TABLE || udf.getKind == FunctionKind.ASYNC_TABLE || udf.getKind == FunctionKind.PROCESS_TABLE) && !isCompositeType(
+        enrichedType)
+    ) {
       // logically table functions wrap atomic types into ROW, however, the physical function might
       // return an atomic type
       Preconditions.checkState(
@@ -348,11 +417,9 @@ object BridgingFunctionGenUtil {
       )
       val atomicOutputType = returnType.asInstanceOf[RowType].getChildren.get(0)
       verifyOutputType(atomicOutputType, enrichedDataType)
-    } else if (udf.getKind == FunctionKind.ASYNC_TABLE && !isCompositeType(enrichedType)) {
-      throw new CodeGenException(
-        "Async table functions must not emit an atomic type. " +
-          "Only a composite type such as the row type are supported.")
-    } else if (udf.getKind == FunctionKind.TABLE || udf.getKind == FunctionKind.ASYNC_TABLE) {
+    } else if (
+      udf.getKind == FunctionKind.TABLE || udf.getKind == FunctionKind.PROCESS_TABLE || udf.getKind == FunctionKind.ASYNC_TABLE
+    ) {
       // null values are skipped therefore, the result top level row will always be not null
       verifyOutputType(returnType.copy(true), enrichedDataType)
     } else {
@@ -389,6 +456,13 @@ object BridgingFunctionGenUtil {
         functionName)
     } else if (udf.getKind == FunctionKind.SCALAR) {
       verifyImplementation(SCALAR_EVAL, argumentDataTypes, Some(outputDataType), udf, functionName)
+    } else if (udf.getKind == FunctionKind.ASYNC_SCALAR) {
+      verifyImplementation(
+        ASYNC_SCALAR_EVAL,
+        DataTypes.NULL.bridgedTo(classOf[CompletableFuture[_]]) +: argumentDataTypes,
+        None,
+        udf,
+        functionName)
     } else {
       throw new CodeGenException(
         s"Unsupported function kind '${udf.getKind}' for function '$functionName'.")
@@ -581,18 +655,18 @@ object BridgingFunctionGenUtil {
         s"($externalResultTypeTerm) (${typeTerm(externalResultClassBoxed)})"
       }
 
-      val evaluatorName = newName("ExpressionEvaluator")
+      val evaluatorName = newName(ctx, "ExpressionEvaluator")
       val evaluatorCode =
         s"""
            |public class $evaluatorName extends ${className[AbstractRichFunction]} {
            |
            |  ${ctx.reuseMemberCode()}
-           |
+           |  ${ctx.reuseInnerClassDefinitionCode()}
            |  public $evaluatorName(Object[] references) throws Exception {
            |    ${ctx.reuseInitCode()}
            |  }
            |
-           |  public void open(${className[Configuration]} parameters) throws Exception {
+           |  public void open(${className[OpenContext]} openContext) throws Exception {
            |    ${ctx.reuseOpenCode()}
            |  }
            |

@@ -18,6 +18,7 @@
 package org.apache.flink.table.planner.plan.fusion.spec
 
 import org.apache.flink.api.java.tuple.{Tuple2 => JTuple2}
+import org.apache.flink.table.api.config.ExecutionConfigOptions.{TABLE_EXEC_LOCAL_HASH_AGG_ADAPTIVE_DISTINCT_VALUE_RATE_THRESHOLD, TABLE_EXEC_LOCAL_HASH_AGG_ADAPTIVE_ENABLED, TABLE_EXEC_LOCAL_HASH_AGG_ADAPTIVE_SAMPLING_THRESHOLD}
 import org.apache.flink.table.data.RowData
 import org.apache.flink.table.data.binary.BinaryRowData
 import org.apache.flink.table.data.utils.JoinedRowData
@@ -25,18 +26,17 @@ import org.apache.flink.table.planner.codegen.{CodeGeneratorContext, CodeGenUtil
 import org.apache.flink.table.planner.codegen.CodeGenUtils.{getReuseRowFieldExprs, newName, newNames}
 import org.apache.flink.table.planner.codegen.ProjectionCodeGenerator.genAdaptiveLocalHashAggValueProjectionExpr
 import org.apache.flink.table.planner.codegen.agg.batch.{AggCodeGenHelper, HashAggCodeGenHelper}
-import org.apache.flink.table.planner.codegen.agg.batch.AggCodeGenHelper.{buildAggregateArgsMapping, genAggregateByFlatAggregateBuffer, genFlatAggBufferExprs, genGetValueFromFlatAggregateBuffer, genInitFlatAggregateBuffer}
-import org.apache.flink.table.planner.codegen.agg.batch.HashAggCodeGenerator.{TABLE_EXEC_LOCAL_HASH_AGG_ADAPTIVE_DISTINCT_VALUE_RATE_THRESHOLD, TABLE_EXEC_LOCAL_HASH_AGG_ADAPTIVE_ENABLED, TABLE_EXEC_LOCAL_HASH_AGG_ADAPTIVE_SAMPLING_THRESHOLD}
-import org.apache.flink.table.planner.codegen.agg.batch.HashAggCodeGenHelper.{buildAggregateAggBuffMapping, genAggregate, genCreateFallbackSorter, genHashAggValueExpr, genRetryAppendToMap, genReusableEmptyAggBuffer, prepareFallbackSorter}
+import org.apache.flink.table.planner.codegen.agg.batch.AggCodeGenHelper._
+import org.apache.flink.table.planner.codegen.agg.batch.HashAggCodeGenHelper._
 import org.apache.flink.table.planner.plan.fusion.{OpFusionCodegenSpecBase, OpFusionContext}
 import org.apache.flink.table.planner.plan.fusion.FusionCodegenUtil.{constructDoConsumeCode, constructDoConsumeFunction, evaluateVariables}
 import org.apache.flink.table.planner.plan.utils.AggregateInfoList
-import org.apache.flink.table.planner.typeutils.RowTypeUtils
 import org.apache.flink.table.planner.utils.JavaScalaConversionUtil.{toJava, toScala}
 import org.apache.flink.table.runtime.operators.aggregate.BytesHashMapSpillMemorySegmentPool
 import org.apache.flink.table.runtime.util.KeyValueIterator
 import org.apache.flink.table.runtime.util.collections.binary.{BytesHashMap, BytesMap}
 import org.apache.flink.table.types.logical.{LogicalType, RowType}
+import org.apache.flink.table.typeutils.RowTypeUtils
 
 import org.apache.calcite.tools.RelBuilder
 
@@ -59,8 +59,8 @@ class HashAggFusionCodegenSpec(
     compressionBlockSize: Int)
   extends OpFusionCodegenSpecBase(opCodegenCtx) {
 
-  private lazy val aggBufferPrefix: String = if (isFinal) { newName("hash") }
-  else { newName("local_hash") }
+  private lazy val aggBufferPrefix: String = if (isFinal) { newName(opCodegenCtx, "hash") }
+  else { newName(opCodegenCtx, "local_hash") }
 
   private lazy val aggInfos = aggInfoList.aggInfos
   private lazy val functionIdentifiers = AggCodeGenHelper.getFunctionIdentifiers(aggInfos)
@@ -68,7 +68,7 @@ class HashAggFusionCodegenSpec(
     AggCodeGenHelper.getAggBufferNames(aggBufferPrefix, auxGrouping, aggInfos)
 
   // The name for BytesMap
-  private lazy val aggregateMapTerm: String = newName("aggregateMap")
+  private lazy val aggregateMapTerm: String = newName(opCodegenCtx, "aggregateMap")
 
   private var inputContext: OpFusionContext = _
   private var inputType: RowType = _
@@ -140,7 +140,8 @@ class HashAggFusionCodegenSpec(
   /** Generate the java source code to process the row with group key. */
   private def doProcessConsumeWithKeys(input: Seq[GeneratedExpression]): String = {
     // initialize the hashmap related code first
-    val Seq(groupKeyTypesTerm, aggBufferTypesTerm) = newNames("groupKeyTypes", "aggBufferTypes")
+    val Seq(groupKeyTypesTerm, aggBufferTypesTerm) =
+      newNames(opCodegenCtx, "groupKeyTypes", "aggBufferTypes")
     // gen code to create groupKey, aggBuffer Type array, it will be used in BytesHashMap and BufferedKVExternalSorter if enable fallback
     HashAggCodeGenHelper.prepareHashAggKVTypes(
       opCodegenCtx,
@@ -150,7 +151,7 @@ class HashAggFusionCodegenSpec(
       aggBufferRowType)
 
     // create aggregate map
-    val memorySizeTerm = newName("memorySize")
+    val memorySizeTerm = newName(opCodegenCtx, "memorySize")
     val mapTypeTerm = classOf[BytesHashMap].getName
     opCodegenCtx.addReusableMember(s"private transient $mapTypeTerm $aggregateMapTerm;")
     opCodegenCtx.addReusableOpenStatement(
@@ -165,10 +166,13 @@ class HashAggFusionCodegenSpec(
        """.stripMargin)
 
     // close aggregate map and release memory segments
-    opCodegenCtx.addReusableCloseStatement(s"$aggregateMapTerm.free();")
+    opCodegenCtx.addReusableCloseStatement(
+      s"if ($aggregateMapTerm != null) $aggregateMapTerm.free();")
 
-    val Seq(currentKeyTerm, currentKeyWriterTerm) = newNames("currentKey", "currentKeyWriter")
-    val Seq(lookupInfo, currentAggBufferTerm) = newNames("lookupInfo", "currentAggBuffer")
+    val Seq(currentKeyTerm, currentKeyWriterTerm) =
+      newNames(opCodegenCtx, "currentKey", "currentKeyWriter")
+    val Seq(lookupInfo, currentAggBufferTerm) =
+      newNames(opCodegenCtx, "lookupInfo", "currentAggBuffer")
     val lookupInfoTypeTerm = classOf[BytesMap.LookupInfo[_, _]].getCanonicalName
     val binaryRowTypeTerm = classOf[BinaryRowData].getName
 
@@ -222,12 +226,13 @@ class HashAggFusionCodegenSpec(
     )
 
     // gen code to prepare agg output using agg buffer and key from the aggregate map
-    val Seq(reuseAggMapKeyTerm, reuseAggBufferTerm) = newNames("reuseAggMapKey", "reuseAggBuffer")
+    val Seq(reuseAggMapKeyTerm, reuseAggBufferTerm) =
+      newNames(opCodegenCtx, "reuseAggMapKey", "reuseAggBuffer")
     val rowData = classOf[RowData].getName
     opCodegenCtx.addReusableMember(s"private transient $rowData $reuseAggMapKeyTerm;")
     opCodegenCtx.addReusableMember(s"private transient $rowData $reuseAggBufferTerm;")
     // gen code to prepare agg output using agg buffer and key from the aggregate map
-    val iteratorTerm = CodeGenUtils.newName("iterator")
+    val iteratorTerm = CodeGenUtils.newName(opCodegenCtx, "iterator")
     val iteratorType = classOf[KeyValueIterator[_, _]].getCanonicalName
 
     opCodegenCtx.startNewLocalVariableStatement(reuseAggBufferTerm)
@@ -282,7 +287,7 @@ class HashAggFusionCodegenSpec(
       genHashAggOOMHandling(groupKeyTypesTerm, aggBufferTypesTerm, retryAppendCode)
 
     // generate the adaptive local hash agg code
-    localAggSuppressedTerm = newName("localAggSuppressed")
+    localAggSuppressedTerm = newName(opCodegenCtx, "localAggSuppressed")
     opCodegenCtx.addReusableMember(s"private transient boolean $localAggSuppressedTerm = false;")
     val (
       distinctCountIncCode,
@@ -362,7 +367,7 @@ class HashAggFusionCodegenSpec(
          |""".stripMargin
     }
 
-    val endInputMethodTerm = newName(variablePrefix + "withKeyEndInput")
+    val endInputMethodTerm = newName(opCodegenCtx, variablePrefix + "withKeyEndInput")
     opCodegenCtx.addReusableMember(
       s"""
          |private void $endInputMethodTerm() throws Exception {
@@ -381,7 +386,7 @@ class HashAggFusionCodegenSpec(
   /** Generate the java source code to process the row without group key. */
   private def doProcessConsumeWithoutKeys(): String = {
     val aggregateCode = genFallbackSortAggCode(isMerge, forHashAgg = false)
-    hasInput = newName("hasInput")
+    hasInput = newName(opCodegenCtx, "hasInput")
     opCodegenCtx.addReusableMember(s"private boolean $hasInput = false;")
     s"""
        |${opCodegenCtx.reuseLocalVariableCode()}
@@ -398,7 +403,7 @@ class HashAggFusionCodegenSpec(
   /** Generate the java source code to trigger the clean work without group key. */
   private def doEndInputConsumeWithoutKeys(): String = {
     val (localVariables, resultExprs) = if (isFinal) {
-      val endInputOutputRowTerm = newName("endInputOutputRowTerm")
+      val endInputOutputRowTerm = newName(opCodegenCtx, "endInputOutputRowTerm")
       opCodegenCtx.startNewLocalVariableStatement(endInputOutputRowTerm)
       val exprs = genGetValueFromFlatAggregateBuffer(
         isMerge,
@@ -435,7 +440,7 @@ class HashAggFusionCodegenSpec(
        """.stripMargin
     }
 
-    val endInputMethodTerm = newName(variablePrefix + "EndInputWithoutKeys")
+    val endInputMethodTerm = newName(opCodegenCtx, variablePrefix + "EndInputWithoutKeys")
     opCodegenCtx.addReusableMember(
       s"""
          |private void $endInputMethodTerm() throws Exception {
@@ -466,7 +471,7 @@ class HashAggFusionCodegenSpec(
       !isFinal && supportAdaptiveLocalHashAgg &&
       opCodegenCtx.tableConfig.get(TABLE_EXEC_LOCAL_HASH_AGG_ADAPTIVE_ENABLED)
     ) {
-      val adaptiveLocalAggRowTerm = newName("adaptiveLocalAggRowTerm")
+      val adaptiveLocalAggRowTerm = newName(opCodegenCtx, "adaptiveLocalAggRowTerm")
       opCodegenCtx.startNewLocalVariableStatement(adaptiveLocalAggRowTerm)
       val projectionExprs =
         genAdaptiveLocalHashAggValueProjectionExpr(
@@ -475,8 +480,8 @@ class HashAggFusionCodegenSpec(
           inputRowTerm,
           aggInfos,
           auxGrouping)
-      val adaptiveDistinctCountTerm = CodeGenUtils.newName("distinctCount")
-      val adaptiveTotalCountTerm = CodeGenUtils.newName("totalCount")
+      val adaptiveDistinctCountTerm = CodeGenUtils.newName(opCodegenCtx, "distinctCount")
+      val adaptiveTotalCountTerm = CodeGenUtils.newName(opCodegenCtx, "totalCount")
       opCodegenCtx.addReusableMember(s"private transient long $adaptiveDistinctCountTerm = 0;")
       opCodegenCtx.addReusableMember(s"private transient long $adaptiveTotalCountTerm = 0;")
 
@@ -524,7 +529,7 @@ class HashAggFusionCodegenSpec(
       retryAppendCode: String): String = {
     if (isFinal) {
       val memPoolTypeTerm = classOf[BytesHashMapSpillMemorySegmentPool].getName
-      sorterTerm = CodeGenUtils.newName("sorter")
+      sorterTerm = CodeGenUtils.newName(opCodegenCtx, "sorter")
       prepareFallbackSorter(opCodegenCtx, sorterTerm)
       val createSorter = genCreateFallbackSorter(
         opCodegenCtx,
@@ -559,10 +564,10 @@ class HashAggFusionCodegenSpec(
   }
 
   private def genFallbackToSortAgg(): String = {
-    val Seq(keyTerm, lastKeyTerm) = newNames("key", "lastKey")
+    val Seq(keyTerm, lastKeyTerm) = newNames(opCodegenCtx, "key", "lastKey")
     val keyNotEquals = AggCodeGenHelper.genGroupKeyChangedCheckCode(keyTerm, lastKeyTerm)
     val joinedRow = classOf[JoinedRowData].getName
-    inputRowTerm = newName("fallbackInput")
+    inputRowTerm = newName(opCodegenCtx, "fallbackInput")
     inputType = RowType.of(
       (groupKeyRowType.getChildren ++ aggBufferRowType.getChildren).toArray,
       (groupKeyRowType.getFieldNames ++ aggBufferRowType.getFieldNames).toArray)
@@ -592,9 +597,9 @@ class HashAggFusionCodegenSpec(
       fusionContext.getOutputType
     )
     val outputCode = outputResult(fusionContext.getOutputType, keyExprs ++ valueExprs)
-    val kvPairTerm = CodeGenUtils.newName("kvPair")
+    val kvPairTerm = CodeGenUtils.newName(opCodegenCtx, "kvPair")
     val kvPairTypeTerm = classOf[JTuple2[BinaryRowData, BinaryRowData]].getName
-    val aggBuffTerm = CodeGenUtils.newName("val")
+    val aggBuffTerm = CodeGenUtils.newName(opCodegenCtx, "val")
     val binaryRow = classOf[BinaryRowData].getName
 
     s"""

@@ -79,7 +79,7 @@ message SimpleTest {
 
 1. Use [`protoc`](https://developers.google.com/protocol-buffers/docs/javatutorial#compiling-your-protocol-buffers) command to compile the `.proto` file to java classes
 2. Then compile and package the classes (there is no need to package proto-java into the jar)
-3. Finally you should provide the `jar` in your classpath, e.g. pass it using `-j` in <a href="{{< ref "docs/dev/table/sqlClient" >}}">sql-client</a>
+3. Finally you should provide the `jar` in your classpath, e.g. pass it using `-j` in <a href="{{< ref "docs/sql/interfaces/sql-client" >}}">sql-client</a>
 
 ```sql
 CREATE TABLE simple_test (
@@ -149,9 +149,10 @@ Format Options
       <td style="word-wrap: break-word;">false</td>
       <td>Boolean</td>
       <td>
-          This option only works if the generated class's version is proto2. If this value is set to true, the format will read empty values as the default values defined in the proto file.
+          If this value is set to true, the format will read empty values as the default values defined in the proto file.
           If the value is set to false, the format will generate null values if the data element does not exist in the binary protobuf message.
-          If the proto syntax is proto3, this value will forcibly be set to true, because proto3's standard is to use default values.
+          With Flink's current protobuf version (4.32.1), field presence is properly supported for proto3, allowing null handling for non-primitive types.
+          Please be aware that setting this to true will cause the deserialization performance to be much slower depending on schema complexity and message size.
       </td>
     </tr>
     <tr>
@@ -288,4 +289,38 @@ OneOf field
 In the serialization process, there's no guarantee that the Flink fields of the same one-of group only contain at most one valid value.
 When serializing, each field is set in the order of Flink schema, so the field in the higher position will override the field in lower position in the same one-of group.
 
-You can refer to [Language Guide (proto2)](https://developers.google.com/protocol-buffers/docs/proto) or [Language Guide (proto3)](https://developers.google.com/protocol-buffers/docs/proto3) for more information about Protobuf types.
+Supported Protobuf Versions
+------------
+
+Flink uses protobuf-java 4.32.1 (corresponding to Protocol Buffers version 32), which includes support for:
+
+- **Proto2 and Proto3 syntax**: Traditional `syntax = "proto2"` and `syntax = "proto3"` definitions
+- **Protobuf Editions**: The new `edition = "2023"` and `edition = "2024"` syntax introduced in Protocol Buffers v27+
+- **Improved proto3 field presence detection**: Better handling of optional fields without the limitations of older protobuf versions
+
+### Using Protobuf Editions
+
+Protobuf Editions provide a unified syntax that combines proto2 and proto3 functionality. If you're using Editions in your `.proto` files, Flink fully supports them:
+
+```
+edition = "2023";
+package com.example;
+option java_package = "com.example";
+option java_multiple_files = true;
+
+message SimpleTest {
+    int64 uid = 1;
+    string name = 2 [features.field_presence = EXPLICIT];
+    // ... rest of your message definition
+}
+```
+
+Editions allow fine-grained control over feature behavior at the file, message, or field level, while maintaining backward compatibility with proto2 and proto3. For more information, see the [Protobuf Editions documentation](https://protobuf.dev/editions/overview/).
+
+Additional Resources
+----------------
+For more information about Protocol Buffers, refer to:
+- [Language Guide (proto2)](https://developers.google.com/protocol-buffers/docs/proto)
+- [Language Guide (proto3)](https://developers.google.com/protocol-buffers/docs/proto3)
+- [Language Guide (Editions)](https://protobuf.dev/programming-guides/editions/) - for the new Editions syntax
+- [Protobuf Editions Overview](https://protobuf.dev/editions/overview/) - understand the motivation and benefits of Editions

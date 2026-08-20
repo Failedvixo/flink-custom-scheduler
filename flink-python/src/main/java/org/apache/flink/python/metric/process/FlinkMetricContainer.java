@@ -43,7 +43,7 @@ import org.apache.beam.sdk.metrics.MetricQueryResults;
 import org.apache.beam.sdk.metrics.MetricResult;
 import org.apache.beam.sdk.metrics.MetricResults;
 import org.apache.beam.sdk.metrics.MetricsFilter;
-import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.annotations.VisibleForTesting;
+import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.annotations.VisibleForTesting;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -60,7 +60,7 @@ public final class FlinkMetricContainer {
     private static final ObjectMapper OBJECT_MAPPER = JacksonMapperFactory.createObjectMapper();
 
     private static final String METRIC_KEY_SEPARATOR =
-            GlobalConfiguration.loadConfiguration().getString(MetricOptions.SCOPE_DELIMITER);
+            GlobalConfiguration.loadConfiguration().get(MetricOptions.SCOPE_DELIMITER);
 
     private final MetricsContainerStepMap metricsContainers;
     private final MetricGroup baseMetricGroup;

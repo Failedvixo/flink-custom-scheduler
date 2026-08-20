@@ -23,7 +23,7 @@ under the License.
 	<parent>
 		<groupId>org.apache.flink</groupId>
 		<artifactId>flink-table</artifactId>
-		<version>1.18.0</version>
+		<version>2.3.0</version>
 	</parent>
 
 	<artifactId>flink-table-planner_${scala.binary.version}</artifactId>
@@ -50,8 +50,13 @@ under the License.
 			kryo MathContext
 			-->--add-opens=java.base/java.math=ALL-UNNAMED <!--
 			kryo ByteBuffer
-			-->--add-opens=java.base/java.nio=ALL-UNNAMED
+			-->--add-opens=java.base/java.nio=ALL-UNNAMED <!--
+			Multiple tests have to override TableTestBase methods and others
+			JUnit changed this behavior since 5.11.x, to restore it back need this flag as mentioned at
+			https://junit.org/junit5/docs/current/user-guide/#extensions-supported-utilities-search-semantics
+			-->-Djunit.platform.reflection.search.useLegacySemantics=true
 		</surefire.module.config>
+		<immutables.version>2.11.3</immutables.version>
 	</properties>
 
 	<dependencies>
@@ -70,15 +75,30 @@ under the License.
 		<dependency>
 			<groupId>org.immutables</groupId>
 			<artifactId>value</artifactId>
-			<version>2.8.8</version>
+			<version>${immutables.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.immutables</groupId>
 			<artifactId>value-annotations</artifactId>
-			<version>2.8.8</version>
+			<version>${immutables.version}</version>
 		</dependency>
-
-
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-math3</artifactId>
+			<version>3.6.1</version>
+			<optional>${flink.markBundledAsOptional}</optional>
+		</dependency>
+		<dependency>
+			<groupId>commons-codec</groupId>
+			<artifactId>commons-codec</artifactId>
+			<version>1.15</version>
+			<optional>${flink.markBundledAsOptional}</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-lang3</artifactId>
+			<optional>${flink.markBundledAsOptional}</optional>
+		</dependency>
 		<dependency>
 			<groupId>org.codehaus.janino</groupId>
 			<artifactId>commons-compiler</artifactId>
@@ -96,11 +116,11 @@ under the License.
 			<version>${project.version}</version>
 		</dependency>
 
-		<!-- Flink Scala (included only in the loader-bundle) -->
+		<!-- Flink Table API Scala (included only in the loader-bundle) -->
 
 		<dependency>
 			<groupId>org.apache.flink</groupId>
-			<artifactId>flink-scala_${scala.binary.version}</artifactId>
+			<artifactId>flink-table-api-scala_${scala.binary.version}</artifactId>
 			<version>${project.version}</version>
 		</dependency>
 
@@ -150,14 +170,21 @@ under the License.
 			<scope>test</scope>
 		</dependency>
 
-		<!-- Table API Scala dependencies -->
-
 		<dependency>
 			<groupId>org.apache.flink</groupId>
-			<artifactId>flink-table-api-scala_${scala.binary.version}</artifactId>
+			<artifactId>flink-test-utils-connector</artifactId>
 			<version>${project.version}</version>
 			<scope>test</scope>
 		</dependency>
+
+		<!-- ArchUnit test dependencies -->
+		<dependency>
+			<groupId>org.apache.flink</groupId>
+			<artifactId>flink-architecture-tests-test</artifactId>
+			<version>${project.version}</version>
+			<scope>test</scope>
+		</dependency>
+
 		<dependency>
 			<groupId>org.apache.flink</groupId>
 			<artifactId>flink-table-api-scala-bridge_${scala.binary.version}</artifactId>
@@ -219,6 +246,21 @@ under the License.
 			<version>${project.version}</version>
 			<scope>test</scope>
 		</dependency>
+
+		<dependency>
+			<groupId>org.apache.flink</groupId>
+			<artifactId>flink-connector-datagen</artifactId>
+			<version>${project.version}</version>
+			<type>test-jar</type>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>net.javacrumbs.json-unit</groupId>
+			<artifactId>json-unit-assertj</artifactId>
+			<version>2.23.0</version>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
 
 	<build>
@@ -269,6 +311,20 @@ under the License.
 
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<annotationProcessorPaths>
+						<path>
+							<groupId>org.immutables</groupId>
+							<artifactId>value</artifactId>
+							<version>${immutables.version}</version>
+						</path>
+					</annotationProcessorPaths>
+				</configuration>
+			</plugin>
+
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-shade-plugin</artifactId>
 				<configuration>
 					<!-- Base config -->
@@ -305,6 +361,7 @@ under the License.
 							<include>com.google.guava:failureaccess</include>
 							<include>commons-codec:commons-codec</include>
 							<include>commons-io:commons-io</include>
+							<include>org.apache.commons:commons-math3</include>
 							<include>org.checkerframework:checker-qual</include>
 
 							<!-- flink-table-planner dependencies -->
@@ -334,20 +391,25 @@ under the License.
 							<shadedPattern>org.apache.flink.calcite.shaded.org.apache.commons.io</shadedPattern>
 						</relocation>
 						<relocation>
+							<pattern>org.apache.commons.math3</pattern>
+							<shadedPattern>org.apache.flink.calcite.shaded.org.apache.commons.math3</shadedPattern>
+						</relocation>
+						<relocation>
 							<pattern>org.checkerframework</pattern>
 							<shadedPattern>org.apache.flink.calcite.shaded.org.checkerframework</shadedPattern>
 						</relocation>
 
-						<!-- These are relocated to match package names, but not included in this jar -->
+						<!-- These are used by Calcite and need to be relocated to match shaded
+						 package names, but not included in this jar -->
 						<relocation>
 							<pattern>com.fasterxml</pattern>
 							<!-- From flink-shaded-jackson -->
 							<shadedPattern>org.apache.flink.shaded.jackson2.com.fasterxml</shadedPattern>
 						</relocation>
 						<relocation>
-							<pattern>com.jayway</pattern>
-							<!-- From flink-table-runtime -->
-							<shadedPattern>org.apache.flink.table.shaded.com.jayway</shadedPattern>
+							<pattern>com.jayway.jsonpath</pattern>
+							<!-- From flink-shaded-jsonpath -->
+							<shadedPattern>org.apache.flink.shaded.com.jayway.jsonpath</shadedPattern>
 						</relocation>
 
 						<relocation>
@@ -385,11 +447,8 @@ under the License.
 							<includes>
 								<include>**/*ITCase.*</include>
 							</includes>
-							<!-- Setting this property to false is aims to alleviate OOM error
-							mentioned in issue: https://issues.apache.org/jira/browse/FLINK-18356.
-							This property can be removed after the OOM error mentioned in the above
-							issue is solved. -->
-							<reuseForks>false</reuseForks>
+							<!-- override reuseForks to true to reduce testing time -->
+							<reuseForks>true</reuseForks>
 						</configuration>
 					</execution>
 				</executions>
@@ -419,6 +478,17 @@ under the License.
 						</configuration>
 					</execution>
 				</executions>
+			</plugin>
+
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-javadoc-plugin</artifactId>
+				<configuration>
+					<!-- flink-table-planner throws NPE in JDK 11 when we specify ignore-source-errors.
+					See https://bugs.openjdk.org/browse/JDK-8268582. We get around this exception by not
+					generating the class hierarchy pages. -->
+					<notree>true</notree>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>

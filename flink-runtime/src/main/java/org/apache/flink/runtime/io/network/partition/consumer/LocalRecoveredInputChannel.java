@@ -19,9 +19,13 @@
 package org.apache.flink.runtime.io.network.partition.consumer;
 
 import org.apache.flink.runtime.io.network.TaskEventPublisher;
+import org.apache.flink.runtime.io.network.buffer.Buffer;
 import org.apache.flink.runtime.io.network.metrics.InputChannelMetrics;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionID;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionManager;
+import org.apache.flink.runtime.io.network.partition.ResultSubpartitionIndexSet;
+
+import java.util.ArrayDeque;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -37,7 +41,7 @@ public class LocalRecoveredInputChannel extends RecoveredInputChannel {
             SingleInputGate inputGate,
             int channelIndex,
             ResultPartitionID partitionId,
-            int consumedSubpartitionIndex,
+            ResultSubpartitionIndexSet consumedSubpartitionIndexSet,
             ResultPartitionManager partitionManager,
             TaskEventPublisher taskEventPublisher,
             int initialBackOff,
@@ -48,7 +52,7 @@ public class LocalRecoveredInputChannel extends RecoveredInputChannel {
                 inputGate,
                 channelIndex,
                 partitionId,
-                consumedSubpartitionIndex,
+                consumedSubpartitionIndexSet,
                 initialBackOff,
                 maxBackoff,
                 metrics.getNumBytesInLocalCounter(),
@@ -60,18 +64,19 @@ public class LocalRecoveredInputChannel extends RecoveredInputChannel {
     }
 
     @Override
-    protected InputChannel toInputChannelInternal() {
+    protected InputChannel toInputChannelInternal(ArrayDeque<Buffer> remainingBuffers) {
         return new LocalInputChannel(
                 inputGate,
                 getChannelIndex(),
                 partitionId,
-                consumedSubpartitionIndex,
+                consumedSubpartitionIndexSet,
                 partitionManager,
                 taskEventPublisher,
                 initialBackoff,
                 maxBackoff,
                 numBytesIn,
                 numBuffersIn,
-                channelStateWriter);
+                channelStateWriter,
+                remainingBuffers);
     }
 }

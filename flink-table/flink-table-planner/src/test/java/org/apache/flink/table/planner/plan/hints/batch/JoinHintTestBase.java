@@ -24,8 +24,8 @@ import org.apache.flink.table.api.StatementSet;
 import org.apache.flink.table.api.TableConfig;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import org.apache.flink.table.planner.hint.JoinStrategy;
-import org.apache.flink.table.planner.plan.optimize.RelNodeBlockPlanBuilder;
 import org.apache.flink.table.planner.plan.utils.FlinkRelOptUtil;
 import org.apache.flink.table.planner.utils.BatchTableTestUtil;
 import org.apache.flink.table.planner.utils.PlanKind;
@@ -36,20 +36,24 @@ import org.apache.flink.shaded.curator5.org.apache.curator.shaded.com.google.com
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.sql.SqlExplainLevel;
 import org.apache.logging.log4j.util.Strings;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.stream.Collectors;
 
 import scala.Enumeration;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static scala.runtime.BoxedUnit.UNIT;
 
 /**
  * A test base for join hint.
  *
  * <p>TODO add test to cover legacy table source.
+ *
+ * <p>Notice: Join hints in sub-query will not be printed in AST, because {@code RexSubQuery} use
+ * 'RelOptUtil.toString(rel)' to print node and doesn't print hints about {@code LogicalJoin}.
  */
 public abstract class JoinHintTestBase extends TableTestBase {
 
@@ -62,8 +66,8 @@ public abstract class JoinHintTestBase extends TableTestBase {
                     .map(JoinStrategy::getJoinHintName)
                     .collect(Collectors.toList());
 
-    @Before
-    public void before() {
+    @BeforeEach
+    void before() {
         util = batchTestUtil(TableConfig.getDefault());
         util.tableEnv()
                 .executeSql(
@@ -120,7 +124,8 @@ public abstract class JoinHintTestBase extends TableTestBase {
                 false,
                 new Enumeration.Value[] {PlanKind.AST(), PlanKind.OPT_REL()},
                 () -> UNIT,
-                true);
+                true,
+                false);
     }
 
     protected List<String> getOtherJoinHints() {
@@ -130,21 +135,21 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testSimpleJoinHintWithLeftSideAsBuildSide() {
+    void testSimpleJoinHintWithLeftSideAsBuildSide() {
         String sql = "select /*+ %s(T1) */* from T1 join T2 on T1.a1 = T2.a2";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testSimpleJoinHintWithRightSideAsBuildSide() {
+    void testSimpleJoinHintWithRightSideAsBuildSide() {
         String sql = "select /*+ %s(T2) */* from T1 join T2 on T1.a1 = T2.a2";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithMultiJoinAndFirstSideAsBuildSide1() {
+    void testJoinHintWithMultiJoinAndFirstSideAsBuildSide1() {
         // the T1 will be the build side in first join
         String sql =
                 "select /*+ %s(T1, T2) */* from T1, T2, T3 where T1.a1 = T2.a2 and T1.b1 = T3.b3";
@@ -153,7 +158,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithMultiJoinAndFirstSideAsBuildSide2() {
+    void testJoinHintWithMultiJoinAndFirstSideAsBuildSide2() {
         String sql =
                 "select /*+ %s(T1, T2) */* from T1, T2, T3 where T1.a1 = T2.a2 and T2.b2 = T3.b3";
 
@@ -161,7 +166,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithMultiJoinAndSecondThirdSideAsBuildSides1() {
+    void testJoinHintWithMultiJoinAndSecondThirdSideAsBuildSides1() {
         String sql =
                 "select /*+ %s(T2, T3) */* from T1, T2, T3 where T1.a1 = T2.a2 and T1.b1 = T3.b3";
 
@@ -169,7 +174,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithMultiJoinAndSecondThirdSideAsBuildSides2() {
+    void testJoinHintWithMultiJoinAndSecondThirdSideAsBuildSides2() {
         String sql =
                 "select /*+ %s(T2, T3) */* from T1, T2, T3 where T1.a1 = T2.a2 and T2.b2 = T3.b3";
 
@@ -177,7 +182,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithMultiJoinAndFirstThirdSideAsBuildSides() {
+    void testJoinHintWithMultiJoinAndFirstThirdSideAsBuildSides() {
         String sql =
                 "select /*+ %s(T1, T3) */* from T1, T2, T3 where T1.a1 = T2.a2 and T2.b2 = T3.b3";
 
@@ -185,95 +190,90 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithUnknownTable() {
-        thrown().expect(ValidationException.class);
-        thrown().expectMessage(
-                        String.format(
-                                "The options of following hints cannot match the name of input tables or views: \n`%s` in `%s`",
-                                "T99", getTestSingleJoinHint()));
+    void testJoinHintWithUnknownTable() {
         String sql = "select /*+ %s(T99) */* from T1 join T2 on T1.a1 = T2.a2";
 
-        verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
+        assertThatThrownBy(() -> verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint())))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "The options of following hints cannot match the name of input tables or views: \n`%s` in `%s`",
+                        "T99", getTestSingleJoinHint());
     }
 
     @Test
-    public void testJoinHintWithUnknownTableNameMixedWithValidTableNames1() {
-        thrown().expect(ValidationException.class);
-        thrown().expectMessage(
-                        String.format(
-                                "The options of following hints cannot match the name of input tables or views: \n`%s` in `%s`",
-                                "T99", getTestSingleJoinHint()));
+    void testJoinHintWithUnknownTableNameMixedWithValidTableNames1() {
         String sql = "select /*+ %s(T1, T99) */* from T1 join T2 on T1.a1 = T2.a2";
 
-        verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
+        assertThatThrownBy(() -> verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint())))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "The options of following hints cannot match the name of input tables or views: \n`%s` in `%s`",
+                        "T99", getTestSingleJoinHint());
     }
 
     @Test
-    public void testJoinHintWithUnknownTableNameMixedWithValidTableNames2() {
-        thrown().expect(ValidationException.class);
-        thrown().expectMessage(
-                        String.format(
-                                "The options of following hints cannot match the name of input tables or views: \n`%s` in `%s`",
-                                "T99", getTestSingleJoinHint()));
+    void testJoinHintWithUnknownTableNameMixedWithValidTableNames2() {
         String sql = "select /*+ %s(T1, T99, T2) */* from T1 join T2 on T1.a1 = T2.a2";
 
-        verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
+        assertThatThrownBy(() -> verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint())))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "The options of following hints cannot match the name of input tables or views: \n`%s` in `%s`",
+                        "T99", getTestSingleJoinHint());
     }
 
     @Test
-    public void testJoinHintWithMultiUnknownTableNamesMixedWithValidTableNames() {
-        thrown().expect(ValidationException.class);
-        thrown().expectMessage(
-                        String.format(
-                                "The options of following hints cannot match the name of input tables or views: \n`%s` in `%s`",
-                                "T98, T99", getTestSingleJoinHint()));
+    void testJoinHintWithMultiUnknownTableNamesMixedWithValidTableNames() {
         String sql = "select /*+ %s(T1, T99, T98) */* from T1 join T2 on T1.a1 = T2.a2";
 
-        verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
+        assertThatThrownBy(() -> verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint())))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "The options of following hints cannot match the name of input tables or views: \n`%s` in `%s`",
+                        "T98, T99", getTestSingleJoinHint());
     }
 
     @Test
-    public void testJoinHintWithView() {
+    void testJoinHintWithView() {
         String sql = "select /*+ %s(V4) */* from T1 join V4 on T1.a1 = V4.a4";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithUnknownView() {
-        thrown().expect(ValidationException.class);
-        thrown().expectMessage(
-                        String.format(
-                                "The options of following hints cannot match the name of input tables or views: \n`%s` in `%s`",
-                                "V99", getTestSingleJoinHint()));
+    void testJoinHintWithUnknownView() {
         String sql = "select /*+ %s(V99) */* from T1 join V4 on T1.a1 = V4.a4";
 
-        verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
+        assertThatThrownBy(() -> verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint())))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "The options of following hints cannot match the name of input tables or views: \n`%s` in `%s`",
+                        "V99", getTestSingleJoinHint());
     }
 
     @Test
-    public void testJoinHintWithEquiPred() {
+    void testJoinHintWithEquiPred() {
         String sql = "select /*+ %s(T1) */* from T1, T2 where T1.a1 = T2.a2";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithEquiPredAndFilter() {
+    void testJoinHintWithEquiPredAndFilter() {
         String sql = "select /*+ %s(T1) */* from T1, T2 where T1.a1 = T2.a2 and T1.a1 > 1";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithEquiAndLocalPred() {
+    void testJoinHintWithEquiAndLocalPred() {
         String sql = "select /*+ %s(T1) */* from T1 inner join T2 on T1.a1 = T2.a2 and T1.a1 < 1";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithEquiAndNonEquiPred() {
+    void testJoinHintWithEquiAndNonEquiPred() {
         String sql =
                 "select /*+ %s(T1) */* from T1 inner join T2 on T1.b1 = T2.b2 and T1.a1 < 1 and T1.a1 < T2.a2";
 
@@ -281,56 +281,56 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithoutJoinPred() {
+    void testJoinHintWithoutJoinPred() {
         String sql = "select /*+ %s(T1) */* from T1, T2";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithNonEquiPred() {
+    void testJoinHintWithNonEquiPred() {
         String sql = "select /*+ %s(T1) */* from T1 inner join T2 on T1.a1 > T2.a2";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithLeftJoinAndLeftSideAsBuildSide() {
+    void testJoinHintWithLeftJoinAndLeftSideAsBuildSide() {
         String sql = "select /*+ %s(T1) */* from T1 left join T2 on T1.a1 = T2.a2";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithLeftJoinAndRightSideAsBuildSide() {
+    void testJoinHintWithLeftJoinAndRightSideAsBuildSide() {
         String sql = "select /*+ %s(T2) */* from T1 left join T2 on T1.a1 = T2.a2";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithRightJoinAndLeftSideAsBuildSide() {
+    void testJoinHintWithRightJoinAndLeftSideAsBuildSide() {
         String sql = "select /*+ %s(T1) */* from T1 right join T2 on T1.a1 = T2.a2";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithRightJoinAndRightSideAsBuildSide() {
+    void testJoinHintWithRightJoinAndRightSideAsBuildSide() {
         String sql = "select /*+ %s(T2) */* from T1 right join T2 on T1.a1 = T2.a2";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithFullJoinAndLeftSideAsBuildSide() {
+    void testJoinHintWithFullJoinAndLeftSideAsBuildSide() {
         String sql = "select /*+ %s(T1) */* from T1 full join T2 on T1.a1 = T2.a2";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithFullJoinAndRightSideAsBuildSide() {
+    void testJoinHintWithFullJoinAndRightSideAsBuildSide() {
         String sql = "select /*+ %s(T2) */* from T1 full join T2 on T1.a1 = T2.a2";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
@@ -339,7 +339,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     // TODO currently join hint is not supported on SEMI join, it will use default join strategy by
     // planner
     @Test
-    public void testJoinHintWithSemiJoinAndLeftSideAsBuildSide() {
+    void testJoinHintWithSemiJoinAndLeftSideAsBuildSide() {
         String sql = "select /*+ %s(T1) */* from T1 where a1 in (select a2 from T2)";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
@@ -348,7 +348,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     // TODO currently join hint is not supported on SEMI join, it will use default join strategy by
     // planner
     @Test
-    public void testJoinHintWithSemiJoinAndRightSideAsBuildSide() {
+    void testJoinHintWithSemiJoinAndRightSideAsBuildSide() {
         String sql = "select /*+ %s(T2) */* from T1 where a1 in (select a2 from T2)";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
@@ -357,7 +357,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     // TODO currently join hint is not supported on ANTI join, it will use default join strategy by
     // planner
     @Test
-    public void testJoinHintWithAntiJoinAndLeftSideAsBuildSide() {
+    void testJoinHintWithAntiJoinAndLeftSideAsBuildSide() {
         String sql = "select /*+ %s(T1) */* from T1 where a1 not in (select a2 from T2)";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
@@ -366,14 +366,14 @@ public abstract class JoinHintTestBase extends TableTestBase {
     // TODO currently join hint is not supported on ANTI join, it will use default join strategy by
     // planner
     @Test
-    public void testJoinHintWithAntiJoinAndRightSideAsBuildSide() {
+    void testJoinHintWithAntiJoinAndRightSideAsBuildSide() {
         String sql = "select /*+ %s(T2) */* from T1 where a1 not in (select a2 from T2)";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithMultiArgsAndLeftSideFirst() {
+    void testJoinHintWithMultiArgsAndLeftSideFirst() {
         // the first arg will be chosen as the build side
         String sql = "select /*+ %s(T1, T2) */* from T1 right join T2 on T1.a1 = T2.a2";
 
@@ -381,7 +381,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithMultiArgsAndRightSideFirst() {
+    void testJoinHintWithMultiArgsAndRightSideFirst() {
         // the first arg will be chosen as the build side
         String sql = "select /*+ %s(T2, T1) */* from T1 right join T2 on T1.a1 = T2.a2";
 
@@ -389,7 +389,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testMultiJoinHints() {
+    void testMultiJoinHints() {
         // the first join hint will be chosen
         String sql = "select /*+ %s(T1), %s */* from T1 join T2 on T1.a1 = T2.a2";
 
@@ -404,7 +404,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testMultiJoinHintsWithTheFirstOneIsInvalid() {
+    void testMultiJoinHintsWithTheFirstOneIsInvalid() {
         // the first join hint is invalid because it is not equi join except NEST_LOOP
         String sql = "select /*+ %s(T1), NEST_LOOP(T1) */* from T1 join T2 on T1.a1 > T2.a2";
 
@@ -412,7 +412,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithoutAffectingJoinInViewWhileArgsCanBeFoundInOuterJoin() {
+    void testJoinHintWithoutAffectingJoinInViewWhileArgsCanBeFoundInOuterJoin() {
         // the join in V2 will use the planner's default join strategy,
         // and the join between T1 and V5 will use the tested join hint
         String sql = "select /*+ %s(T1)*/T1.* from T1 join V5 on T1.a1 = V5.a1";
@@ -421,7 +421,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithoutAffectingJoinInViewWhileOuterQueryIsNotJoin() {
+    void testJoinHintWithoutAffectingJoinInViewWhileOuterQueryIsNotJoin() {
         // the join in V2 will use the planner's default join strategy,
         // and the join between T1 and V5 will use the tested join hint
         String sql = "select /*+ %s(T1)*/* from V5";
@@ -430,7 +430,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithoutAffectingJoinInViewWhileRootOfViewIsFilter() {
+    void testJoinHintWithoutAffectingJoinInViewWhileRootOfViewIsFilter() {
         // the join in V2 will use the planner's default join strategy,
         // and the join between T1 and V2 will use the tested join hint
         util.tableEnv()
@@ -443,7 +443,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithSimpleSumInSelectList() {
+    void testJoinHintWithSimpleSumInSelectList() {
         String sql =
                 "select /*+ %s(T1)*/T1.b1, sum(T1.a1) from T1 join T2 on T1.b1 = T2.b2 group by T1.b1";
 
@@ -451,7 +451,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithCastInSelectList() {
+    void testJoinHintWithCastInSelectList() {
         String sql =
                 "select /*+ %s(T1)*/T1.b1, cast(T1.a1 as int) from T1 join T2 on T1.b1 = T2.b2";
 
@@ -459,7 +459,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithoutAffectingJoinInSubQueryWhileArgsCanBeFoundInOuterJoin() {
+    void testJoinHintWithoutAffectingJoinInSubQueryWhileArgsCanBeFoundInOuterJoin() {
         // the join in sub-query will use the planner's default join strategy,
         // and the join outside will use the tested join hint
         String sql =
@@ -469,14 +469,14 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithoutAffectingJoinInSubQueryWhileOuterQueryIsNotJoin() {
+    void testJoinHintWithoutAffectingJoinInSubQueryWhileOuterQueryIsNotJoin() {
         String sql = "select /*+ %s(T1)*/* from (select T1.* from T1 join T2 on T1.a1 = T2.a2)";
 
         verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint()));
     }
 
     @Test
-    public void testJoinHintWithoutAffectingJoinInSubQueryWhileRootOfSubQueryIsFilter() {
+    void testJoinHintWithoutAffectingJoinInSubQueryWhileRootOfSubQueryIsFilter() {
         String sql =
                 "select /*+ %s(T1)*/* from (select T1.* from T1 join T2 on T1.a1 = T2.a2 where T1.b1 = 'abc')";
 
@@ -484,7 +484,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithoutAffectingJoinInSubQueryWhileContainsSumInQueryBlock() {
+    void testJoinHintWithoutAffectingJoinInSubQueryWhileContainsSumInQueryBlock() {
         String sql =
                 "select /*+ %s(T1)*/T4.a1, (select count(*) from T1 join T3 on T1.a1 = T3.a3) as cnt from (select T1.* from T1 join T2 on T1.a1 = T2.a2 where T1.b1 = 'abc') T4";
 
@@ -492,7 +492,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithoutAffectingJoinInSubQueryWhileContainsUnionAndJoinInSelectList() {
+    void testJoinHintWithoutAffectingJoinInSubQueryWhileContainsUnionAndJoinInSelectList() {
         String sql =
                 "select /*+ %s(T1)*/T4.a1, (select count(*) from T1 join ((select T1.a1 as a3 from T1) union (select a3 from T3)) T3 on T1.a1 = T3.a3 where T3.a3 = 1) as cnt from (select T1.* from T1 join T2 on T1.a1 = T2.a2) T4";
 
@@ -500,7 +500,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithoutAffectingJoinInSubQueryWhileContainsUnionAndJoinInSelectFrom() {
+    void testJoinHintWithoutAffectingJoinInSubQueryWhileContainsUnionAndJoinInSelectFrom() {
         String sql =
                 "select /*+ %s(T1)*/T4.a1 from (select T1.* from T1 join ((select T1.a1 as a2 from T1) union (select a2 from T2)) T2 on T1.a1 = T2.a2) T4";
 
@@ -508,7 +508,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithTableAlias() {
+    void testJoinHintWithTableAlias() {
         // the join in sub-query will use the planner's default join strategy,
         // and the join between T1 and alias V2 will use the tested join hint
         String sql =
@@ -518,7 +518,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintsWithMultiSameJoinHintsAndSingleArg() {
+    void testJoinHintsWithMultiSameJoinHintsAndSingleArg() {
         // the first join hint will be chosen and T1 will be chosen as the build side
         String sql = "select /*+ %s(T1), %s(T2) */* from T1 join T2 on T1.a1 = T2.a2";
 
@@ -526,7 +526,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintsWithDuplicatedArgs() {
+    void testJoinHintsWithDuplicatedArgs() {
         // T1 will be chosen as the build side
         String sql = "select /*+ %s(T1, T1) */* from T1 join T2 on T1.a1 = T2.a2";
 
@@ -534,7 +534,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintsWithMultiSameJoinHintsAndMultiArgs() {
+    void testJoinHintsWithMultiSameJoinHintsAndMultiArgs() {
         // the first join hint will be chosen and T1 will be chosen as the build side
         String sql = "select /*+ %s(T1, T2), %s(T2, T1) */* from T1 join T2 on T1.a1 = T2.a2";
 
@@ -542,16 +542,22 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintsWithMultiHintsThrowException() {
-        thrown().expect(SqlParserException.class);
-        thrown().expectMessage("SQL parse failed.");
+    void testJoinHintsWithMultiHintsThrowException() {
         String sql = "select /*+ %s(T1) */ /*+ %s(T2) */ * from T1 join T2 on T1.a1 = T2.a2";
 
-        verifyRelPlanByCustom(String.format(sql, getTestSingleJoinHint(), getTestSingleJoinHint()));
+        assertThatThrownBy(
+                        () ->
+                                verifyRelPlanByCustom(
+                                        String.format(
+                                                sql,
+                                                getTestSingleJoinHint(),
+                                                getTestSingleJoinHint())))
+                .isInstanceOf(SqlParserException.class)
+                .hasMessageContaining("SQL parse failed.");
     }
 
     @Test
-    public void testJoinHintWithDisabledOperator() {
+    void testJoinHintWithDisabledOperator() {
         util.tableEnv()
                 .getConfig()
                 .set(
@@ -564,7 +570,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintsWithUnion() {
+    void testJoinHintsWithUnion() {
         // there are two query blocks and join hints are independent
         String sql =
                 "select /*+ %s(T1) */* from T1 join T2 on T1.a1 = T2.a2 union select /*+ %s(T3) */* from T3 join T1 on T3.a3 = T1.a1";
@@ -573,7 +579,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintsWithFilter() {
+    void testJoinHintsWithFilter() {
         // there are two query blocks and join hints are independent
         String sql = "select /*+ %s(T1) */* from T1 join T2 on T1.a1 = T2.a2 where T1.a1 > 5";
 
@@ -581,7 +587,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintsWithCalc() {
+    void testJoinHintsWithCalc() {
         // there are two query blocks and join hints are independent
         String sql = "select /*+ %s(T1) */a1 + 1, a1 * 10 from T1 join T2 on T1.a1 = T2.a2";
 
@@ -589,7 +595,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintInView() {
+    void testJoinHintInView() {
         // the build side in view is left
         util.tableEnv()
                 .executeSql(
@@ -604,7 +610,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintInMultiLevelView() {
+    void testJoinHintInMultiLevelView() {
         // the inside view keeps multi alias
         // the build side in this view is left
         util.tableEnv()
@@ -627,7 +633,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintsOnSameViewWithoutReusingView() {
+    void testJoinHintsOnSameViewWithoutReusingView() {
         // the build side in this view is left
         util.tableEnv()
                 .executeSql(
@@ -671,12 +677,12 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintsOnSameViewWithReusingView() {
+    void testJoinHintsOnSameViewWithReusingView() {
         util.tableEnv()
                 .getConfig()
                 .set(
-                        RelNodeBlockPlanBuilder
-                                .TABLE_OPTIMIZER_REUSE_OPTIMIZE_BLOCK_WITH_DIGEST_ENABLED(),
+                        OptimizerConfigOptions
+                                .TABLE_OPTIMIZER_REUSE_OPTIMIZE_BLOCK_WITH_DIGEST_ENABLED,
                         true);
 
         // the build side in this view is left
@@ -722,12 +728,12 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintsOnSameViewWithoutReusingViewBecauseDifferentJoinHints() {
+    void testJoinHintsOnSameViewWithoutReusingViewBecauseDifferentJoinHints() {
         util.tableEnv()
                 .getConfig()
                 .set(
-                        RelNodeBlockPlanBuilder
-                                .TABLE_OPTIMIZER_REUSE_OPTIMIZE_BLOCK_WITH_DIGEST_ENABLED(),
+                        OptimizerConfigOptions
+                                .TABLE_OPTIMIZER_REUSE_OPTIMIZE_BLOCK_WITH_DIGEST_ENABLED,
                         true);
 
         // the build side in this view is left
@@ -781,7 +787,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithSubStringViewName1() {
+    void testJoinHintWithSubStringViewName1() {
         util.tableEnv()
                 .executeSql(
                         String.format(
@@ -802,7 +808,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithSubStringViewName2() {
+    void testJoinHintWithSubStringViewName2() {
         util.tableEnv()
                 .executeSql(
                         String.format(
@@ -823,14 +829,14 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithoutCaseSensitive() {
+    void testJoinHintWithoutCaseSensitive() {
         String sql = "select /*+ %s(T1) */* from T1 join T2 on T1.a1 = T2.a2";
 
         verifyRelPlanByCustom(String.format(sql, buildCaseSensitiveStr(getTestSingleJoinHint())));
     }
 
     @Test
-    public void testJoinHintWithJoinHintInSubQuery() {
+    void testJoinHintWithJoinHintInSubQuery() {
         String sql =
                 "select * from T1 WHERE a1 IN (select /*+ %s(T2) */ a2 from T2 join T3 on T2.a2 = T3.a3)";
 
@@ -838,7 +844,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithJoinHintInCorrelateAndWithFilter() {
+    void testJoinHintWithJoinHintInCorrelateAndWithFilter() {
         String sql =
                 "select * from T1 WHERE a1 IN (select /*+ %s(T2) */ a2 from T2 join T3 on T2.a2 = T3.a3 where T1.a1 = T2.a2)";
 
@@ -846,7 +852,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithJoinHintInCorrelateAndWithProject() {
+    void testJoinHintWithJoinHintInCorrelateAndWithProject() {
         String sql =
                 "select * from T1 WHERE a1 IN (select /*+ %s(T2) */ a2 + T1.a1 from T2 join T3 on T2.a2 = T3.a3)";
 
@@ -854,7 +860,7 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithJoinHintInCorrelateAndWithAgg() {
+    void testJoinHintWithJoinHintInCorrelateAndWithAgg() {
         String sql =
                 "select * from T1 WHERE a1 IN (select /*+ %s(T2) */ count(T2.a2) from T2 join T1 on T2.a2 = T1.a1 group by T1.a1)";
 
@@ -862,9 +868,17 @@ public abstract class JoinHintTestBase extends TableTestBase {
     }
 
     @Test
-    public void testJoinHintWithJoinHintInCorrelateAndWithSortLimit() {
+    void testJoinHintWithJoinHintInCorrelateAndWithSortLimit() {
         String sql =
                 "select * from T1 WHERE a1 IN (select /*+ %s(T2) */ T2.a2 from T2 join T1 on T2.a2 = T1.a1 order by T1.a1 limit 10)";
+
+        verifyRelPlanByCustom(String.format(sql, buildCaseSensitiveStr(getTestSingleJoinHint())));
+    }
+
+    @Test
+    public void testJoinHintWithJoinHintInNestedCorrelatedSubQuery() {
+        String sql =
+                "select * from T1 WHERE a1 IN (select /*+ %s(T2) */ a2 + T1.a1 from T2 join (select T3.* from T2 join T3 on T2.a2 = T3.a3) T3 on T2.a2 = T3.a3)";
 
         verifyRelPlanByCustom(String.format(sql, buildCaseSensitiveStr(getTestSingleJoinHint())));
     }
@@ -883,7 +897,8 @@ public abstract class JoinHintTestBase extends TableTestBase {
                                                 false,
                                                 true,
                                                 false,
-                                                true)));
+                                                true,
+                                                false)));
         return astBuilder.toString();
     }
 

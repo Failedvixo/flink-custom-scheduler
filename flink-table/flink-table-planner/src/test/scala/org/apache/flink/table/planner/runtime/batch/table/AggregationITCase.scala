@@ -19,14 +19,14 @@ package org.apache.flink.table.planner.runtime.batch.table
 
 import org.apache.flink.api.java.tuple.{Tuple2 => JTuple2}
 import org.apache.flink.api.java.typeutils.{ObjectArrayTypeInfo, TupleTypeInfo}
-import org.apache.flink.api.scala._
 import org.apache.flink.core.testutils.EachCallbackWrapper
 import org.apache.flink.table.api._
 import org.apache.flink.table.functions.AggregateFunction
+import org.apache.flink.table.legacy.api.Types
 import org.apache.flink.table.planner.plan.utils.JavaUserDefinedAggFunctions.{CountDistinctWithMergeAndReset, WeightedAvgWithMergeAndReset}
 import org.apache.flink.table.planner.runtime.utils.{BatchTableEnvUtil, BatchTestBase, CollectionBatchExecTable}
 import org.apache.flink.table.planner.utils.{CountAggFunction, NonMergableCount}
-import org.apache.flink.table.utils.{LegacyRowExtension, LegacyRowResource}
+import org.apache.flink.table.utils.LegacyRowExtension
 import org.apache.flink.test.util.TestBaseUtils
 
 import org.junit.jupiter.api.Test
@@ -394,12 +394,12 @@ class AggregationITCase extends BatchTestBase {
     val expected =
       "0,0,0," +
         "0,0.5,0.5,0.500000000000000000," +
-        "1,1,1," +
-        "1,0.70710677,0.7071067811865476,0.707106781186547600," +
+        "0,0,0," +
+        "0,0.70710677,0.7071067811865476,0.707106781186547600," +
         "0,0,0," +
         "0,0.25,0.25,0.250000000000000000," +
-        "1,1,1," +
-        "1,0.5,0.5,0.500000000000000000"
+        "0,0,0," +
+        "0,0.5,0.5,0.500000000000000000"
     val results = executeQuery(res)
     TestBaseUtils.compareResultAsText(results.asJava, expected)
   }

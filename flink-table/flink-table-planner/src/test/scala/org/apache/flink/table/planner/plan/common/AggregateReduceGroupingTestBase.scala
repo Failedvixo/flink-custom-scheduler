@@ -18,7 +18,7 @@
 package org.apache.flink.table.planner.plan.common
 
 import org.apache.flink.api.common.typeinfo.TypeInformation
-import org.apache.flink.table.api.Types
+import org.apache.flink.table.legacy.api.Types
 import org.apache.flink.table.plan.stats.TableStats
 import org.apache.flink.table.planner.plan.optimize.program.FlinkBatchProgram
 import org.apache.flink.table.planner.plan.rules.logical.FlinkAggregateRemoveRule
@@ -27,12 +27,12 @@ import org.apache.flink.table.planner.utils.{BatchTableTestUtil, TableTestBase}
 
 import com.google.common.collect.ImmutableSet
 import org.apache.calcite.tools.RuleSets
-import org.junit.{Before, Test}
+import org.junit.jupiter.api.{BeforeEach, Test}
 
 abstract class AggregateReduceGroupingTestBase(withExecPlan: Boolean) extends TableTestBase {
   protected val util: BatchTableTestUtil = batchTestUtil()
 
-  @Before
+  @BeforeEach
   def setup(): Unit = {
     util.addTableSource(
       "T1",
@@ -340,6 +340,14 @@ abstract class AggregateReduceGroupingTestBase(withExecPlan: Boolean) extends Ta
   def testMultiDistinctAggs_WithNonDistinctAgg1(): Unit = {
     verifyPlan(
       "SELECT a1, d1, COUNT(DISTINCT c1), MAX(DISTINCT b1), SUM(b1) FROM T1 GROUP BY a1, d1")
+  }
+
+  @Test
+  def testImperativeAggWithAuxiliaryGrouping(): Unit = {
+    verifyPlan(
+      "SELECT a4, c4, COUNT(b4) FROM " +
+        "(SELECT a4, c4, ARRAY_AGG(b4) AS b4 FROM T4 " +
+        "GROUP BY a4, c4, TUMBLE(d4, INTERVAL '15' MINUTE)) t GROUP BY a4, c4")
   }
 
   def verifyPlan(sqlQuery: String): Unit = {

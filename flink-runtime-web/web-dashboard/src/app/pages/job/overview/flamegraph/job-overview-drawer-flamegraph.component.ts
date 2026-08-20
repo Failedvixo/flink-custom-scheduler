@@ -50,8 +50,7 @@ import { JobLocalService } from '../../job-local.service';
     NgSwitchCase,
     NgSwitchDefault,
     NzSpinModule
-  ],
-  standalone: true
+  ]
 })
 export class JobOverviewDrawerFlameGraphComponent implements OnInit, OnDestroy {
   readonly FlameGraphType = FlameGraphType;
@@ -60,7 +59,7 @@ export class JobOverviewDrawerFlameGraphComponent implements OnInit, OnDestroy {
   public selectedVertex: NodesItemCorrect | null;
   public flameGraph = {} as JobFlameGraph;
   public allSubtasks = 'all';
-  public listOfRunningSubtasks: string[] = [this.allSubtasks];
+  public listOfSampleableSubtasks: string[] = [this.allSubtasks];
 
   public graphType = FlameGraphType.ON_CPU;
   public subtaskIndex = this.allSubtasks;
@@ -102,8 +101,8 @@ export class JobOverviewDrawerFlameGraphComponent implements OnInit, OnDestroy {
         }),
         takeUntil(this.destroy$)
       )
-      .subscribe(
-        data => {
+      .subscribe({
+        next: data => {
           this.now = Date.now();
           if (this.flameGraph.endTimestamp !== data['endTimestamp']) {
             this.isLoading = false;
@@ -112,11 +111,11 @@ export class JobOverviewDrawerFlameGraphComponent implements OnInit, OnDestroy {
           }
           this.cdr.markForCheck();
         },
-        () => {
+        error: () => {
           this.isLoading = false;
           this.cdr.markForCheck();
         }
-      );
+      });
   }
 
   private requestRunningSubtasks(): void {
@@ -129,22 +128,22 @@ export class JobOverviewDrawerFlameGraphComponent implements OnInit, OnDestroy {
         }),
         takeUntil(this.destroy$)
       )
-      .subscribe(
-        data => {
-          const runningSubtasks = data?.subtasks
-            .filter(subtaskInfo => subtaskInfo.status === 'RUNNING')
+      .subscribe({
+        next: data => {
+          const sampleableSubtasks = data?.subtasks
+            .filter(subtaskInfo => subtaskInfo.status === 'RUNNING' || subtaskInfo.status === 'INITIALIZING')
             .map(subtaskInfo => subtaskInfo.subtask.toString());
-          if (isNil(runningSubtasks)) {
+          if (isNil(sampleableSubtasks)) {
             return;
           }
-          this.listOfRunningSubtasks = [this.allSubtasks, ...runningSubtasks];
+          this.listOfSampleableSubtasks = [this.allSubtasks, ...sampleableSubtasks];
           this.cdr.markForCheck();
         },
-        () => {
-          this.listOfRunningSubtasks = [this.allSubtasks];
+        error: () => {
+          this.listOfSampleableSubtasks = [this.allSubtasks];
           this.cdr.markForCheck();
         }
-      );
+      });
   }
 
   public selectSubtask(subtaskIndex: string): void {

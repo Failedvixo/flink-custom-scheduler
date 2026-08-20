@@ -43,6 +43,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import static org.apache.flink.runtime.executiongraph.IntermediateResultPartitionTest.computeVertexParallelismStoreConsideringDynamicGraph;
 import static org.apache.flink.runtime.jobgraph.DistributionPattern.ALL_TO_ALL;
 import static org.apache.flink.runtime.jobgraph.DistributionPattern.POINTWISE;
+import static org.apache.flink.runtime.util.JobVertexConnectionUtils.connectNewDataSetAsInput;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -100,17 +101,12 @@ class EdgeManagerBuildUtilTest {
         final ExecutionJobVertex consumer = vertexIterator.next();
 
         // initialize producer and consumer
-        eg.initializeJobVertex(
-                producer,
-                1L,
-                Collections.emptyMap(),
-                UnregisteredMetricGroups.createUnregisteredJobManagerJobMetricGroup());
+        eg.initializeJobVertex(producer, 1L, Collections.emptyMap());
         eg.initializeJobVertex(
                 consumer,
                 1L,
                 Collections.singletonMap(
-                        producer.getProducedDataSets()[0].getId(), jobVertexInputInfo),
-                UnregisteredMetricGroups.createUnregisteredJobManagerJobMetricGroup());
+                        producer.getProducedDataSets()[0].getId(), jobVertexInputInfo));
 
         IntermediateResult result =
                 Objects.requireNonNull(eg.getJobVertex(producer.getJobVertexId()))
@@ -175,17 +171,12 @@ class EdgeManagerBuildUtilTest {
         final ExecutionJobVertex consumer = vertexIterator.next();
 
         // initialize producer and consumer
-        eg.initializeJobVertex(
-                producer,
-                1L,
-                Collections.emptyMap(),
-                UnregisteredMetricGroups.createUnregisteredJobManagerJobMetricGroup());
+        eg.initializeJobVertex(producer, 1L, Collections.emptyMap());
         eg.initializeJobVertex(
                 consumer,
                 1L,
                 Collections.singletonMap(
-                        producer.getProducedDataSets()[0].getId(), jobVertexInputInfo),
-                UnregisteredMetricGroups.createUnregisteredJobManagerJobMetricGroup());
+                        producer.getProducedDataSets()[0].getId(), jobVertexInputInfo));
 
         IntermediateResult result =
                 Objects.requireNonNull(eg.getJobVertex(producer.getJobVertexId()))
@@ -266,7 +257,7 @@ class EdgeManagerBuildUtilTest {
                         downstream, upstream, pattern);
         int actualMaxForDownstream = -1;
         for (ExecutionVertex ev : downstreamEJV.getTaskVertices()) {
-            assertThat(ev.getNumberOfInputs()).isEqualTo(1);
+            assertThat(ev.getNumberOfInputs()).isOne();
 
             int actual = ev.getConsumedPartitionGroup(0).size();
             if (actual > actualMaxForDownstream) {
@@ -297,7 +288,7 @@ class EdgeManagerBuildUtilTest {
         v1.setInvokableClass(AbstractInvokable.class);
         v2.setInvokableClass(AbstractInvokable.class);
 
-        v2.connectNewDataSetAsInput(v1, pattern, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(v2, v1, pattern, ResultPartitionType.PIPELINED);
 
         List<JobVertex> ordered = new ArrayList<>(Arrays.asList(v1, v2));
 

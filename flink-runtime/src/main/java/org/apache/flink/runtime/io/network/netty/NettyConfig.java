@@ -22,7 +22,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.NettyShuffleEnvironmentOptions;
 import org.apache.flink.configuration.SecurityOptions;
 import org.apache.flink.runtime.net.SSLUtils;
-import org.apache.flink.util.NetUtils;
+import org.apache.flink.util.PortRange;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,7 +51,7 @@ public class NettyConfig {
 
     private final InetAddress serverAddress;
 
-    private final int serverPort;
+    private final PortRange serverPortRange;
 
     private final int memorySegmentSize;
 
@@ -65,11 +65,18 @@ public class NettyConfig {
             int memorySegmentSize,
             int numberOfSlots,
             Configuration config) {
+        this(serverAddress, new PortRange(serverPort), memorySegmentSize, numberOfSlots, config);
+    }
+
+    public NettyConfig(
+            InetAddress serverAddress,
+            PortRange serverPortRange,
+            int memorySegmentSize,
+            int numberOfSlots,
+            Configuration config) {
 
         this.serverAddress = checkNotNull(serverAddress);
-
-        checkArgument(NetUtils.isValidHostPort(serverPort), "Invalid port number.");
-        this.serverPort = serverPort;
+        this.serverPortRange = serverPortRange;
 
         checkArgument(memorySegmentSize > 0, "Invalid memory segment size.");
         this.memorySegmentSize = memorySegmentSize;
@@ -86,8 +93,8 @@ public class NettyConfig {
         return serverAddress;
     }
 
-    int getServerPort() {
-        return serverPort;
+    PortRange getServerPortRange() {
+        return serverPortRange;
     }
 
     // ------------------------------------------------------------------------
@@ -95,52 +102,34 @@ public class NettyConfig {
     // ------------------------------------------------------------------------
 
     public int getServerConnectBacklog() {
-        return config.getInteger(NettyShuffleEnvironmentOptions.CONNECT_BACKLOG);
+        return 0;
     }
 
     public int getNumberOfArenas() {
-        // default: number of slots
-        final int configValue = config.getInteger(NettyShuffleEnvironmentOptions.NUM_ARENAS);
-        return configValue == -1 ? numberOfSlots : configValue;
+        // always return number of task slots
+        return numberOfSlots;
     }
 
     public int getServerNumThreads() {
-        // default: number of task slots
-        final int configValue =
-                config.getInteger(NettyShuffleEnvironmentOptions.NUM_THREADS_SERVER);
-        return configValue == -1 ? numberOfSlots : configValue;
+        // always return number of task slots
+        return numberOfSlots;
     }
 
     public int getClientNumThreads() {
-        // default: number of task slots
-        final int configValue =
-                config.getInteger(NettyShuffleEnvironmentOptions.NUM_THREADS_CLIENT);
-        return configValue == -1 ? numberOfSlots : configValue;
+        // always return number of task slots
+        return numberOfSlots;
     }
 
     public int getClientConnectTimeoutSeconds() {
-        return config.getInteger(NettyShuffleEnvironmentOptions.CLIENT_CONNECT_TIMEOUT_SECONDS);
+        return config.get(NettyShuffleEnvironmentOptions.CLIENT_CONNECT_TIMEOUT_SECONDS);
     }
 
     public int getNetworkRetries() {
-        return config.getInteger(NettyShuffleEnvironmentOptions.NETWORK_RETRIES);
+        return config.get(NettyShuffleEnvironmentOptions.NETWORK_RETRIES);
     }
 
     public int getSendAndReceiveBufferSize() {
-        return config.getInteger(NettyShuffleEnvironmentOptions.SEND_RECEIVE_BUFFER_SIZE);
-    }
-
-    public TransportType getTransportType() {
-        String transport = config.getString(NettyShuffleEnvironmentOptions.TRANSPORT_TYPE);
-
-        switch (transport) {
-            case "nio":
-                return TransportType.NIO;
-            case "epoll":
-                return TransportType.EPOLL;
-            default:
-                return TransportType.AUTO;
-        }
+        return 0;
     }
 
     public Optional<Integer> getTcpKeepIdleInSeconds() {
@@ -166,7 +155,7 @@ public class NettyConfig {
     }
 
     public boolean getSSLEnabled() {
-        return config.getBoolean(NettyShuffleEnvironmentOptions.DATA_SSL_ENABLED)
+        return config.get(NettyShuffleEnvironmentOptions.DATA_SSL_ENABLED)
                 && SecurityOptions.isInternalSSLEnabled(config);
     }
 
@@ -179,10 +168,9 @@ public class NettyConfig {
         String format =
                 "NettyConfig ["
                         + "server address: %s, "
-                        + "server port: %d, "
+                        + "server port range: %s, "
                         + "ssl enabled: %s, "
                         + "memory segment size (bytes): %d, "
-                        + "transport type: %s, "
                         + "number of server threads: %d (%s), "
                         + "number of client threads: %d (%s), "
                         + "server connect backlog: %d (%s), "
@@ -195,10 +183,9 @@ public class NettyConfig {
         return String.format(
                 format,
                 serverAddress,
-                serverPort,
+                serverPortRange,
                 getSSLEnabled() ? "true" : "false",
                 memorySegmentSize,
-                getTransportType(),
                 getServerNumThreads(),
                 getServerNumThreads() == 0 ? def : man,
                 getClientNumThreads(),

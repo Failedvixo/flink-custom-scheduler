@@ -172,7 +172,8 @@ public abstract class AbstractPythonStreamAggregateOperator
     @Override
     public PythonFunctionRunner createPythonFunctionRunner() throws Exception {
         return BeamTablePythonFunctionRunner.stateful(
-                getRuntimeContext().getTaskName(),
+                getContainingTask().getEnvironment(),
+                getRuntimeContext().getTaskInfo().getTaskName(),
                 createPythonEnvironmentManager(),
                 getFunctionUrn(),
                 getUserDefinedFunctionsProto(),
@@ -184,6 +185,7 @@ public abstract class AbstractPythonStreamAggregateOperator
                 getOperatorConfig()
                         .getManagedMemoryFractionOperatorUseCaseOfSlot(
                                 ManagedMemoryUseCase.PYTHON,
+                                getContainingTask().getJobConfiguration(),
                                 getContainingTask()
                                         .getEnvironment()
                                         .getTaskManagerInfo()
@@ -254,8 +256,7 @@ public abstract class AbstractPythonStreamAggregateOperator
                             aggregateFunctions[i], specs));
         }
         builder.addAllJobParameters(
-                getRuntimeContext().getExecutionConfig().getGlobalJobParameters().toMap().entrySet()
-                        .stream()
+                getRuntimeContext().getGlobalJobParameters().entrySet().stream()
                         .map(
                                 entry ->
                                         FlinkFnApi.JobParameter.newBuilder()
@@ -263,6 +264,19 @@ public abstract class AbstractPythonStreamAggregateOperator
                                                 .setValue(entry.getValue())
                                                 .build())
                         .collect(Collectors.toList()));
+        builder.setRuntimeContext(
+                FlinkFnApi.UserDefinedDataStreamFunction.RuntimeContext.newBuilder()
+                        .setTaskName(getRuntimeContext().getTaskInfo().getTaskName())
+                        .setTaskNameWithSubtasks(
+                                getRuntimeContext().getTaskInfo().getTaskNameWithSubtasks())
+                        .setNumberOfParallelSubtasks(
+                                getRuntimeContext().getTaskInfo().getNumberOfParallelSubtasks())
+                        .setMaxNumberOfParallelSubtasks(
+                                getRuntimeContext().getTaskInfo().getMaxNumberOfParallelSubtasks())
+                        .setIndexOfThisSubtask(
+                                getRuntimeContext().getTaskInfo().getIndexOfThisSubtask())
+                        .setAttemptNumber(getRuntimeContext().getTaskInfo().getAttemptNumber())
+                        .build());
         return builder.build();
     }
 

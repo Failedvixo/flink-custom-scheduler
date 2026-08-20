@@ -18,6 +18,9 @@
 
 package org.apache.flink.kubernetes.utils;
 
+import java.util.Arrays;
+import java.util.List;
+
 /** Constants for kubernetes. */
 public class Constants {
 
@@ -30,6 +33,17 @@ public class Constants {
 
     public static final String CONFIG_FILE_LOGBACK_NAME = "logback-console.xml";
     public static final String CONFIG_FILE_LOG4J_NAME = "log4j-console.properties";
+
+    public static final List<String> CONFIG_FILE_NAME_LIST =
+            Arrays.asList(
+                    "logback.xml",
+                    "log4j.properties",
+                    "logback-console.xml",
+                    "log4j-console.properties",
+                    "logback-session.xml",
+                    "log4j-session.properties",
+                    "log4j-cli.properties");
+
     public static final String ENV_FLINK_LOG_DIR = "FLINK_LOG_DIR";
 
     public static final String MAIN_CONTAINER_NAME = "flink-main-container";
@@ -62,8 +76,6 @@ public class Constants {
     public static final String LABEL_COMPONENT_KEY = "component";
     public static final String LABEL_COMPONENT_JOB_MANAGER = "jobmanager";
     public static final String LABEL_COMPONENT_TASK_MANAGER = "taskmanager";
-    public static final String LABEL_CONFIGMAP_TYPE_KEY = "configmap-type";
-    public static final String LABEL_CONFIGMAP_TYPE_HIGH_AVAILABILITY = "high-availability";
 
     // Use fixed port in kubernetes, it needs to be exposed.
     public static final int REST_PORT = 8081;
@@ -96,8 +108,10 @@ public class Constants {
     // Constants for Kubernetes high availability
     public static final String LEADER_ADDRESS_KEY = "address";
     public static final String LEADER_SESSION_ID_KEY = "sessionId";
-    public static final String JOB_GRAPH_STORE_KEY_PREFIX = "jobGraph-";
-    public static final String SUBMITTED_JOBGRAPH_FILE_PREFIX = "submittedJobGraph";
+    public static final String EXECUTION_PLAN_STORE_KEY_PREFIX = "executionPlan-";
+    public static final String SUBMITTED_EXECUTION_PLAN_FILE_PREFIX = "submittedExecutionPlan";
+    public static final String APPLICATION_STORE_KEY_PREFIX = "application-";
+    public static final String SUBMITTED_APPLICATION_FILE_PREFIX = "submittedApplication";
     public static final String CHECKPOINT_COUNTER_KEY = "counter";
     public static final String CHECKPOINT_ID_KEY_PREFIX = "checkpointID-";
     public static final String COMPLETED_CHECKPOINT_FILE_SUFFIX = "completedCheckpoint";
@@ -120,4 +134,6 @@ public class Constants {
     // performance.
     // https://kubernetes.io/docs/reference/using-api/api-concepts/#the-resourceversion-parameter
     public static final String KUBERNETES_ZERO_RESOURCE_VERSION = "0";
+
+    public static final String USER_ARTIFACTS_VOLUME = "user-artifacts-volume";
 }

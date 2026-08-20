@@ -151,7 +151,7 @@ class SourceOperatorStreamTaskTest extends SourceStreamTaskTestBase {
             Queue<Object> expectedOutput = new LinkedList<>();
             expectedOutput.add(Watermark.MAX_WATERMARK);
             expectedOutput.add(new EndOfData(StopMode.DRAIN));
-            assertThat(testHarness.getOutput().toArray()).isEqualTo(expectedOutput.toArray());
+            assertThat(testHarness.getOutput()).containsExactlyElementsOf(expectedOutput);
         }
     }
 
@@ -277,8 +277,9 @@ class SourceOperatorStreamTaskTest extends SourceStreamTaskTestBase {
                         .finish()
                         .build()) {
 
-            testHarness.getStreamTask().invoke();
-            testHarness.processAll();
+            testHarness.getStreamTask().invoke(); // should result in end-of-input and task closing
+            testHarness.processAll(); // no-op
+            testHarness.cleanUp(); // close output writer
             assertThat(output)
                     .containsExactly(Watermark.MAX_WATERMARK, new EndOfData(StopMode.DRAIN));
 

@@ -27,11 +27,11 @@ import org.apache.flink.table.expressions.resolver.ExpressionResolver;
 import org.apache.flink.table.planner.plan.utils.FlinkRexUtil;
 import org.apache.flink.table.planner.plan.utils.RexNodeToExpressionConverter;
 import org.apache.flink.table.planner.utils.JavaScalaConversionUtil;
-import org.apache.flink.table.planner.utils.TableConfigUtils;
 import org.apache.flink.table.types.logical.RowType;
 
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonCreator;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonIgnore;
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonProperty;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonTypeName;
 
@@ -42,8 +42,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.TimeZone;
 import java.util.stream.Collectors;
+
+import scala.Option;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -51,6 +52,7 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * A sub-class of {@link SourceAbilitySpec} that can not only serialize/deserialize the filter
  * to/from JSON, but also can push the filter into a {@link SupportsFilterPushDown}.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 @JsonTypeName("FilterPushDown")
 public final class FilterPushDownSpec extends SourceAbilitySpecBase {
     public static final String FIELD_NAME_PREDICATES = "predicates";
@@ -103,8 +105,9 @@ public final class FilterPushDownSpec extends SourceAbilitySpecBase {
                             context.getSourceRowType().getFieldNames().toArray(new String[0]),
                             context.getFunctionCatalog(),
                             context.getCatalogManager(),
-                            TimeZone.getTimeZone(
-                                    TableConfigUtils.getLocalTimeZone(context.getTableConfig())));
+                            Option.apply(
+                                    context.getTypeFactory()
+                                            .buildRelNodeRowType(context.getSourceRowType())));
             List<Expression> filters =
                     predicates.stream()
                             .map(

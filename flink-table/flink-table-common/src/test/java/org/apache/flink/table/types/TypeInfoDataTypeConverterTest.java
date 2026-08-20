@@ -18,7 +18,7 @@
 
 package org.apache.flink.table.types;
 
-import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.serialization.SerializerConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
@@ -109,7 +109,9 @@ class TypeInfoDataTypeConverterTest {
                 TestSpec.forType(new QueryableTypeInfo()).expectDataType(DataTypes.BYTES()),
                 TestSpec.forType(Types.ENUM(DayOfWeek.class))
                         .lookupExpects(DayOfWeek.class)
-                        .expectDataType(dummyRaw(DayOfWeek.class)));
+                        .expectDataType(dummyRaw(DayOfWeek.class)),
+                TestSpec.forType(Types.VARIANT).expectDataType(DataTypes.VARIANT()),
+                TestSpec.forType(Types.BITMAP).expectDataType(DataTypes.BITMAP()));
     }
 
     @ParameterizedTest(name = "{index}: {0}")
@@ -231,7 +233,7 @@ class TypeInfoDataTypeConverterTest {
         }
 
         @Override
-        public TypeSerializer<Object> createSerializer(ExecutionConfig config) {
+        public TypeSerializer<Object> createSerializer(SerializerConfig config) {
             return null;
         }
 

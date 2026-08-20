@@ -106,7 +106,8 @@ public enum PartitionTestUtils {
         final ResultPartitionManager partitionManager = new ResultPartitionManager();
         final ResultPartition parent = subpartition.parent;
         partitionManager.registerResultPartition(parent);
-        return partitionManager.createSubpartitionView(parent.partitionId, 0, listener);
+        return partitionManager.createSubpartitionView(
+                parent.partitionId, new ResultSubpartitionIndexSet(0), listener);
     }
 
     static void verifyCreateSubpartitionViewThrowsException(
@@ -114,7 +115,9 @@ public enum PartitionTestUtils {
         assertThatThrownBy(
                         () ->
                                 partitionManager.createSubpartitionView(
-                                        partitionId, 0, new NoOpBufferAvailablityListener()))
+                                        partitionId,
+                                        new ResultSubpartitionIndexSet(0),
+                                        new NoOpBufferAvailablityListener()))
                 .as("Should throw a PartitionNotFoundException.")
                 .isInstanceOf(PartitionNotFoundException.class)
                 .satisfies(
@@ -144,7 +147,7 @@ public enum PartitionTestUtils {
             int bufferSize,
             byte[] dataBytes)
             throws Exception {
-        List<BufferWithChannel> buffers = new ArrayList<>();
+        List<BufferWithSubpartition> buffers = new ArrayList<>();
         for (int i = 0; i < numSubpartitions; ++i) {
             for (int j = 0; j < numBuffersPerSubpartition; ++j) {
                 Buffer.DataType dataType =
@@ -157,12 +160,17 @@ public enum PartitionTestUtils {
                 Buffer buffer =
                         new NetworkBuffer(
                                 segment, FreeingBufferRecycler.INSTANCE, dataType, bufferSize);
-                buffers.add(new BufferWithChannel(buffer, i));
+                buffers.add(new BufferWithSubpartition(buffer, i));
             }
         }
 
+        int[] writeOrder = new int[numSubpartitions];
+        for (int i = 0; i < numSubpartitions; i++) {
+            writeOrder[i] = i;
+        }
+
         PartitionedFileWriter fileWriter =
-                new PartitionedFileWriter(numSubpartitions, 1024, basePath);
+                new PartitionedFileWriter(numSubpartitions, 1024, basePath, writeOrder);
         fileWriter.startNewRegion(false);
         fileWriter.writeBuffers(buffers);
         return fileWriter.finish();

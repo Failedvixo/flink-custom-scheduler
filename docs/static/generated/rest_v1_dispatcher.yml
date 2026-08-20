@@ -6,8 +6,89 @@ info:
   license:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0.html
-  version: v1/1.18-SNAPSHOT
+  version: v1/2.3.0
 paths:
+  /applications/overview:
+    get:
+      description: Returns an overview over all applications.
+      operationId: getApplicationsOverview
+      responses:
+        "200":
+          description: The request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MultipleApplicationsDetails"
+  /applications/{applicationid}:
+    get:
+      description: Returns details of an application.
+      operationId: getApplicationDetails
+      parameters:
+      - name: applicationid
+        in: path
+        description: 32-character hexadecimal string value that identifies an application.
+        required: true
+        schema:
+          $ref: "#/components/schemas/ApplicationID"
+      responses:
+        "200":
+          description: The request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationDetailsInfo"
+  /applications/{applicationid}/cancel:
+    post:
+      description: Terminates an application.
+      operationId: cancelApplication
+      parameters:
+      - name: applicationid
+        in: path
+        description: 32-character hexadecimal string value that identifies an application.
+        required: true
+        schema:
+          $ref: "#/components/schemas/ApplicationID"
+      responses:
+        "202":
+          description: The request was successful.
+  /applications/{applicationid}/exceptions:
+    get:
+      description: Returns exception history for an application.
+      operationId: getApplicationExceptions
+      parameters:
+      - name: applicationid
+        in: path
+        description: 32-character hexadecimal string value that identifies an application.
+        required: true
+        schema:
+          $ref: "#/components/schemas/ApplicationID"
+      responses:
+        "200":
+          description: The request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationExceptionsInfoWithHistory"
+  /applications/{applicationid}/jobmanager/config:
+    get:
+      description: Returns the jobmanager's configuration of a specific application.
+      operationId: getJobManagerApplicationConfiguration
+      parameters:
+      - name: applicationid
+        in: path
+        description: 32-character hexadecimal string value that identifies an application.
+        required: true
+        schema:
+          $ref: "#/components/schemas/ApplicationID"
+      responses:
+        "200":
+          description: The request was successful.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ConfigurationInfoEntry"
   /cluster:
     delete:
       description: Shuts down the cluster
@@ -25,7 +106,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DashboardConfiguration'
+                $ref: "#/components/schemas/DashboardConfiguration"
   /datasets:
     get:
       description: Returns all cluster data sets.
@@ -36,7 +117,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ClusterDataSetListResponseBody'
+                $ref: "#/components/schemas/ClusterDataSetListResponseBody"
   /datasets/delete/{triggerid}:
     get:
       description: Returns the status for the delete operation of a cluster data set.
@@ -48,14 +129,14 @@ paths:
           operation trigger ID. The ID was returned then the operation was triggered.
         required: true
         schema:
-          $ref: '#/components/schemas/TriggerId'
+          $ref: "#/components/schemas/TriggerId"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AsynchronousOperationResult'
+                $ref: "#/components/schemas/AsynchronousOperationResult"
   /datasets/{datasetid}:
     delete:
       description: Triggers the deletion of a cluster data set. This async operation
@@ -68,14 +149,14 @@ paths:
           data set.
         required: true
         schema:
-          $ref: '#/components/schemas/IntermediateDataSetID'
+          $ref: "#/components/schemas/IntermediateDataSetID"
       responses:
         "202":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TriggerResponse'
+                $ref: "#/components/schemas/TriggerResponse"
   /jars:
     get:
       description: Returns a list of all jars previously uploaded via '/jars/upload'.
@@ -86,7 +167,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JarListInfo'
+                $ref: "#/components/schemas/JarListInfo"
   /jars/upload:
     post:
       description: |-
@@ -106,7 +187,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JarUploadResponseBody'
+                $ref: "#/components/schemas/JarUploadResponseBody"
   /jars/{jarid}:
     delete:
       description: Deletes a jar previously uploaded via '/jars/upload'.
@@ -138,14 +219,6 @@ paths:
         required: true
         schema:
           type: string
-      - name: program-args
-        in: query
-        description: "Deprecated, please use 'programArg' instead. String value that\
-          \ specifies the arguments for the program or plan"
-        required: false
-        style: form
-        schema:
-          type: string
       - name: programArg
         in: query
         description: Comma-separated list of program arguments.
@@ -174,14 +247,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/JarPlanRequestBody'
+              $ref: "#/components/schemas/JarPlanRequestBody"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobPlanInfo'
+                $ref: "#/components/schemas/JobPlanInfo"
   /jars/{jarid}/run:
     post:
       description: Submits a job by running a jar previously uploaded via '/jars/upload'.
@@ -214,10 +287,69 @@ paths:
         style: form
         schema:
           type: string
-      - name: program-args
+      - name: programArg
         in: query
-        description: "Deprecated, please use 'programArg' instead. String value that\
-          \ specifies the arguments for the program or plan"
+        description: Comma-separated list of program arguments.
+        required: false
+        style: form
+        schema:
+          type: string
+      - name: entry-class
+        in: query
+        description: String value that specifies the fully qualified name of the entry
+          point class. Overrides the class defined in the jar file manifest.
+        required: false
+        style: form
+        schema:
+          type: string
+      - name: parallelism
+        in: query
+        description: Positive integer value that specifies the desired parallelism
+          for the job.
+        required: false
+        style: form
+        schema:
+          type: integer
+          format: int32
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JarRunRequestBody"
+      responses:
+        "200":
+          description: The request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JarRunResponseBody"
+  /jars/{jarid}/run-application:
+    post:
+      description: 'Submits an application by running a jar previously uploaded via
+        ''/jars/upload''. '
+      operationId: submitApplicationFromJar
+      parameters:
+      - name: jarid
+        in: path
+        description: "String value that identifies a jar. When uploading the jar a\
+          \ path is returned, where the filename is the ID. This value is equivalent\
+          \ to the `id` field in the list of uploaded jars (/jars)."
+        required: true
+        schema:
+          type: string
+      - name: allowNonRestoredState
+        in: query
+        description: Boolean value that specifies whether the job submission should
+          be rejected if the savepoint contains state that cannot be mapped back to
+          the job.
+        required: false
+        style: form
+        schema:
+          type: boolean
+      - name: savepointPath
+        in: query
+        description: String value that specifies the path of the savepoint to restore
+          the job from.
         required: false
         style: form
         schema:
@@ -250,14 +382,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/JarRunRequestBody'
+              $ref: "#/components/schemas/JarRunApplicationRequestBody"
       responses:
-        "200":
+        "202":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JarRunResponseBody'
+                $ref: "#/components/schemas/JarRunApplicationResponseBody"
   /jobmanager/config:
     get:
       description: Returns the cluster configuration.
@@ -270,7 +402,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ConfigurationInfoEntry'
+                  $ref: "#/components/schemas/ConfigurationInfoEntry"
   /jobmanager/environment:
     get:
       description: Returns the jobmanager environment.
@@ -281,7 +413,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EnvironmentInfo'
+                $ref: "#/components/schemas/EnvironmentInfo"
   /jobmanager/logs:
     get:
       description: Returns the list of log files on the JobManager.
@@ -292,7 +424,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LogListInfo'
+                $ref: "#/components/schemas/LogListInfo"
   /jobmanager/metrics:
     get:
       description: Provides access to job manager metrics.
@@ -311,7 +443,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MetricCollectionResponseBody'
+                $ref: "#/components/schemas/MetricCollectionResponseBody"
   /jobmanager/thread-dump:
     get:
       description: Returns the thread dump of the JobManager.
@@ -322,7 +454,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ThreadDumpInfo'
+                $ref: "#/components/schemas/ThreadDumpInfo"
   /jobs:
     get:
       description: Returns an overview over all jobs and their current state.
@@ -333,33 +465,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobIdsWithStatusOverview'
-    post:
-      description: "Submits a job. This call is primarily intended to be used by the\
-        \ Flink client. This call expects a multipart/form-data request that consists\
-        \ of file uploads for the serialized JobGraph, jars and distributed cache\
-        \ artifacts and an attribute named \"request\" for the JSON payload."
-      operationId: submitJob
-      requestBody:
-        content:
-          multipart/form-data:
-            schema:
-              properties:
-                request:
-                  $ref: '#/components/schemas/JobSubmitRequestBody'
-                filename:
-                  type: array
-                  items:
-                    type: string
-                    format: binary
-        required: true
-      responses:
-        "202":
-          description: The request was successful.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/JobSubmitResponseBody'
+                $ref: "#/components/schemas/JobIdsWithStatusOverview"
   /jobs/metrics:
     get:
       description: Provides access to aggregated job metrics.
@@ -375,11 +481,11 @@ paths:
       - name: agg
         in: query
         description: "Comma-separated list of aggregation modes which should be calculated.\
-          \ Available aggregations are: \"min, max, sum, avg\"."
+          \ Available aggregations are: \"min, max, sum, avg, skew\"."
         required: false
         style: form
         schema:
-          $ref: '#/components/schemas/AggregationMode'
+          $ref: "#/components/schemas/AggregationMode"
       - name: jobs
         in: query
         description: Comma-separated list of 32-character hexadecimal strings to select
@@ -387,14 +493,14 @@ paths:
         required: false
         style: form
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AggregatedMetricsResponseBody'
+                $ref: "#/components/schemas/AggregatedMetricsResponseBody"
   /jobs/overview:
     get:
       description: Returns an overview over all jobs.
@@ -405,7 +511,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MultipleJobsDetails'
+                $ref: "#/components/schemas/MultipleJobsDetails"
   /jobs/{jobid}:
     get:
       description: Returns details of a job.
@@ -416,14 +522,14 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobDetailsInfo'
+                $ref: "#/components/schemas/JobDetailsInfo"
     patch:
       description: Terminates a job.
       operationId: cancelJob
@@ -433,7 +539,7 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: mode
         in: query
         description: "String value that specifies the termination mode. The only supported\
@@ -441,7 +547,7 @@ paths:
         required: false
         style: form
         schema:
-          $ref: '#/components/schemas/TerminationMode'
+          $ref: "#/components/schemas/TerminationMode"
       responses:
         "202":
           description: The request was successful.
@@ -456,7 +562,7 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: includeSerializedValue
         in: query
         description: Boolean value that specifies whether serialized user task accumulators
@@ -471,7 +577,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobAccumulatorsInfo'
+                $ref: "#/components/schemas/JobAccumulatorsInfo"
   /jobs/{jobid}/checkpoints:
     get:
       description: Returns checkpointing statistics for a job.
@@ -482,17 +588,18 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CheckpointingStatistics'
+                $ref: "#/components/schemas/CheckpointingStatistics"
     post:
-      description: Triggers a checkpoint. This async operation would return a 'triggerid'
-        for further query identifier.
+      description: Triggers a checkpoint. The 'checkpointType' parameter does not
+        support 'INCREMENTAL' option for now. See FLINK-33723. This async operation
+        would return a 'triggerid' for further query identifier.
       operationId: triggerCheckpoint
       parameters:
       - name: jobid
@@ -500,19 +607,19 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CheckpointTriggerRequestBody'
+              $ref: "#/components/schemas/CheckpointTriggerRequestBody"
       responses:
         "202":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TriggerResponse'
+                $ref: "#/components/schemas/TriggerResponse"
   /jobs/{jobid}/checkpoints/config:
     get:
       description: Returns the checkpointing configuration.
@@ -523,14 +630,14 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CheckpointConfigInfo'
+                $ref: "#/components/schemas/CheckpointConfigInfo"
   /jobs/{jobid}/checkpoints/details/{checkpointid}:
     get:
       description: Returns details for a checkpoint.
@@ -541,7 +648,7 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: checkpointid
         in: path
         description: Long value that identifies a checkpoint.
@@ -555,7 +662,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CheckpointStatistics'
+                $ref: "#/components/schemas/CheckpointStatistics"
   /jobs/{jobid}/checkpoints/details/{checkpointid}/subtasks/{vertexid}:
     get:
       description: Returns checkpoint statistics for a task and its subtasks.
@@ -566,7 +673,7 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: checkpointid
         in: path
         description: Long value that identifies a checkpoint.
@@ -579,14 +686,14 @@ paths:
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TaskCheckpointStatisticsWithSubtaskDetails'
+                $ref: "#/components/schemas/TaskCheckpointStatisticsWithSubtaskDetails"
   /jobs/{jobid}/checkpoints/{triggerid}:
     get:
       description: Returns the status of a checkpoint trigger operation.
@@ -597,21 +704,21 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: triggerid
         in: path
         description: 32-character hexadecimal string that identifies an asynchronous
           operation trigger ID. The ID was returned then the operation was triggered.
         required: true
         schema:
-          $ref: '#/components/schemas/TriggerId'
+          $ref: "#/components/schemas/TriggerId"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AsynchronousOperationResult'
+                $ref: "#/components/schemas/AsynchronousOperationResult"
   /jobs/{jobid}/clientHeartbeat:
     patch:
       description: Report the jobClient's aliveness.
@@ -622,12 +729,12 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/JobClientHeartbeatRequestBody'
+              $ref: "#/components/schemas/JobClientHeartbeatRequestBody"
       responses:
         "202":
           description: The request was successful.
@@ -641,14 +748,14 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobConfigInfo'
+                $ref: "#/components/schemas/JobConfigInfo"
   /jobs/{jobid}/exceptions:
     get:
       description: "Returns the most recent exceptions that have been handled by Flink\
@@ -665,7 +772,7 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: maxExceptions
         in: query
         description: Comma-separated list of integer values that specifies the upper
@@ -683,14 +790,14 @@ paths:
         required: false
         style: form
         schema:
-          $ref: '#/components/schemas/FailureLabel'
+          $ref: "#/components/schemas/FailureLabel"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobExceptionsInfoWithHistory'
+                $ref: "#/components/schemas/JobExceptionsInfoWithHistory"
   /jobs/{jobid}/execution-result:
     get:
       description: Returns the result of a job execution. Gives access to the execution
@@ -702,14 +809,14 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobExecutionResultResponseBody'
+                $ref: "#/components/schemas/JobExecutionResultResponseBody"
   /jobs/{jobid}/jobmanager/config:
     get:
       description: Returns the jobmanager's configuration of a specific job.
@@ -720,7 +827,7 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
@@ -729,7 +836,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ConfigurationInfoEntry'
+                  $ref: "#/components/schemas/ConfigurationInfoEntry"
   /jobs/{jobid}/jobmanager/environment:
     get:
       description: Returns the jobmanager's environment of a specific job.
@@ -740,14 +847,14 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EnvironmentInfo'
+                $ref: "#/components/schemas/EnvironmentInfo"
   /jobs/{jobid}/jobmanager/log-url:
     get:
       description: Returns the log url of jobmanager of a specific job.
@@ -758,14 +865,14 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LogUrlResponse'
+                $ref: "#/components/schemas/LogUrlResponse"
   /jobs/{jobid}/metrics:
     get:
       description: Provides access to job metrics.
@@ -776,7 +883,7 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: get
         in: query
         description: Comma-separated list of string values to select specific metrics.
@@ -790,7 +897,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MetricCollectionResponseBody'
+                $ref: "#/components/schemas/MetricCollectionResponseBody"
   /jobs/{jobid}/plan:
     get:
       description: Returns the dataflow plan of a job.
@@ -801,14 +908,112 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobPlanInfo'
+                $ref: "#/components/schemas/JobPlanInfo"
+  /jobs/{jobid}/rescales/config:
+    get:
+      description: Returns the job rescale configuration.
+      operationId: getJobRescaleConfig
+      parameters:
+      - name: jobid
+        in: path
+        description: 32-character hexadecimal string value that identifies a job.
+        required: true
+        schema:
+          $ref: "#/components/schemas/JobID"
+      responses:
+        "200":
+          description: The request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRescaleConfigInfo"
+  /jobs/{jobid}/rescales/details/{rescaleuuid}:
+    get:
+      description: Return a job rescale details.
+      operationId: getJobRescaleDetails
+      parameters:
+      - name: jobid
+        in: path
+        description: 32-character hexadecimal string value that identifies a job.
+        required: true
+        schema:
+          $ref: "#/components/schemas/JobID"
+      - name: rescaleuuid
+        in: path
+        description: String value that identifies a job rescale.
+        required: true
+        schema:
+          $ref: "#/components/schemas/RescaleUUID"
+      responses:
+        "200":
+          description: The request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRescaleDetails"
+  /jobs/{jobid}/rescales/history:
+    get:
+      description: Return job rescales history.
+      operationId: getJobRescalesHistory
+      parameters:
+      - name: jobid
+        in: path
+        description: 32-character hexadecimal string value that identifies a job.
+        required: true
+        schema:
+          $ref: "#/components/schemas/JobID"
+      responses:
+        "200":
+          description: The request was successful.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JobRescaleDetails"
+  /jobs/{jobid}/rescales/overview:
+    get:
+      description: Return job rescales overview.
+      operationId: getJobRescalesOverview
+      parameters:
+      - name: jobid
+        in: path
+        description: 32-character hexadecimal string value that identifies a job.
+        required: true
+        schema:
+          $ref: "#/components/schemas/JobID"
+      responses:
+        "200":
+          description: The request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRescalesOverview"
+  /jobs/{jobid}/rescales/summary:
+    get:
+      description: Return job rescales summary.
+      operationId: getJobRescalesSummary
+      parameters:
+      - name: jobid
+        in: path
+        description: 32-character hexadecimal string value that identifies a job.
+        required: true
+        schema:
+          $ref: "#/components/schemas/JobID"
+      responses:
+        "200":
+          description: The request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRescalesSummary"
   /jobs/{jobid}/rescaling:
     patch:
       description: Triggers the rescaling of a job. This async operation would return
@@ -820,7 +1025,7 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: parallelism
         in: query
         description: Positive integer value that specifies the desired parallelism.
@@ -835,7 +1040,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TriggerResponse'
+                $ref: "#/components/schemas/TriggerResponse"
   /jobs/{jobid}/rescaling/{triggerid}:
     get:
       description: Returns the status of a rescaling operation.
@@ -846,21 +1051,21 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: triggerid
         in: path
         description: 32-character hexadecimal string that identifies an asynchronous
           operation trigger ID. The ID was returned then the operation was triggered.
         required: true
         schema:
-          $ref: '#/components/schemas/TriggerId'
+          $ref: "#/components/schemas/TriggerId"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AsynchronousOperationResult'
+                $ref: "#/components/schemas/AsynchronousOperationResult"
   /jobs/{jobid}/resource-requirements:
     get:
       description: Request details on the job's resource requirements.
@@ -871,14 +1076,14 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobResourceRequirementsBody'
+                $ref: "#/components/schemas/JobResourceRequirementsBody"
     put:
       description: Request to update job's resource requirements.
       operationId: updateJobResourceRequirements
@@ -888,12 +1093,12 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/JobResourceRequirementsBody'
+              $ref: "#/components/schemas/JobResourceRequirementsBody"
       responses:
         "200":
           description: The request was successful.
@@ -908,19 +1113,19 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SavepointTriggerRequestBody'
+              $ref: "#/components/schemas/SavepointTriggerRequestBody"
       responses:
         "202":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TriggerResponse'
+                $ref: "#/components/schemas/TriggerResponse"
   /jobs/{jobid}/savepoints/{triggerid}:
     get:
       description: Returns the status of a savepoint operation.
@@ -931,21 +1136,21 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: triggerid
         in: path
         description: 32-character hexadecimal string that identifies an asynchronous
           operation trigger ID. The ID was returned then the operation was triggered.
         required: true
         schema:
-          $ref: '#/components/schemas/TriggerId'
+          $ref: "#/components/schemas/TriggerId"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AsynchronousOperationResult'
+                $ref: "#/components/schemas/AsynchronousOperationResult"
   /jobs/{jobid}/status:
     get:
       description: Returns the current status of a job execution.
@@ -956,14 +1161,14 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobStatusInfo'
+                $ref: "#/components/schemas/JobStatusInfo"
   /jobs/{jobid}/stop:
     post:
       description: "Stops a job with a savepoint. Optionally, it can also emit a MAX_WATERMARK\
@@ -977,19 +1182,19 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/StopWithSavepointRequestBody'
+              $ref: "#/components/schemas/StopWithSavepointRequestBody"
       responses:
         "202":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TriggerResponse'
+                $ref: "#/components/schemas/TriggerResponse"
   /jobs/{jobid}/taskmanagers/{taskmanagerid}/log-url:
     get:
       description: Returns the log url of jobmanager of a specific job.
@@ -1000,20 +1205,20 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: taskmanagerid
         in: path
         description: 32-character hexadecimal string that identifies a task manager.
         required: true
         schema:
-          $ref: '#/components/schemas/ResourceID'
+          $ref: "#/components/schemas/ResourceID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LogUrlResponse'
+                $ref: "#/components/schemas/LogUrlResponse"
   /jobs/{jobid}/vertices/{vertexid}:
     get:
       description: "Returns details for a task, with a summary for each of its subtasks."
@@ -1024,20 +1229,20 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobVertexDetailsInfo'
+                $ref: "#/components/schemas/JobVertexDetailsInfo"
   /jobs/{jobid}/vertices/{vertexid}/accumulators:
     get:
       description: "Returns user-defined accumulators of a task, aggregated across\
@@ -1049,20 +1254,20 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobVertexAccumulatorsInfo'
+                $ref: "#/components/schemas/JobVertexAccumulatorsInfo"
   /jobs/{jobid}/vertices/{vertexid}/backpressure:
     get:
       description: "Returns back-pressure information for a job, and may initiate\
@@ -1074,20 +1279,20 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobVertexBackPressureInfo'
+                $ref: "#/components/schemas/JobVertexBackPressureInfo"
   /jobs/{jobid}/vertices/{vertexid}/flamegraph:
     get:
       description: "Returns flame graph information for a vertex, and may initiate\
@@ -1099,13 +1304,13 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       - name: type
         in: query
         description: "String value that specifies the Flame Graph type. Supported\
@@ -1113,7 +1318,7 @@ paths:
         required: false
         style: form
         schema:
-          $ref: '#/components/schemas/ThreadStates'
+          $ref: "#/components/schemas/ThreadStates"
       - name: subtaskindex
         in: query
         description: Positive integer value that identifies a subtask.
@@ -1128,7 +1333,40 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/VertexFlameGraph'
+                $ref: "#/components/schemas/VertexFlameGraph"
+  /jobs/{jobid}/vertices/{vertexid}/jm-operator-metrics:
+    get:
+      description: Provides access to jobmanager operator metrics. This is an operator
+        that executes on the jobmanager and the coordinator for FLIP 27 sources is
+        one example of such an operator.
+      operationId: getJobManagerOperatorMetrics
+      parameters:
+      - name: jobid
+        in: path
+        description: 32-character hexadecimal string value that identifies a job.
+        required: true
+        schema:
+          $ref: "#/components/schemas/JobID"
+      - name: vertexid
+        in: path
+        description: 32-character hexadecimal string value that identifies a job vertex.
+        required: true
+        schema:
+          $ref: "#/components/schemas/JobVertexID"
+      - name: get
+        in: query
+        description: Comma-separated list of string values to select specific metrics.
+        required: false
+        style: form
+        schema:
+          type: string
+      responses:
+        "200":
+          description: The request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricCollectionResponseBody"
   /jobs/{jobid}/vertices/{vertexid}/metrics:
     get:
       description: Provides access to task metrics.
@@ -1139,13 +1377,13 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       - name: get
         in: query
         description: Comma-separated list of string values to select specific metrics.
@@ -1159,7 +1397,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MetricCollectionResponseBody'
+                $ref: "#/components/schemas/MetricCollectionResponseBody"
   /jobs/{jobid}/vertices/{vertexid}/subtasks/accumulators:
     get:
       description: Returns all user-defined accumulators for all subtasks of a task.
@@ -1170,20 +1408,20 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SubtasksAllAccumulatorsInfo'
+                $ref: "#/components/schemas/SubtasksAllAccumulatorsInfo"
   /jobs/{jobid}/vertices/{vertexid}/subtasks/metrics:
     get:
       description: Provides access to aggregated subtask metrics.
@@ -1194,13 +1432,13 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       - name: get
         in: query
         description: Comma-separated list of string values to select specific metrics.
@@ -1211,11 +1449,11 @@ paths:
       - name: agg
         in: query
         description: "Comma-separated list of aggregation modes which should be calculated.\
-          \ Available aggregations are: \"min, max, sum, avg\"."
+          \ Available aggregations are: \"min, max, sum, avg, skew\"."
         required: false
         style: form
         schema:
-          $ref: '#/components/schemas/AggregationMode'
+          $ref: "#/components/schemas/AggregationMode"
       - name: subtasks
         in: query
         description: "Comma-separated list of integer ranges (e.g. \"1,3,5-9\") to\
@@ -1230,7 +1468,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AggregatedMetricsResponseBody'
+                $ref: "#/components/schemas/AggregatedMetricsResponseBody"
   /jobs/{jobid}/vertices/{vertexid}/subtasks/{subtaskindex}:
     get:
       description: Returns details of the current or latest execution attempt of a
@@ -1242,13 +1480,13 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       - name: subtaskindex
         in: path
         description: Positive integer value that identifies a subtask.
@@ -1262,7 +1500,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SubtaskExecutionAttemptDetailsInfo'
+                $ref: "#/components/schemas/SubtaskExecutionAttemptDetailsInfo"
   /jobs/{jobid}/vertices/{vertexid}/subtasks/{subtaskindex}/attempts/{attempt}:
     get:
       description: Returns details of an execution attempt of a subtask. Multiple
@@ -1274,13 +1512,13 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       - name: subtaskindex
         in: path
         description: Positive integer value that identifies a subtask.
@@ -1301,7 +1539,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SubtaskExecutionAttemptDetailsInfo'
+                $ref: "#/components/schemas/SubtaskExecutionAttemptDetailsInfo"
   /jobs/{jobid}/vertices/{vertexid}/subtasks/{subtaskindex}/attempts/{attempt}/accumulators:
     get:
       description: Returns the accumulators of an execution attempt of a subtask.
@@ -1313,13 +1551,13 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       - name: subtaskindex
         in: path
         description: Positive integer value that identifies a subtask.
@@ -1340,7 +1578,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SubtaskExecutionAttemptAccumulatorsInfo'
+                $ref: "#/components/schemas/SubtaskExecutionAttemptAccumulatorsInfo"
   /jobs/{jobid}/vertices/{vertexid}/subtasks/{subtaskindex}/metrics:
     get:
       description: Provides access to subtask metrics.
@@ -1351,13 +1589,13 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       - name: subtaskindex
         in: path
         description: Positive integer value that identifies a subtask.
@@ -1378,7 +1616,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MetricCollectionResponseBody'
+                $ref: "#/components/schemas/MetricCollectionResponseBody"
   /jobs/{jobid}/vertices/{vertexid}/subtasktimes:
     get:
       description: Returns time-related information for all subtasks of a task.
@@ -1389,20 +1627,20 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SubtasksTimesInfo'
+                $ref: "#/components/schemas/SubtasksTimesInfo"
   /jobs/{jobid}/vertices/{vertexid}/taskmanagers:
     get:
       description: Returns task information aggregated by task manager.
@@ -1413,20 +1651,20 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobVertexTaskManagersInfo'
+                $ref: "#/components/schemas/JobVertexTaskManagersInfo"
   /jobs/{jobid}/vertices/{vertexid}/watermarks:
     get:
       description: Returns the watermarks for all subtasks of a task.
@@ -1437,20 +1675,20 @@ paths:
         description: 32-character hexadecimal string value that identifies a job.
         required: true
         schema:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
       - name: vertexid
         in: path
         description: 32-character hexadecimal string value that identifies a job vertex.
         required: true
         schema:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MetricCollectionResponseBody'
+                $ref: "#/components/schemas/MetricCollectionResponseBody"
   /overview:
     get:
       description: Returns an overview over the Flink cluster.
@@ -1461,7 +1699,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ClusterOverviewWithVersion'
+                $ref: "#/components/schemas/ClusterOverviewWithVersion"
   /savepoint-disposal:
     post:
       description: Triggers the desposal of a savepoint. This async operation would
@@ -1471,14 +1709,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SavepointDisposalRequest'
+              $ref: "#/components/schemas/SavepointDisposalRequest"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TriggerResponse'
+                $ref: "#/components/schemas/TriggerResponse"
   /savepoint-disposal/{triggerid}:
     get:
       description: Returns the status of a savepoint disposal operation.
@@ -1490,14 +1728,14 @@ paths:
           operation trigger ID. The ID was returned then the operation was triggered.
         required: true
         schema:
-          $ref: '#/components/schemas/TriggerId'
+          $ref: "#/components/schemas/TriggerId"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AsynchronousOperationResult'
+                $ref: "#/components/schemas/AsynchronousOperationResult"
   /taskmanagers:
     get:
       description: Returns an overview over all task managers.
@@ -1508,7 +1746,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TaskManagersInfo'
+                $ref: "#/components/schemas/TaskManagersInfo"
   /taskmanagers/metrics:
     get:
       description: Provides access to aggregated task manager metrics.
@@ -1524,11 +1762,11 @@ paths:
       - name: agg
         in: query
         description: "Comma-separated list of aggregation modes which should be calculated.\
-          \ Available aggregations are: \"min, max, sum, avg\"."
+          \ Available aggregations are: \"min, max, sum, avg, skew\"."
         required: false
         style: form
         schema:
-          $ref: '#/components/schemas/AggregationMode'
+          $ref: "#/components/schemas/AggregationMode"
       - name: taskmanagers
         in: query
         description: Comma-separated list of 32-character hexadecimal strings to select
@@ -1536,19 +1774,17 @@ paths:
         required: false
         style: form
         schema:
-          $ref: '#/components/schemas/ResourceID'
+          $ref: "#/components/schemas/ResourceID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AggregatedMetricsResponseBody'
+                $ref: "#/components/schemas/AggregatedMetricsResponseBody"
   /taskmanagers/{taskmanagerid}:
     get:
-      description: Returns details for a task manager. "metrics.memorySegmentsAvailable"
-        and "metrics.memorySegmentsTotal" are deprecated. Please use "metrics.nettyShuffleMemorySegmentsAvailable"
-        and "metrics.nettyShuffleMemorySegmentsTotal" instead.
+      description: Returns details for a task manager.
       operationId: getTaskManagerDetails
       parameters:
       - name: taskmanagerid
@@ -1556,14 +1792,14 @@ paths:
         description: 32-character hexadecimal string that identifies a task manager.
         required: true
         schema:
-          $ref: '#/components/schemas/ResourceID'
+          $ref: "#/components/schemas/ResourceID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TaskManagerDetailsInfo'
+                $ref: "#/components/schemas/TaskManagerDetailsInfo"
   /taskmanagers/{taskmanagerid}/logs:
     get:
       description: Returns the list of log files on a TaskManager.
@@ -1574,14 +1810,14 @@ paths:
         description: 32-character hexadecimal string that identifies a task manager.
         required: true
         schema:
-          $ref: '#/components/schemas/ResourceID'
+          $ref: "#/components/schemas/ResourceID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LogListInfo'
+                $ref: "#/components/schemas/LogListInfo"
   /taskmanagers/{taskmanagerid}/metrics:
     get:
       description: Provides access to task manager metrics.
@@ -1592,7 +1828,7 @@ paths:
         description: 32-character hexadecimal string that identifies a task manager.
         required: true
         schema:
-          $ref: '#/components/schemas/ResourceID'
+          $ref: "#/components/schemas/ResourceID"
       - name: get
         in: query
         description: Comma-separated list of string values to select specific metrics.
@@ -1606,7 +1842,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MetricCollectionResponseBody'
+                $ref: "#/components/schemas/MetricCollectionResponseBody"
   /taskmanagers/{taskmanagerid}/thread-dump:
     get:
       description: Returns the thread dump of the requested TaskManager.
@@ -1617,14 +1853,14 @@ paths:
         description: 32-character hexadecimal string that identifies a task manager.
         required: true
         schema:
-          $ref: '#/components/schemas/ResourceID'
+          $ref: "#/components/schemas/ResourceID"
       responses:
         "200":
           description: The request was successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ThreadDumpInfo'
+                $ref: "#/components/schemas/ThreadDumpInfo"
 components:
   schemas:
     AggregatedMetricsResponseBody:
@@ -1653,28 +1889,108 @@ components:
       - MAX
       - SUM
       - AVG
-    ApplicationStatus:
-      type: string
-      enum:
-      - SUCCEEDED
-      - FAILED
-      - CANCELED
-      - UNKNOWN
+      - SKEW
+    ApplicationDetails:
+      type: object
+      properties:
+        duration:
+          type: integer
+          format: int64
+        end-time:
+          type: integer
+          format: int64
+        id:
+          $ref: "#/components/schemas/ApplicationID"
+        jobs:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int32
+        name:
+          type: string
+        start-time:
+          type: integer
+          format: int64
+        status:
+          type: string
+    ApplicationDetailsInfo:
+      type: object
+      properties:
+        duration:
+          type: integer
+          format: int64
+        end-time:
+          type: integer
+          format: int64
+        id:
+          $ref: "#/components/schemas/ApplicationID"
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/JobDetails"
+        name:
+          type: string
+        start-time:
+          type: integer
+          format: int64
+        status:
+          type: string
+        timestamps:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+    ApplicationExceptionHistory:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApplicationExceptionInfo"
+    ApplicationExceptionInfo:
+      type: object
+      properties:
+        exceptionName:
+          type: string
+        jobId:
+          $ref: "#/components/schemas/JobID"
+        stacktrace:
+          type: string
+        timestamp:
+          type: integer
+          format: int64
+    ApplicationExceptionsInfoWithHistory:
+      type: object
+      properties:
+        exceptionHistory:
+          $ref: "#/components/schemas/ApplicationExceptionHistory"
+    ApplicationID:
+      type: object
+      properties:
+        bytes:
+          type: string
+          format: byte
+        lowerPart:
+          type: integer
+          format: int64
+        upperPart:
+          type: integer
+          format: int64
     AsynchronousOperationInfo:
       type: object
       properties:
         failure-cause:
-          $ref: '#/components/schemas/SerializedThrowable'
+          $ref: "#/components/schemas/SerializedThrowable"
     AsynchronousOperationResult:
       type: object
       properties:
         operation:
           oneOf:
-          - $ref: '#/components/schemas/AsynchronousOperationInfo'
-          - $ref: '#/components/schemas/CheckpointInfo'
-          - $ref: '#/components/schemas/SavepointInfo'
+          - $ref: "#/components/schemas/AsynchronousOperationInfo"
+          - $ref: "#/components/schemas/CheckpointInfo"
+          - $ref: "#/components/schemas/SavepointInfo"
         status:
-          $ref: '#/components/schemas/QueueStatus'
+          $ref: "#/components/schemas/QueueStatus"
     CheckpointAlignment:
       type: object
       properties:
@@ -1694,13 +2010,13 @@ components:
       type: object
       properties:
         buffered:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         duration:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         persisted:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         processed:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
     CheckpointConfigInfo:
       type: object
       properties:
@@ -1717,7 +2033,7 @@ components:
         checkpoints_after_tasks_finish:
           type: boolean
         externalization:
-          $ref: '#/components/schemas/ExternalizedCheckpointInfo'
+          $ref: "#/components/schemas/ExternalizedCheckpointInfo"
         interval:
           type: integer
           format: int64
@@ -1728,7 +2044,7 @@ components:
           type: integer
           format: int64
         mode:
-          $ref: '#/components/schemas/ProcessingMode'
+          $ref: "#/components/schemas/ProcessingMode"
         state_backend:
           type: string
         state_changelog_enabled:
@@ -1754,9 +2070,9 @@ components:
       type: object
       properties:
         async:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         sync:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
     CheckpointInfo:
       type: object
       properties:
@@ -1764,7 +2080,7 @@ components:
           type: integer
           format: int64
         failureCause:
-          $ref: '#/components/schemas/SerializedThrowable'
+          $ref: "#/components/schemas/SerializedThrowable"
     CheckpointStatistics:
       required:
       - className
@@ -1774,7 +2090,7 @@ components:
           type: integer
           format: int64
         checkpoint_type:
-          $ref: '#/components/schemas/RestAPICheckpointType'
+          $ref: "#/components/schemas/RestAPICheckpointType"
         checkpointed_size:
           type: integer
           format: int64
@@ -1809,31 +2125,35 @@ components:
           type: integer
           format: int64
         status:
-          $ref: '#/components/schemas/CheckpointStatsStatus'
+          $ref: "#/components/schemas/CheckpointStatsStatus"
         tasks:
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/TaskCheckpointStatistics'
+            $ref: "#/components/schemas/TaskCheckpointStatistics"
         trigger_timestamp:
           type: integer
           format: int64
       discriminator:
         propertyName: className
+        mapping:
+          completed: "#/components/schemas/CompletedCheckpointStatistics"
+          failed: "#/components/schemas/FailedCheckpointStatistics"
+          in_progress: "#/components/schemas/PendingCheckpointStatistics"
     CheckpointStatisticsSummary:
       type: object
       properties:
         alignment_buffered:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         checkpointed_size:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         end_to_end_duration:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         persisted_data:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         processed_data:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         state_size:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
     CheckpointStatsStatus:
       type: string
       enum:
@@ -1844,9 +2164,9 @@ components:
       type: object
       properties:
         checkpointType:
-          $ref: '#/components/schemas/CheckpointType'
+          $ref: "#/components/schemas/CheckpointType"
         triggerId:
-          $ref: '#/components/schemas/TriggerId'
+          $ref: "#/components/schemas/TriggerId"
     CheckpointType:
       type: string
       enum:
@@ -1857,15 +2177,15 @@ components:
       type: object
       properties:
         counts:
-          $ref: '#/components/schemas/Counts'
+          $ref: "#/components/schemas/Counts"
         history:
           type: array
           items:
-            $ref: '#/components/schemas/CheckpointStatistics'
+            $ref: "#/components/schemas/CheckpointStatistics"
         latest:
-          $ref: '#/components/schemas/LatestCheckpoints'
+          $ref: "#/components/schemas/LatestCheckpoints"
         summary:
-          $ref: '#/components/schemas/CheckpointStatisticsSummary'
+          $ref: "#/components/schemas/CheckpointStatisticsSummary"
     ClusterDataSetEntry:
       type: object
       properties:
@@ -1879,7 +2199,7 @@ components:
         dataSets:
           type: array
           items:
-            $ref: '#/components/schemas/ClusterDataSetEntry'
+            $ref: "#/components/schemas/ClusterDataSetEntry"
     ClusterOverviewWithVersion:
       type: object
       properties:
@@ -1917,7 +2237,7 @@ components:
     CompletedCheckpointStatistics:
       type: object
       allOf:
-      - $ref: '#/components/schemas/CheckpointStatistics'
+      - $ref: "#/components/schemas/CheckpointStatistics"
       - type: object
         properties:
           external_path:
@@ -1927,7 +2247,7 @@ components:
     CompletedSubtaskCheckpointStatistics:
       type: object
       allOf:
-      - $ref: '#/components/schemas/SubtaskCheckpointStatistics'
+      - $ref: "#/components/schemas/SubtaskCheckpointStatistics"
       - type: object
         properties:
           ack_timestamp:
@@ -1943,9 +2263,9 @@ components:
             type: integer
             format: int64
           checkpoint:
-            $ref: '#/components/schemas/CheckpointDuration'
+            $ref: "#/components/schemas/CheckpointDuration"
           alignment:
-            $ref: '#/components/schemas/CheckpointAlignment'
+            $ref: "#/components/schemas/CheckpointAlignment"
           start_delay:
             type: integer
             format: int64
@@ -1956,7 +2276,7 @@ components:
     ConfigurationInfo:
       type: array
       items:
-        $ref: '#/components/schemas/ConfigurationInfoEntry'
+        $ref: "#/components/schemas/ConfigurationInfoEntry"
     ConfigurationInfoEntry:
       type: object
       properties:
@@ -1986,7 +2306,7 @@ components:
       type: object
       properties:
         features:
-          $ref: '#/components/schemas/Features'
+          $ref: "#/components/schemas/Features"
         flink-revision:
           type: string
         flink-version:
@@ -1999,13 +2319,6 @@ components:
         timezone-offset:
           type: integer
           format: int32
-    DistributedCacheFile:
-      type: object
-      properties:
-        entryName:
-          type: string
-        fileName:
-          type: string
     EnvironmentInfo:
       type: object
       properties:
@@ -2014,18 +2327,18 @@ components:
           items:
             type: string
         jvm:
-          $ref: '#/components/schemas/JVMInfo'
+          $ref: "#/components/schemas/JVMInfo"
     ExceptionInfo:
       type: object
       properties:
+        endpoint:
+          type: string
         exceptionName:
           type: string
         failureLabels:
           type: object
           additionalProperties:
             type: string
-        location:
-          type: string
         stacktrace:
           type: string
         taskManagerId:
@@ -2038,8 +2351,6 @@ components:
     ExecutionConfigInfo:
       type: object
       properties:
-        execution-mode:
-          type: string
         job-parallelism:
           type: integer
           format: int32
@@ -2051,20 +2362,6 @@ components:
           type: object
           additionalProperties:
             type: string
-    ExecutionExceptionInfo:
-      type: object
-      properties:
-        exception:
-          type: string
-        location:
-          type: string
-        task:
-          type: string
-        taskManagerId:
-          type: string
-        timestamp:
-          type: integer
-          format: int64
     ExecutionState:
       type: string
       enum:
@@ -2088,7 +2385,7 @@ components:
     FailedCheckpointStatistics:
       type: object
       allOf:
-      - $ref: '#/components/schemas/CheckpointStatistics'
+      - $ref: "#/components/schemas/CheckpointStatistics"
       - type: object
         properties:
           failure_timestamp:
@@ -2177,6 +2474,22 @@ components:
       enum:
       - IN_PROGRESS
       - COMPLETED
+    Input:
+      type: object
+      properties:
+        caching:
+          type: string
+        exchange:
+          type: string
+        id:
+          type: string
+        local_strategy:
+          type: string
+        num:
+          type: integer
+          format: int64
+        ship_strategy:
+          type: string
     IntermediateDataSetID:
       pattern: "[0-9a-f]{32}"
       type: string
@@ -2204,7 +2517,7 @@ components:
         entry:
           type: array
           items:
-            $ref: '#/components/schemas/JarEntryInfo'
+            $ref: "#/components/schemas/JarEntryInfo"
         id:
           type: string
         name:
@@ -2220,7 +2533,7 @@ components:
         files:
           type: array
           items:
-            $ref: '#/components/schemas/JarFileInfo'
+            $ref: "#/components/schemas/JarFileInfo"
     JarPlanRequestBody:
       type: object
       properties:
@@ -2231,21 +2544,23 @@ components:
           additionalProperties:
             type: string
         jobId:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
         parallelism:
           type: integer
           format: int32
-        programArgs:
-          type: string
         programArgsList:
           type: array
           items:
             type: string
-    JarRunRequestBody:
+    JarRunApplicationRequestBody:
       type: object
       properties:
         allowNonRestoredState:
           type: boolean
+        applicationId:
+          $ref: "#/components/schemas/ApplicationID"
+        claimMode:
+          $ref: "#/components/schemas/RecoveryClaimMode"
         entryClass:
           type: string
         flinkConfiguration:
@@ -2253,32 +2568,61 @@ components:
           additionalProperties:
             type: string
         jobId:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
         parallelism:
           type: integer
           format: int32
-        programArgs:
+        programArgsList:
+          type: array
+          items:
+            type: string
+        savepointPath:
           type: string
+    JarRunApplicationResponseBody:
+      type: object
+      properties:
+        applicationid:
+          $ref: "#/components/schemas/ApplicationID"
+    JarRunRequestBody:
+      type: object
+      properties:
+        allowNonRestoredState:
+          type: boolean
+        claimMode:
+          $ref: "#/components/schemas/RecoveryClaimMode"
+        entryClass:
+          type: string
+        flinkConfiguration:
+          type: object
+          additionalProperties:
+            type: string
+        jobId:
+          $ref: "#/components/schemas/JobID"
+        parallelism:
+          type: integer
+          format: int32
         programArgsList:
           type: array
           items:
             type: string
         restoreMode:
-          $ref: '#/components/schemas/RestoreMode'
+          $ref: "#/components/schemas/RecoveryClaimMode"
         savepointPath:
           type: string
     JarRunResponseBody:
       type: object
       properties:
+        applicationId:
+          $ref: "#/components/schemas/ApplicationID"
         jobid:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
     JarUploadResponseBody:
       type: object
       properties:
         filename:
           type: string
         status:
-          $ref: '#/components/schemas/UploadStatus'
+          $ref: "#/components/schemas/UploadStatus"
     JobAccumulator:
       type: object
     JobAccumulatorsInfo:
@@ -2287,15 +2631,15 @@ components:
         job-accumulators:
           type: array
           items:
-            $ref: '#/components/schemas/JobAccumulator'
+            $ref: "#/components/schemas/JobAccumulator"
         serialized-user-task-accumulators:
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/SerializedValueOptionalFailureObject'
+            $ref: "#/components/schemas/SerializedValueOptionalFailureObject"
         user-task-accumulators:
           type: array
           items:
-            $ref: '#/components/schemas/UserTaskAccumulator'
+            $ref: "#/components/schemas/UserTaskAccumulator"
     JobClientHeartbeatRequestBody:
       type: object
       properties:
@@ -2306,9 +2650,9 @@ components:
       type: object
       properties:
         executionConfigInfo:
-          $ref: '#/components/schemas/ExecutionConfigInfo'
+          $ref: "#/components/schemas/ExecutionConfigInfo"
         jobId:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
         jobName:
           type: string
     JobDetails:
@@ -2321,17 +2665,24 @@ components:
           type: integer
           format: int64
         jid:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
+        jobType:
+          $ref: "#/components/schemas/JobType"
         last-modification:
           type: integer
           format: int64
         name:
           type: string
+        pending-operators:
+          type: integer
+          format: int32
+        schedulerType:
+          $ref: "#/components/schemas/SchedulerType"
         start-time:
           type: integer
           format: int64
         state:
-          $ref: '#/components/schemas/JobStatus'
+          $ref: "#/components/schemas/JobStatus"
         tasks:
           type: object
           additionalProperties:
@@ -2340,6 +2691,8 @@ components:
     JobDetailsInfo:
       type: object
       properties:
+        application-id:
+          $ref: "#/components/schemas/ApplicationID"
         duration:
           type: integer
           format: int64
@@ -2349,7 +2702,9 @@ components:
         isStoppable:
           type: boolean
         jid:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
+        job-type:
+          $ref: "#/components/schemas/JobType"
         maxParallelism:
           type: integer
           format: int64
@@ -2358,18 +2713,25 @@ components:
         now:
           type: integer
           format: int64
+        pending-operators:
+          type: integer
+          format: int32
         plan:
-          $ref: '#/components/schemas/RawJson'
+          $ref: "#/components/schemas/Plan"
+        schedulerType:
+          $ref: "#/components/schemas/SchedulerType"
         start-time:
           type: integer
           format: int64
         state:
-          $ref: '#/components/schemas/JobStatus'
+          $ref: "#/components/schemas/JobStatus"
         status-counts:
           type: object
           additionalProperties:
             type: integer
             format: int32
+        stream-graph:
+          $ref: "#/components/schemas/RawJson"
         timestamps:
           type: object
           additionalProperties:
@@ -2378,7 +2740,7 @@ components:
         vertices:
           type: array
           items:
-            $ref: '#/components/schemas/JobDetailsVertexInfo'
+            $ref: "#/components/schemas/JobDetailsVertexInfo"
     JobDetailsVertexInfo:
       type: object
       properties:
@@ -2389,22 +2751,24 @@ components:
           type: integer
           format: int64
         id:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
         maxParallelism:
           type: integer
           format: int32
         metrics:
-          $ref: '#/components/schemas/IOMetricsInfo'
+          $ref: "#/components/schemas/IOMetricsInfo"
         name:
           type: string
         parallelism:
           type: integer
           format: int32
+        slotSharingGroupId:
+          $ref: "#/components/schemas/SlotSharingGroupId"
         start-time:
           type: integer
           format: int64
         status:
-          $ref: '#/components/schemas/ExecutionState'
+          $ref: "#/components/schemas/ExecutionState"
         tasks:
           type: object
           additionalProperties:
@@ -2416,34 +2780,23 @@ components:
         entries:
           type: array
           items:
-            $ref: '#/components/schemas/RootExceptionInfo'
+            $ref: "#/components/schemas/RootExceptionInfo"
         truncated:
           type: boolean
     JobExceptionsInfoWithHistory:
       type: object
       properties:
-        all-exceptions:
-          type: array
-          items:
-            $ref: '#/components/schemas/ExecutionExceptionInfo'
         exceptionHistory:
-          $ref: '#/components/schemas/JobExceptionHistory'
-        root-exception:
-          type: string
-        timestamp:
-          type: integer
-          format: int64
-        truncated:
-          type: boolean
+          $ref: "#/components/schemas/JobExceptionHistory"
     JobExecutionResultResponseBody:
       required:
       - status
       type: object
       properties:
         job-execution-result:
-          $ref: '#/components/schemas/JobResult'
+          $ref: "#/components/schemas/JobResult"
         status:
-          $ref: '#/components/schemas/QueueStatus'
+          $ref: "#/components/schemas/QueueStatus"
     JobID:
       pattern: "[0-9a-f]{32}"
       type: string
@@ -2451,41 +2804,138 @@ components:
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
         status:
-          $ref: '#/components/schemas/JobStatus'
+          $ref: "#/components/schemas/JobStatus"
     JobIdsWithStatusOverview:
       type: object
       properties:
         jobs:
           type: array
           items:
-            $ref: '#/components/schemas/JobIdWithStatus'
+            $ref: "#/components/schemas/JobIdWithStatus"
     JobPlanInfo:
       type: object
       properties:
         plan:
-          $ref: '#/components/schemas/RawJson'
+          $ref: "#/components/schemas/Plan"
+    JobRescaleConfigInfo:
+      type: object
+      properties:
+        executingCooldownTimeoutInMillis:
+          type: integer
+          format: int64
+        executingResourceStabilizationTimeoutInMillis:
+          type: integer
+          format: int64
+        maximumDelayForTriggeringRescaleInMillis:
+          type: integer
+          format: int64
+        rescaleHistoryMax:
+          type: integer
+          format: int32
+        rescaleOnFailedCheckpointCount:
+          type: integer
+          format: int32
+        schedulerExecutionMode:
+          $ref: "#/components/schemas/SchedulerExecutionMode"
+        slotIdleTimeoutInMillis:
+          type: integer
+          format: int64
+        submissionResourceStabilizationTimeoutInMillis:
+          type: integer
+          format: int64
+        submissionResourceWaitTimeoutInMillis:
+          type: integer
+          format: int64
+    JobRescaleDetails:
+      type: object
+      properties:
+        endTimestampInMillis:
+          type: integer
+          format: int64
+        rescaleAttemptId:
+          type: integer
+          format: int64
+        rescaleUuid:
+          type: string
+        resourceRequirementsUuid:
+          type: string
+        schedulerStates:
+          type: array
+          items:
+            $ref: "#/components/schemas/SchedulerStateSpan"
+        slots:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/SlotSharingGroupRescaleInfo"
+        startTimestampInMillis:
+          type: integer
+          format: int64
+        terminalState:
+          $ref: "#/components/schemas/TerminalState"
+        terminatedReason:
+          $ref: "#/components/schemas/TerminatedReason"
+        triggerCause:
+          $ref: "#/components/schemas/TriggerCause"
+        vertices:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/VertexParallelismRescaleInfo"
+    JobRescalesHistory:
+      type: array
+      items:
+        $ref: "#/components/schemas/JobRescaleDetails"
+    JobRescalesOverview:
+      type: object
+      properties:
+        latest:
+          $ref: "#/components/schemas/LatestRescales"
+        rescalesCounts:
+          $ref: "#/components/schemas/RescalesCounts"
+    JobRescalesSummary:
+      type: object
+      properties:
+        completedRescalesDurationStatsInMillis:
+          $ref: "#/components/schemas/StatsSummaryDto"
+        failedRescalesDurationStatsInMillis:
+          $ref: "#/components/schemas/StatsSummaryDto"
+        ignoredRescalesDurationStatsInMillis:
+          $ref: "#/components/schemas/StatsSummaryDto"
+        rescalesCounts:
+          $ref: "#/components/schemas/RescalesCounts"
+        rescalesDurationStatsInMillis:
+          $ref: "#/components/schemas/StatsSummaryDto"
     JobResourceRequirementsBody:
       type: object
       additionalProperties:
-        $ref: '#/components/schemas/JobVertexResourceRequirements'
+        $ref: "#/components/schemas/JobVertexResourceRequirements"
     JobResult:
       type: object
       properties:
         accumulatorResults:
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/SerializedValueOptionalFailureObject'
-        applicationStatus:
-          $ref: '#/components/schemas/ApplicationStatus'
+            $ref: "#/components/schemas/SerializedValueOptionalFailureObject"
+        applicationId:
+          $ref: "#/components/schemas/ApplicationID"
+        endTime:
+          type: integer
+          format: int64
         jobId:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
+        jobName:
+          type: string
+        jobStatus:
+          $ref: "#/components/schemas/JobStatus"
         netRuntime:
           type: integer
           format: int64
         serializedThrowable:
-          $ref: '#/components/schemas/SerializedThrowable'
+          $ref: "#/components/schemas/SerializedThrowable"
+        startTime:
+          type: integer
+          format: int64
         success:
           type: boolean
     JobStatus:
@@ -2506,25 +2956,12 @@ components:
       type: object
       properties:
         status:
-          $ref: '#/components/schemas/JobStatus'
-    JobSubmitRequestBody:
-      type: object
-      properties:
-        jobArtifactFileNames:
-          type: array
-          items:
-            $ref: '#/components/schemas/DistributedCacheFile'
-        jobGraphFileName:
-          type: string
-        jobJarFileNames:
-          type: array
-          items:
-            type: string
-    JobSubmitResponseBody:
-      type: object
-      properties:
-        jobUrl:
-          type: string
+          $ref: "#/components/schemas/JobStatus"
+    JobType:
+      type: string
+      enum:
+      - BATCH
+      - STREAMING
     JobVertexAccumulatorsInfo:
       type: object
       properties:
@@ -2533,28 +2970,28 @@ components:
         user-accumulators:
           type: array
           items:
-            $ref: '#/components/schemas/UserAccumulator'
+            $ref: "#/components/schemas/UserAccumulator"
     JobVertexBackPressureInfo:
       type: object
       properties:
         backpressureLevel:
-          $ref: '#/components/schemas/VertexBackPressureLevel'
+          $ref: "#/components/schemas/VertexBackPressureLevel"
         end-timestamp:
           type: integer
           format: int64
         status:
-          $ref: '#/components/schemas/VertexBackPressureStatus'
+          $ref: "#/components/schemas/VertexBackPressureStatus"
         subtasks:
           type: array
           items:
-            $ref: '#/components/schemas/SubtaskBackPressureInfo'
+            $ref: "#/components/schemas/SubtaskBackPressureInfo"
     JobVertexDetailsInfo:
       type: object
       properties:
         aggregated:
-          $ref: '#/components/schemas/AggregatedTaskDetailsInfo'
+          $ref: "#/components/schemas/AggregatedTaskDetailsInfo"
         id:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
         maxParallelism:
           type: integer
           format: int32
@@ -2569,7 +3006,7 @@ components:
         subtasks:
           type: array
           items:
-            $ref: '#/components/schemas/SubtaskExecutionAttemptDetailsInfo'
+            $ref: "#/components/schemas/SubtaskExecutionAttemptDetailsInfo"
     JobVertexID:
       pattern: "[0-9a-f]{32}"
       type: string
@@ -2577,27 +3014,27 @@ components:
       type: object
       properties:
         parallelism:
-          $ref: '#/components/schemas/Parallelism'
+          $ref: "#/components/schemas/Parallelism"
     JobVertexTaskManagerInfo:
       type: object
       properties:
         aggregated:
-          $ref: '#/components/schemas/AggregatedTaskDetailsInfo'
+          $ref: "#/components/schemas/AggregatedTaskDetailsInfo"
         duration:
           type: integer
           format: int64
         end-time:
           type: integer
           format: int64
-        host:
+        endpoint:
           type: string
         metrics:
-          $ref: '#/components/schemas/IOMetricsInfo'
+          $ref: "#/components/schemas/IOMetricsInfo"
         start-time:
           type: integer
           format: int64
         status:
-          $ref: '#/components/schemas/ExecutionState'
+          $ref: "#/components/schemas/ExecutionState"
         status-counts:
           type: object
           additionalProperties:
@@ -2609,7 +3046,7 @@ components:
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
         name:
           type: string
         now:
@@ -2618,18 +3055,27 @@ components:
         taskmanagers:
           type: array
           items:
-            $ref: '#/components/schemas/JobVertexTaskManagerInfo'
+            $ref: "#/components/schemas/JobVertexTaskManagerInfo"
     LatestCheckpoints:
       type: object
       properties:
         completed:
-          $ref: '#/components/schemas/CompletedCheckpointStatistics'
+          $ref: "#/components/schemas/CompletedCheckpointStatistics"
         failed:
-          $ref: '#/components/schemas/FailedCheckpointStatistics'
+          $ref: "#/components/schemas/FailedCheckpointStatistics"
         restored:
-          $ref: '#/components/schemas/RestoredCheckpointStatistics'
+          $ref: "#/components/schemas/RestoredCheckpointStatistics"
         savepoint:
-          $ref: '#/components/schemas/CompletedCheckpointStatistics'
+          $ref: "#/components/schemas/CompletedCheckpointStatistics"
+    LatestRescales:
+      type: object
+      properties:
+        completed:
+          $ref: "#/components/schemas/JobRescaleDetails"
+        failed:
+          $ref: "#/components/schemas/JobRescaleDetails"
+        ignored:
+          $ref: "#/components/schemas/JobRescaleDetails"
     LogInfo:
       type: object
       properties:
@@ -2647,7 +3093,7 @@ components:
         logs:
           type: array
           items:
-            $ref: '#/components/schemas/LogInfo'
+            $ref: "#/components/schemas/LogInfo"
     LogUrlResponse:
       type: object
       properties:
@@ -2668,21 +3114,28 @@ components:
         metrics:
           type: array
           items:
-            $ref: '#/components/schemas/Metric'
+            $ref: "#/components/schemas/Metric"
+    MultipleApplicationsDetails:
+      type: object
+      properties:
+        applications:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApplicationDetails"
     MultipleJobsDetails:
       type: object
       properties:
         jobs:
           type: array
           items:
-            $ref: '#/components/schemas/JobDetails'
+            $ref: "#/components/schemas/JobDetails"
     Node:
       type: object
       properties:
         children:
           type: array
           items:
-            $ref: '#/components/schemas/Node'
+            $ref: "#/components/schemas/Node"
         name:
           type: string
         value:
@@ -2700,11 +3153,44 @@ components:
     PendingCheckpointStatistics:
       type: object
       allOf:
-      - $ref: '#/components/schemas/CheckpointStatistics'
+      - $ref: "#/components/schemas/CheckpointStatistics"
     PendingSubtaskCheckpointStatistics:
       type: object
       allOf:
-      - $ref: '#/components/schemas/SubtaskCheckpointStatistics'
+      - $ref: "#/components/schemas/SubtaskCheckpointStatistics"
+    Plan:
+      type: object
+      properties:
+        jid:
+          type: string
+        name:
+          type: string
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlanNode"
+        type:
+          type: string
+    PlanNode:
+      type: object
+      properties:
+        description:
+          type: string
+        id:
+          type: string
+        inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Input"
+        operator:
+          type: string
+        operator_strategy:
+          type: string
+        optimizer_properties:
+          $ref: "#/components/schemas/RawJson"
+        parallelism:
+          type: integer
+          format: int64
     ProcessingMode:
       type: string
       enum:
@@ -2716,9 +3202,42 @@ components:
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/Id'
+          $ref: "#/components/schemas/Id"
     RawJson:
       type: object
+    RecoveryClaimMode:
+      type: string
+      enum:
+      - CLAIM
+      - NO_CLAIM
+      - LEGACY
+    RescaleUUID:
+      type: object
+      properties:
+        bytes:
+          type: string
+          format: byte
+        lowerPart:
+          type: integer
+          format: int64
+        upperPart:
+          type: integer
+          format: int64
+    RescalesCounts:
+      type: object
+      properties:
+        completed:
+          type: integer
+          format: int64
+        failed:
+          type: integer
+          format: int64
+        ignored:
+          type: integer
+          format: int64
+        inProgress:
+          type: integer
+          format: int64
     ResourceID:
       pattern: "[0-9a-f]{32}"
       type: string
@@ -2752,12 +3271,6 @@ components:
       - UNALIGNED_CHECKPOINT
       - SAVEPOINT
       - SYNC_SAVEPOINT
-    RestoreMode:
-      type: string
-      enum:
-      - CLAIM
-      - NO_CLAIM
-      - LEGACY
     RestoredCheckpointStatistics:
       type: object
       properties:
@@ -2777,15 +3290,15 @@ components:
         concurrentExceptions:
           type: array
           items:
-            $ref: '#/components/schemas/ExceptionInfo'
+            $ref: "#/components/schemas/ExceptionInfo"
+        endpoint:
+          type: string
         exceptionName:
           type: string
         failureLabels:
           type: object
           additionalProperties:
             type: string
-        location:
-          type: string
         stacktrace:
           type: string
         taskManagerId:
@@ -2809,7 +3322,7 @@ components:
       type: object
       properties:
         failure-cause:
-          $ref: '#/components/schemas/SerializedThrowable'
+          $ref: "#/components/schemas/SerializedThrowable"
         location:
           type: string
     SavepointTriggerRequestBody:
@@ -2818,11 +3331,37 @@ components:
         cancel-job:
           type: boolean
         formatType:
-          $ref: '#/components/schemas/SavepointFormatType'
+          $ref: "#/components/schemas/SavepointFormatType"
         target-directory:
           type: string
         triggerId:
-          $ref: '#/components/schemas/TriggerId'
+          $ref: "#/components/schemas/TriggerId"
+    SchedulerExecutionMode:
+      type: string
+      enum:
+      - REACTIVE
+    SchedulerStateSpan:
+      type: object
+      properties:
+        durationInMillis:
+          type: integer
+          format: int64
+        enterTimestampInMillis:
+          type: integer
+          format: int64
+        leaveTimestampInMillis:
+          type: integer
+          format: int64
+        state:
+          type: string
+        stringifiedException:
+          type: string
+    SchedulerType:
+      type: string
+      enum:
+      - Default
+      - Adaptive
+      - AdaptiveBatch
     SerializedThrowable:
       type: object
       properties:
@@ -2833,17 +3372,53 @@ components:
       type: object
       properties:
         byteArray:
-          type: array
-          items:
-            type: string
-            format: byte
+          type: string
+          format: byte
     SlotInfo:
       type: object
       properties:
+        assignedTasks:
+          type: integer
+          format: int32
         jobId:
-          $ref: '#/components/schemas/JobID'
+          $ref: "#/components/schemas/JobID"
         resource:
-          $ref: '#/components/schemas/ResourceProfileInfo'
+          $ref: "#/components/schemas/ResourceProfileInfo"
+    SlotSharingGroupId:
+      type: object
+      properties:
+        bytes:
+          type: string
+          format: byte
+        lowerPart:
+          type: integer
+          format: int64
+        upperPart:
+          type: integer
+          format: int64
+    SlotSharingGroupRescaleInfo:
+      type: object
+      properties:
+        acquiredResourceProfile:
+          $ref: "#/components/schemas/ResourceProfileInfo"
+        desiredSlots:
+          type: integer
+          format: int32
+        minimalRequiredSlots:
+          type: integer
+          format: int32
+        postRescaleSlots:
+          type: integer
+          format: int32
+        preRescaleSlots:
+          type: integer
+          format: int32
+        requestResourceProfile:
+          $ref: "#/components/schemas/ResourceProfileInfo"
+        slotSharingGroupId:
+          $ref: "#/components/schemas/SlotSharingGroupId"
+        slotSharingGroupName:
+          type: string
     StatsSummaryDto:
       type: object
       properties:
@@ -2877,18 +3452,18 @@ components:
         drain:
           type: boolean
         formatType:
-          $ref: '#/components/schemas/SavepointFormatType'
+          $ref: "#/components/schemas/SavepointFormatType"
         targetDirectory:
           type: string
         triggerId:
-          $ref: '#/components/schemas/TriggerId'
+          $ref: "#/components/schemas/TriggerId"
     SubtaskAccumulatorsInfo:
       type: object
       properties:
         attempt:
           type: integer
           format: int32
-        host:
+        endpoint:
           type: string
         subtask:
           type: integer
@@ -2896,7 +3471,7 @@ components:
         user-accumulators:
           type: array
           items:
-            $ref: '#/components/schemas/UserAccumulator'
+            $ref: "#/components/schemas/UserAccumulator"
     SubtaskBackPressureInfo:
       type: object
       properties:
@@ -2904,7 +3479,7 @@ components:
           type: integer
           format: int32
         backpressureLevel:
-          $ref: '#/components/schemas/VertexBackPressureLevel'
+          $ref: "#/components/schemas/VertexBackPressureLevel"
         busyRatio:
           type: number
           format: double
@@ -2914,7 +3489,7 @@ components:
         other-concurrent-attempts:
           type: array
           items:
-            $ref: '#/components/schemas/SubtaskBackPressureInfo'
+            $ref: "#/components/schemas/SubtaskBackPressureInfo"
         ratio:
           type: number
           format: double
@@ -2935,6 +3510,9 @@ components:
           type: string
       discriminator:
         propertyName: className
+        mapping:
+          completed: "#/components/schemas/CompletedSubtaskCheckpointStatistics"
+          pending: "#/components/schemas/PendingSubtaskCheckpointStatistics"
     SubtaskExecutionAttemptAccumulatorsInfo:
       type: object
       properties:
@@ -2949,7 +3527,7 @@ components:
         user-accumulators:
           type: array
           items:
-            $ref: '#/components/schemas/UserAccumulator'
+            $ref: "#/components/schemas/UserAccumulator"
     SubtaskExecutionAttemptDetailsInfo:
       type: object
       properties:
@@ -2962,19 +3540,19 @@ components:
         end-time:
           type: integer
           format: int64
-        host:
+        endpoint:
           type: string
         metrics:
-          $ref: '#/components/schemas/IOMetricsInfo'
+          $ref: "#/components/schemas/IOMetricsInfo"
         other-concurrent-attempts:
           type: array
           items:
-            $ref: '#/components/schemas/SubtaskExecutionAttemptDetailsInfo'
+            $ref: "#/components/schemas/SubtaskExecutionAttemptDetailsInfo"
         start-time:
           type: integer
           format: int64
         status:
-          $ref: '#/components/schemas/ExecutionState'
+          $ref: "#/components/schemas/ExecutionState"
         status-duration:
           type: object
           additionalProperties:
@@ -2991,7 +3569,7 @@ components:
         duration:
           type: integer
           format: int64
-        host:
+        endpoint:
           type: string
         subtask:
           type: integer
@@ -3005,14 +3583,14 @@ components:
       type: object
       properties:
         id:
-          $ref: '#/components/schemas/JobVertexID'
+          $ref: "#/components/schemas/JobVertexID"
         parallelism:
           type: integer
           format: int32
         subtasks:
           type: array
           items:
-            $ref: '#/components/schemas/SubtaskAccumulatorsInfo'
+            $ref: "#/components/schemas/SubtaskAccumulatorsInfo"
     SubtasksTimesInfo:
       type: object
       properties:
@@ -3026,7 +3604,7 @@ components:
         subtasks:
           type: array
           items:
-            $ref: '#/components/schemas/SubtaskTimeInfo'
+            $ref: "#/components/schemas/SubtaskTimeInfo"
     TaskCheckpointStatistics:
       type: object
       properties:
@@ -3061,7 +3639,7 @@ components:
           type: integer
           format: int64
         status:
-          $ref: '#/components/schemas/CheckpointStatsStatus'
+          $ref: "#/components/schemas/CheckpointStatsStatus"
     TaskCheckpointStatisticsWithSubtaskDetails:
       type: object
       properties:
@@ -3096,28 +3674,28 @@ components:
           type: integer
           format: int64
         status:
-          $ref: '#/components/schemas/CheckpointStatsStatus'
+          $ref: "#/components/schemas/CheckpointStatsStatus"
         subtasks:
           type: array
           items:
-            $ref: '#/components/schemas/SubtaskCheckpointStatistics'
+            $ref: "#/components/schemas/SubtaskCheckpointStatistics"
         summary:
-          $ref: '#/components/schemas/TaskCheckpointStatisticsWithSubtaskDetailsSummary'
+          $ref: "#/components/schemas/TaskCheckpointStatisticsWithSubtaskDetailsSummary"
     TaskCheckpointStatisticsWithSubtaskDetailsSummary:
       type: object
       properties:
         alignment:
-          $ref: '#/components/schemas/CheckpointAlignmentSummary'
+          $ref: "#/components/schemas/CheckpointAlignmentSummary"
         checkpoint_duration:
-          $ref: '#/components/schemas/CheckpointDurationSummary'
+          $ref: "#/components/schemas/CheckpointDurationSummary"
         checkpointed_size:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         end_to_end_duration:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         start_delay:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
         state_size:
-          $ref: '#/components/schemas/StatsSummaryDto'
+          $ref: "#/components/schemas/StatsSummaryDto"
     TaskExecutorMemoryConfiguration:
       type: object
       properties:
@@ -3157,28 +3735,31 @@ components:
         allocatedSlots:
           type: array
           items:
-            $ref: '#/components/schemas/SlotInfo'
+            $ref: "#/components/schemas/SlotInfo"
+        assignedTasks:
+          type: integer
+          format: int32
         blocked:
           type: boolean
         dataPort:
           type: integer
           format: int32
         freeResource:
-          $ref: '#/components/schemas/ResourceProfileInfo'
+          $ref: "#/components/schemas/ResourceProfileInfo"
         freeSlots:
           type: integer
           format: int32
         hardware:
-          $ref: '#/components/schemas/HardwareDescription'
+          $ref: "#/components/schemas/HardwareDescription"
         id:
-          $ref: '#/components/schemas/ResourceID'
+          $ref: "#/components/schemas/ResourceID"
         jmxPort:
           type: integer
           format: int32
         memoryConfiguration:
-          $ref: '#/components/schemas/TaskExecutorMemoryConfiguration'
+          $ref: "#/components/schemas/TaskExecutorMemoryConfiguration"
         metrics:
-          $ref: '#/components/schemas/TaskManagerMetricsInfo'
+          $ref: "#/components/schemas/TaskManagerMetricsInfo"
         path:
           type: string
         slotsNumber:
@@ -3188,29 +3769,32 @@ components:
           type: integer
           format: int64
         totalResource:
-          $ref: '#/components/schemas/ResourceProfileInfo'
+          $ref: "#/components/schemas/ResourceProfileInfo"
     TaskManagerInfo:
       type: object
       properties:
+        assignedTasks:
+          type: integer
+          format: int32
         blocked:
           type: boolean
         dataPort:
           type: integer
           format: int32
         freeResource:
-          $ref: '#/components/schemas/ResourceProfileInfo'
+          $ref: "#/components/schemas/ResourceProfileInfo"
         freeSlots:
           type: integer
           format: int32
         hardware:
-          $ref: '#/components/schemas/HardwareDescription'
+          $ref: "#/components/schemas/HardwareDescription"
         id:
-          $ref: '#/components/schemas/ResourceID'
+          $ref: "#/components/schemas/ResourceID"
         jmxPort:
           type: integer
           format: int32
         memoryConfiguration:
-          $ref: '#/components/schemas/TaskExecutorMemoryConfiguration'
+          $ref: "#/components/schemas/TaskExecutorMemoryConfiguration"
         path:
           type: string
         slotsNumber:
@@ -3220,7 +3804,7 @@ components:
           type: integer
           format: int64
         totalResource:
-          $ref: '#/components/schemas/ResourceProfileInfo'
+          $ref: "#/components/schemas/ResourceProfileInfo"
     TaskManagerMetricsInfo:
       type: object
       properties:
@@ -3236,7 +3820,7 @@ components:
         garbageCollectors:
           type: array
           items:
-            $ref: '#/components/schemas/GarbageCollectorInfo'
+            $ref: "#/components/schemas/GarbageCollectorInfo"
         heapCommitted:
           type: integer
           format: int64
@@ -3253,12 +3837,6 @@ components:
           type: integer
           format: int64
         mappedUsed:
-          type: integer
-          format: int64
-        memorySegmentsAvailable:
-          type: integer
-          format: int64
-        memorySegmentsTotal:
           type: integer
           format: int64
         nettyShuffleMemoryAvailable:
@@ -3294,7 +3872,24 @@ components:
         taskmanagers:
           type: array
           items:
-            $ref: '#/components/schemas/TaskManagerInfo'
+            $ref: "#/components/schemas/TaskManagerInfo"
+    TerminalState:
+      type: string
+      enum:
+      - COMPLETED
+      - FAILED
+      - IGNORED
+    TerminatedReason:
+      type: string
+      enum:
+      - SUCCEEDED
+      - EXCEPTION_OCCURRED
+      - RESOURCE_REQUIREMENTS_UPDATED
+      - NO_RESOURCES_OR_PARALLELISMS_CHANGE
+      - JOB_FINISHED
+      - JOB_FAILED
+      - JOB_CANCELED
+      - JOB_FAILOVER_RESTARTING
     TerminationMode:
       type: string
       enum:
@@ -3306,7 +3901,7 @@ components:
         threadInfos:
           type: array
           items:
-            $ref: '#/components/schemas/ThreadInfo'
+            $ref: "#/components/schemas/ThreadInfo"
     ThreadInfo:
       type: object
       properties:
@@ -3320,6 +3915,13 @@ components:
       - FULL
       - ON_CPU
       - OFF_CPU
+    TriggerCause:
+      type: string
+      enum:
+      - INITIAL_SCHEDULE
+      - UPDATE_REQUIREMENT
+      - NEW_RESOURCE_AVAILABLE
+      - RECOVERABLE_FAILOVER
     TriggerId:
       pattern: "[0-9a-f]{32}"
       type: string
@@ -3327,7 +3929,7 @@ components:
       type: object
       properties:
         request-id:
-          $ref: '#/components/schemas/TriggerId'
+          $ref: "#/components/schemas/TriggerId"
     UploadStatus:
       type: string
       enum:
@@ -3365,7 +3967,44 @@ components:
       type: object
       properties:
         data:
-          $ref: '#/components/schemas/Node'
+          $ref: "#/components/schemas/Node"
         endTimestamp:
           type: integer
           format: int64
+    VertexParallelismInformation:
+      type: object
+      properties:
+        maxParallelism:
+          type: integer
+          format: int32
+        minParallelism:
+          type: integer
+          format: int32
+        parallelism:
+          type: integer
+          format: int32
+    VertexParallelismRescaleInfo:
+      type: object
+      properties:
+        desiredParallelism:
+          type: integer
+          format: int32
+        jobVertexId:
+          $ref: "#/components/schemas/JobVertexID"
+        jobVertexName:
+          type: string
+        postRescaleParallelism:
+          type: integer
+          format: int32
+        preRescaleParallelism:
+          type: integer
+          format: int32
+        requiredParallelisms:
+          $ref: "#/components/schemas/VertexParallelismInformation"
+        slotSharingGroupId:
+          $ref: "#/components/schemas/SlotSharingGroupId"
+        slotSharingGroupName:
+          type: string
+        sufficientParallelism:
+          type: integer
+          format: int32

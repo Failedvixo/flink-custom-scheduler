@@ -19,6 +19,7 @@
 package org.apache.flink.runtime.webmonitor.handlers.utils;
 
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.api.common.ApplicationID;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.client.program.PackagedProgram;
 import org.apache.flink.client.program.PackagedProgramUtils;
@@ -35,9 +36,9 @@ import org.apache.flink.runtime.rest.messages.MessageParameters;
 import org.apache.flink.runtime.webmonitor.handlers.EntryClassQueryParameter;
 import org.apache.flink.runtime.webmonitor.handlers.JarIdPathParameter;
 import org.apache.flink.runtime.webmonitor.handlers.JarRequestBody;
+import org.apache.flink.runtime.webmonitor.handlers.JarRunApplicationRequestBody;
 import org.apache.flink.runtime.webmonitor.handlers.ParallelismQueryParameter;
 import org.apache.flink.runtime.webmonitor.handlers.ProgramArgQueryParameter;
-import org.apache.flink.runtime.webmonitor.handlers.ProgramArgsQueryParameter;
 
 import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus;
 
@@ -46,19 +47,21 @@ import org.slf4j.Logger;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletionException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.apache.flink.runtime.rest.handler.util.HandlerRequestUtils.fromRequestBodyOrQueryParameter;
 import static org.apache.flink.runtime.rest.handler.util.HandlerRequestUtils.getQueryParameter;
-import static org.apache.flink.shaded.guava31.com.google.common.base.Strings.emptyToNull;
+import static org.apache.flink.shaded.guava33.com.google.common.base.Strings.emptyToNull;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
@@ -76,18 +79,21 @@ public class JarHandlerUtils {
         private final List<String> programArgs;
         private final int parallelism;
         private final JobID jobId;
+        @Nullable final ApplicationID applicationId;
 
         private JarHandlerContext(
                 Path jarFile,
                 String entryClass,
                 List<String> programArgs,
                 int parallelism,
-                JobID jobId) {
+                JobID jobId,
+                @Nullable ApplicationID applicationId) {
             this.jarFile = jarFile;
             this.entryClass = entryClass;
             this.programArgs = programArgs;
             this.parallelism = parallelism;
             this.jobId = jobId;
+            this.applicationId = applicationId;
         }
 
         public static <R extends JarRequestBody> JarHandlerContext fromRequest(
@@ -128,7 +134,18 @@ public class JarHandlerUtils {
                             null, // Delegate default job ID to actual JobGraph generation
                             log);
 
-            return new JarHandlerContext(jarFile, entryClass, programArgs, parallelism, jobId);
+            final ApplicationID applicationId;
+            if (requestBody instanceof JarRunApplicationRequestBody) {
+                applicationId =
+                        ((JarRunApplicationRequestBody) requestBody)
+                                .getApplicationId()
+                                .orElse(null);
+            } else {
+                applicationId = null;
+            }
+
+            return new JarHandlerContext(
+                    jarFile, entryClass, programArgs, parallelism, jobId, applicationId);
         }
 
         public void applyToConfiguration(
@@ -182,15 +199,20 @@ public class JarHandlerUtils {
             }
 
             try {
-                return PackagedProgram.newBuilder()
-                        .setJarFile(jarFile.toFile())
-                        .setEntryPointClassName(entryClass)
-                        .setConfiguration(configuration)
-                        .setArguments(programArgs.toArray(new String[0]))
-                        .build();
+                return initPackagedProgramBuilder(configuration).build();
             } catch (final ProgramInvocationException e) {
                 throw new CompletionException(e);
             }
+        }
+
+        @VisibleForTesting
+        PackagedProgram.Builder initPackagedProgramBuilder(Configuration configuration) {
+            return PackagedProgram.newBuilder()
+                    .setJarFile(jarFile.toFile())
+                    .setEntryPointClassName(entryClass)
+                    .setConfiguration(configuration)
+                    .setUserClassPaths(getClasspaths(configuration))
+                    .setArguments(programArgs.toArray(new String[0]));
         }
 
         @VisibleForTesting
@@ -212,6 +234,29 @@ public class JarHandlerUtils {
         JobID getJobId() {
             return jobId;
         }
+
+        public Optional<ApplicationID> getApplicationId() {
+            return Optional.ofNullable(applicationId);
+        }
+
+        public Path getJarFile() {
+            return jarFile;
+        }
+    }
+
+    private static List<URL> getClasspaths(Configuration configuration) {
+        try {
+            return ConfigUtils.decodeListFromConfig(
+                    configuration, PipelineOptions.CLASSPATHS, URL::new);
+        } catch (MalformedURLException e) {
+            throw new CompletionException(
+                    new RestHandlerException(
+                            String.format(
+                                    "Failed to extract '%s' as URLs. Provided value: %s",
+                                    PipelineOptions.CLASSPATHS.key(),
+                                    configuration.get(PipelineOptions.CLASSPATHS)),
+                            HttpResponseStatus.BAD_REQUEST));
+        }
     }
 
     /** Parse program arguments in jar run or plan request. */
@@ -219,30 +264,11 @@ public class JarHandlerUtils {
             List<String> getProgramArgs(HandlerRequest<R> request, Logger log)
                     throws RestHandlerException {
         JarRequestBody requestBody = request.getRequestBody();
-        @SuppressWarnings("deprecation")
-        List<String> programArgs =
-                tokenizeArguments(
-                        fromRequestBodyOrQueryParameter(
-                                emptyToNull(requestBody.getProgramArguments()),
-                                () -> getQueryParameter(request, ProgramArgsQueryParameter.class),
-                                null,
-                                log));
-        List<String> programArgsList =
-                fromRequestBodyOrQueryParameter(
-                        requestBody.getProgramArgumentsList(),
-                        () -> request.getQueryParameter(ProgramArgQueryParameter.class),
-                        null,
-                        log);
-        if (!programArgsList.isEmpty()) {
-            if (!programArgs.isEmpty()) {
-                throw new RestHandlerException(
-                        "Confusing request: programArgs and programArgsList are specified, please, use only programArgsList",
-                        HttpResponseStatus.BAD_REQUEST);
-            }
-            return programArgsList;
-        } else {
-            return programArgs;
-        }
+        return fromRequestBodyOrQueryParameter(
+                requestBody.getProgramArgumentsList(),
+                () -> request.getQueryParameter(ProgramArgQueryParameter.class),
+                null,
+                log);
     }
 
     private static final Pattern ARGUMENTS_TOKENIZE_PATTERN =

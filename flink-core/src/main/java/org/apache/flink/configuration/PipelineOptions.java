@@ -18,6 +18,7 @@
 
 package org.apache.flink.configuration;
 
+import org.apache.flink.annotation.Experimental;
 import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.ExecutionConfig.ClosureCleanerLevel;
 import org.apache.flink.configuration.description.Description;
@@ -30,6 +31,7 @@ import java.util.Map;
 
 import static org.apache.flink.configuration.ConfigOptions.key;
 import static org.apache.flink.configuration.description.TextElement.code;
+import static org.apache.flink.configuration.description.TextElement.text;
 
 /** The {@link ConfigOption configuration options} for job execution. */
 @PublicEvolving
@@ -54,6 +56,7 @@ public class PipelineOptions {
                     .withDescription(
                             "A semicolon-separated list of the jars to package with the job jars to be sent to the"
                                     + " cluster. These have to be valid paths.");
+
     /**
      * A list of URLs that are added to the classpath of each user code classloader of the program.
      * Paths must specify a protocol (e.g. file://) and be accessible on all nodes
@@ -84,27 +87,6 @@ public class PipelineOptions {
                                                     + " a job, specifying custom IDs allow an application to evolve over time"
                                                     + " without discarding state.")
                                     .build());
-
-    /**
-     * An option to control whether Flink is automatically registering all types in the user
-     * programs with Kryo.
-     *
-     * @deprecated The config is deprecated because it's only used in DataSet API. All Flink DataSet
-     *     APIs are deprecated since Flink 1.18 and will be removed in a future Flink major version.
-     *     You can still build your application in DataSet, but you should move to either the
-     *     DataStream and/or Table API.
-     * @see <a href="https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=158866741">
-     *     FLIP-131: Consolidate the user-facing Dataflow SDKs/APIs (and deprecate the DataSet
-     *     API</a>
-     */
-    @Deprecated
-    public static final ConfigOption<Boolean> AUTO_TYPE_REGISTRATION =
-            key("pipeline.auto-type-registration")
-                    .booleanType()
-                    .defaultValue(true)
-                    .withDescription(
-                            "Controls whether Flink is automatically registering all types in the user programs"
-                                    + " with Kryo.");
 
     public static final ConfigOption<Duration> AUTO_WATERMARK_INTERVAL =
             key("pipeline.auto-watermark-interval")
@@ -144,6 +126,24 @@ public class PipelineOptions {
                             "If enabled, forces TypeExtractor to use Kryo serializer for POJOS even though we could"
                                     + " analyze as POJO. In some cases this might be preferable. For example, when using interfaces"
                                     + " with subclasses that cannot be analyzed as POJO.");
+
+    public static final ConfigOption<Boolean> FORCE_KRYO_AVRO =
+            key("pipeline.force-kryo-avro")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "Forces Flink to register avro classes in kryo serializer.")
+                                    .linebreak()
+                                    .linebreak()
+                                    .text(
+                                            "Important: Make sure to include the flink-avro module."
+                                                    + " Otherwise, nothing will be registered. For backward compatibility,"
+                                                    + " the default value is empty to conform to the behavior of the older version."
+                                                    + " That is, always register avro with kryo, and if flink-avro is not in the class"
+                                                    + " path, register a dummy serializer. In Flink-2.0, we will set the default value to true.")
+                                    .build());
 
     public static final ConfigOption<Boolean> GENERIC_TYPES =
             key("pipeline.generic-types")
@@ -207,52 +207,49 @@ public class PipelineOptions {
                                     + " data to user-code functions will be reused. Keep in mind that this can lead to bugs when the"
                                     + " user-code function of an operation is not aware of this behaviour.");
 
-    public static final ConfigOption<List<String>> KRYO_DEFAULT_SERIALIZERS =
-            key("pipeline.default-kryo-serializers")
+    public static final ConfigOption<List<String>> SERIALIZATION_CONFIG =
+            key("pipeline.serialization-config")
                     .stringType()
                     .asList()
                     .noDefaultValue()
                     .withDescription(
                             Description.builder()
                                     .text(
-                                            "Semicolon separated list of pairs of class names and Kryo serializers class names to be used"
-                                                    + " as Kryo default serializers")
-                                    .linebreak()
-                                    .linebreak()
+                                            "List of pairs of class names and serializer configs to be used."
+                                                    + " There is a %s field in the serializer config and each type has its own configuration."
+                                                    + " Note: only standard YAML config parser is supported, please use \"config.yaml\" as the config file."
+                                                    + " The fields involved are:",
+                                            code("type"))
+                                    .list(
+                                            text(
+                                                    "%s: the serializer type which could be \"pojo\", \"kryo\" or \"typeinfo\"."
+                                                            + " If the serializer type is \"pojo\" or \"kryo\" without field %s,"
+                                                            + " it means the data type will use POJO or Kryo serializer directly.",
+                                                    code("type"), code("kryo-type")),
+                                            text(
+                                                    "%s: the Kryo serializer type which could be \"default\" or \"registered\"."
+                                                            + " The Kryo serializer will use the serializer for the data type "
+                                                            + " as default serializers when the kryo-type is \"default\", and register"
+                                                            + " the data type and its serializer to Kryo serializer when the kryo-type is registered."
+                                                            + " When the field exists, there must be a field %s to specify the serializer class name.",
+                                                    code("kryo-type"), code("class")),
+                                            text(
+                                                    "%s: the serializer class name for type \"kryo\" or \"typeinfo\"."
+                                                            + " For \"kryo\", it should be a subclass of %s."
+                                                            + " For \"typeinfo\", it should be a subclass of %s.",
+                                                    code("class"),
+                                                    code("com.esotericsoftware.kryo.Serializer"),
+                                                    code(
+                                                            "org.apache.flink.api.common.typeinfo.TypeInfoFactory")))
                                     .text("Example:")
                                     .linebreak()
                                     .add(
                                             TextElement.code(
-                                                    "class:org.example.ExampleClass,serializer:org.example.ExampleSerializer1;"
-                                                            + " class:org.example.ExampleClass2,serializer:org.example.ExampleSerializer2"))
-                                    .build());
-
-    public static final ConfigOption<List<String>> KRYO_REGISTERED_CLASSES =
-            key("pipeline.registered-kryo-types")
-                    .stringType()
-                    .asList()
-                    .noDefaultValue()
-                    .withDescription(
-                            Description.builder()
-                                    .text(
-                                            "Semicolon separated list of types to be registered with the serialization stack. If the type"
-                                                    + " is eventually serialized as a POJO, then the type is registered with the POJO serializer. If the"
-                                                    + " type ends up being serialized with Kryo, then it will be registered at Kryo to make"
-                                                    + " sure that only tags are written.")
-                                    .build());
-
-    public static final ConfigOption<List<String>> POJO_REGISTERED_CLASSES =
-            key("pipeline.registered-pojo-types")
-                    .stringType()
-                    .asList()
-                    .noDefaultValue()
-                    .withDescription(
-                            Description.builder()
-                                    .text(
-                                            "Semicolon separated list of types to be registered with the serialization stack. If the type"
-                                                    + " is eventually serialized as a POJO, then the type is registered with the POJO serializer. If the"
-                                                    + " type ends up being serialized with Kryo, then it will be registered at Kryo to make"
-                                                    + " sure that only tags are written.")
+                                                    "[org.example.ExampleClass1: {type: pojo},"
+                                                            + " org.example.ExampleClass2: {type: kryo},"
+                                                            + " org.example.ExampleClass3: {type: kryo, kryo-type: default, class: org.example.Class3KryoSerializer},"
+                                                            + " org.example.ExampleClass4: {type: kryo, kryo-type: registered, class: org.example.Class4KryoSerializer},"
+                                                            + " org.example.ExampleClass5: {type: typeinfo, class: org.example.Class5TypeInfoFactory}]"))
                                     .build());
 
     public static final ConfigOption<Boolean> OPERATOR_CHAINING =
@@ -332,4 +329,28 @@ public class PipelineOptions {
                                     + "while still using watermark alignment, set this parameter to true. "
                                     + "The default value is false. Note: This parameter may be "
                                     + "removed in future releases.");
+
+    @Experimental
+    public static final ConfigOption<Integer> WATERMARK_ALIGNMENT_BUFFER_SIZE =
+            key("pipeline.watermark-alignment.buffer-size")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "Controls size of the ring buffer used to smooth out watermark alignment "
+                                    + "due to the inherent latency of the alignment process. Allowed watermarks "
+                                    + "are announced at the updateInterval and this means they are often out of date "
+                                    + "after the round trip, which means that watermark alignment might be pausing splits too much using this outdated information. "
+                                    + "To address this problem, when pausing consumption of records, "
+                                    + "max allowed watermark is not checked against the latest value of the watermark in "
+                                    + "any given split/source, but against the oldest value in the ring buffer, that is "
+                                    + "updated at every updateInterval. This is the config option that controls "
+                                    + "the size of the ring buffer. The default buffer size is 3. Buffer size of 1 "
+                                    + "can result in under utilised job's resources when processing backlog of records. "
+                                    + "Size of the buffer de facto delays the application of the watermark alignment "
+                                    + "process by that many updateIntervals. With the default size 3, splits can produce "
+                                    + "arbitrary amount of records for the duration of 3 * updateInterval before watermark "
+                                    + "alignment might pause them. You can set the watermarkBufferSize to 0 to restore "
+                                    + "pre Flink 2.3 behaviour with sampling disabled and always using the latest watermark. "
+                                    + "The default value of 3 has been chosen to cover the round trip delay of watermark alignment "
+                                    + "that is equal to 2 updateIntervals plus one more to cover for network/GC or other hiccups. ");
 }

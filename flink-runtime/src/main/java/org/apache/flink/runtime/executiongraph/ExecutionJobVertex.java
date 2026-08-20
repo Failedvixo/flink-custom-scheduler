@@ -23,7 +23,6 @@ import org.apache.flink.api.common.Archiveable;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.accumulators.Accumulator;
 import org.apache.flink.api.common.accumulators.AccumulatorHelper;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.core.io.InputSplit;
 import org.apache.flink.core.io.InputSplitAssigner;
@@ -46,7 +45,11 @@ import org.apache.flink.runtime.metrics.groups.JobManagerJobMetricGroup;
 import org.apache.flink.runtime.operators.coordination.CoordinatorStore;
 import org.apache.flink.runtime.operators.coordination.OperatorCoordinator;
 import org.apache.flink.runtime.operators.coordination.OperatorCoordinatorHolder;
+import org.apache.flink.runtime.operators.coordination.RecreateOnResetOperatorCoordinator;
 import org.apache.flink.runtime.scheduler.VertexParallelismInformation;
+import org.apache.flink.runtime.scheduler.adaptivebatch.ExecutionPlanSchedulingContext;
+import org.apache.flink.runtime.scheduler.adaptivebatch.NonAdaptiveExecutionPlanSchedulingContext;
+import org.apache.flink.runtime.source.coordinator.SourceCoordinator;
 import org.apache.flink.types.Either;
 import org.apache.flink.util.IOUtils;
 import org.apache.flink.util.OptionalFailure;
@@ -59,6 +62,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -118,7 +122,7 @@ public class ExecutionJobVertex
     private Either<SerializedValue<TaskInformation>, PermanentBlobKey> taskInformationOrBlobKey =
             null;
 
-    @Nullable private Collection<OperatorCoordinatorHolder> operatorCoordinators;
+    private final Collection<OperatorCoordinatorHolder> operatorCoordinators;
 
     @Nullable private InputSplitAssigner splitAssigner;
 
@@ -126,7 +130,9 @@ public class ExecutionJobVertex
     public ExecutionJobVertex(
             InternalExecutionGraphAccessor graph,
             JobVertex jobVertex,
-            VertexParallelismInformation parallelismInfo)
+            VertexParallelismInformation parallelismInfo,
+            CoordinatorStore coordinatorStore,
+            JobManagerJobMetricGroup jobManagerJobMetricGroup)
             throws JobException {
 
         if (graph == null || jobVertex == null) {
@@ -154,62 +160,6 @@ public class ExecutionJobVertex
         // take the sharing group
         this.slotSharingGroup = checkNotNull(jobVertex.getSlotSharingGroup());
         this.coLocationGroup = jobVertex.getCoLocationGroup();
-    }
-
-    protected void initialize(
-            int executionHistorySizeLimit,
-            Time timeout,
-            long createTimestamp,
-            SubtaskAttemptNumberStore initialAttemptCounts,
-            CoordinatorStore coordinatorStore,
-            JobManagerJobMetricGroup jobManagerJobMetricGroup)
-            throws JobException {
-
-        checkState(parallelismInfo.getParallelism() > 0);
-        checkState(!isInitialized());
-
-        this.taskVertices = new ExecutionVertex[parallelismInfo.getParallelism()];
-
-        this.inputs = new ArrayList<>(jobVertex.getInputs().size());
-
-        // create the intermediate results
-        this.producedDataSets =
-                new IntermediateResult[jobVertex.getNumberOfProducedIntermediateDataSets()];
-
-        for (int i = 0; i < jobVertex.getProducedDataSets().size(); i++) {
-            final IntermediateDataSet result = jobVertex.getProducedDataSets().get(i);
-
-            this.producedDataSets[i] =
-                    new IntermediateResult(
-                            result,
-                            this,
-                            this.parallelismInfo.getParallelism(),
-                            result.getResultType());
-        }
-
-        // create all task vertices
-        for (int i = 0; i < this.parallelismInfo.getParallelism(); i++) {
-            ExecutionVertex vertex =
-                    createExecutionVertex(
-                            this,
-                            i,
-                            producedDataSets,
-                            timeout,
-                            createTimestamp,
-                            executionHistorySizeLimit,
-                            initialAttemptCounts.getAttemptCount(i));
-
-            this.taskVertices[i] = vertex;
-        }
-
-        // sanity check for the double referencing between intermediate result partitions and
-        // execution vertices
-        for (IntermediateResult ir : this.producedDataSets) {
-            if (ir.getNumberOfAssignedPartitions() != this.parallelismInfo.getParallelism()) {
-                throw new RuntimeException(
-                        "The intermediate result's partitions were not correctly assigned.");
-            }
-        }
 
         final List<SerializedValue<OperatorCoordinator.Provider>> coordinatorProviders =
                 getJobVertex().getOperatorCoordinators();
@@ -234,6 +184,77 @@ public class ExecutionJobVertex
                         "Cannot instantiate the coordinator for operator " + getName(), e);
             }
             this.operatorCoordinators = Collections.unmodifiableList(coordinators);
+        }
+    }
+
+    @VisibleForTesting
+    protected void initialize(
+            int executionHistorySizeLimit,
+            Duration timeout,
+            long createTimestamp,
+            SubtaskAttemptNumberStore initialAttemptCounts)
+            throws JobException {
+        initialize(
+                executionHistorySizeLimit,
+                timeout,
+                createTimestamp,
+                initialAttemptCounts,
+                NonAdaptiveExecutionPlanSchedulingContext.INSTANCE);
+    }
+
+    protected void initialize(
+            int executionHistorySizeLimit,
+            Duration timeout,
+            long createTimestamp,
+            SubtaskAttemptNumberStore initialAttemptCounts,
+            ExecutionPlanSchedulingContext executionPlanSchedulingContext)
+            throws JobException {
+
+        checkState(parallelismInfo.getParallelism() > 0);
+        checkState(!isInitialized());
+
+        this.taskVertices = new ExecutionVertex[parallelismInfo.getParallelism()];
+
+        this.inputs = new ArrayList<>(jobVertex.getInputs().size());
+
+        // create the intermediate results
+        this.producedDataSets =
+                new IntermediateResult[jobVertex.getNumberOfProducedIntermediateDataSets()];
+
+        for (int i = 0; i < jobVertex.getProducedDataSets().size(); i++) {
+            final IntermediateDataSet result = jobVertex.getProducedDataSets().get(i);
+
+            this.producedDataSets[i] =
+                    new IntermediateResult(
+                            result,
+                            this,
+                            this.parallelismInfo.getParallelism(),
+                            result.getResultType(),
+                            executionPlanSchedulingContext);
+        }
+
+        // create all task vertices
+        for (int i = 0; i < this.parallelismInfo.getParallelism(); i++) {
+            ExecutionVertex vertex =
+                    createExecutionVertex(
+                            this,
+                            i,
+                            producedDataSets,
+                            timeout,
+                            createTimestamp,
+                            executionHistorySizeLimit,
+                            initialAttemptCounts.getAttemptCount(i));
+
+            this.taskVertices[i] = vertex;
+        }
+
+        // sanity check for the double referencing between intermediate result partitions and
+        // execution vertices
+        for (IntermediateResult ir : this.producedDataSets) {
+            if (ir.getNumberOfAssignedPartitions() != this.parallelismInfo.getParallelism()) {
+                throw new RuntimeException(
+                        "The intermediate result's partitions were not correctly assigned.");
+            }
         }
 
         // set up the input splits, if the vertex has any
@@ -269,7 +290,7 @@ public class ExecutionJobVertex
             ExecutionJobVertex jobVertex,
             int subTaskIndex,
             IntermediateResult[] producedDataSets,
-            Time timeout,
+            Duration timeout,
             long createTimestamp,
             int executionHistorySizeLimit,
             int initialAttemptCount) {
@@ -389,6 +410,7 @@ public class ExecutionJobVertex
         return splitAssigner;
     }
 
+    @Override
     public SlotSharingGroup getSlotSharingGroup() {
         return slotSharingGroup;
     }
@@ -406,6 +428,26 @@ public class ExecutionJobVertex
     public Collection<OperatorCoordinatorHolder> getOperatorCoordinators() {
         checkState(isInitialized());
         return operatorCoordinators;
+    }
+
+    public List<SourceCoordinator<?, ?>> getSourceCoordinators() {
+        List<SourceCoordinator<?, ?>> sourceCoordinators = new ArrayList<>();
+        for (OperatorCoordinatorHolder oph : operatorCoordinators) {
+            if (oph.coordinator() instanceof RecreateOnResetOperatorCoordinator) {
+                RecreateOnResetOperatorCoordinator opc =
+                        (RecreateOnResetOperatorCoordinator) oph.coordinator();
+                try {
+                    if (opc.getInternalCoordinator() instanceof SourceCoordinator) {
+                        sourceCoordinators.add(
+                                (SourceCoordinator<?, ?>) opc.getInternalCoordinator());
+                    }
+                } catch (Throwable e) {
+                    throw new RuntimeException(
+                            "Unexpected error occurred when get sourceCoordinators.", e);
+                }
+            }
+        }
+        return sourceCoordinators;
     }
 
     int getNumExecutionVertexFinished() {
@@ -642,9 +684,12 @@ public class ExecutionJobVertex
         ExecutionJobVertex createExecutionJobVertex(
                 InternalExecutionGraphAccessor graph,
                 JobVertex jobVertex,
-                VertexParallelismInformation parallelismInfo)
+                VertexParallelismInformation parallelismInfo,
+                CoordinatorStore coordinatorStore,
+                JobManagerJobMetricGroup jobManagerJobMetricGroup)
                 throws JobException {
-            return new ExecutionJobVertex(graph, jobVertex, parallelismInfo);
+            return new ExecutionJobVertex(
+                    graph, jobVertex, parallelismInfo, coordinatorStore, jobManagerJobMetricGroup);
         }
     }
 }

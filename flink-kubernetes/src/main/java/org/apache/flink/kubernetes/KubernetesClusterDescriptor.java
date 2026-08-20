@@ -33,6 +33,7 @@ import org.apache.flink.configuration.HighAvailabilityOptions;
 import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.configuration.RestOptions;
 import org.apache.flink.configuration.TaskManagerOptions;
+import org.apache.flink.kubernetes.artifact.KubernetesArtifactUploader;
 import org.apache.flink.kubernetes.configuration.KubernetesConfigOptions;
 import org.apache.flink.kubernetes.configuration.KubernetesConfigOptionsInternal;
 import org.apache.flink.kubernetes.configuration.KubernetesDeploymentTarget;
@@ -51,7 +52,6 @@ import org.apache.flink.kubernetes.utils.KubernetesUtils;
 import org.apache.flink.runtime.entrypoint.ClusterEntrypoint;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServicesUtils;
 import org.apache.flink.runtime.highavailability.nonha.standalone.StandaloneClientHAServices;
-import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobmanager.HighAvailabilityMode;
 import org.apache.flink.runtime.rpc.AddressResolution;
 import org.apache.flink.util.FlinkException;
@@ -60,7 +60,7 @@ import org.apache.flink.util.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
+import java.net.URI;
 import java.util.List;
 import java.util.Optional;
 
@@ -79,16 +79,21 @@ public class KubernetesClusterDescriptor implements ClusterDescriptor<String> {
 
     private final FlinkKubeClient client;
 
+    private final KubernetesArtifactUploader artifactUploader;
+
     private final String clusterId;
 
     public KubernetesClusterDescriptor(
-            Configuration flinkConfig, FlinkKubeClientFactory clientFactory) {
+            Configuration flinkConfig,
+            FlinkKubeClientFactory clientFactory,
+            KubernetesArtifactUploader artifactUploader) {
         this.flinkConfig = flinkConfig;
         this.clientFactory = clientFactory;
+        this.artifactUploader = artifactUploader;
         this.client = clientFactory.fromConfiguration(flinkConfig, "client");
         this.clusterId =
                 checkNotNull(
-                        flinkConfig.getString(KubernetesConfigOptions.CLUSTER_ID),
+                        flinkConfig.get(KubernetesConfigOptions.CLUSTER_ID),
                         "ClusterId must be specified!");
     }
 
@@ -108,8 +113,8 @@ public class KubernetesClusterDescriptor implements ClusterDescriptor<String> {
             }
 
             if (restEndpoint.isPresent()) {
-                configuration.setString(RestOptions.ADDRESS, restEndpoint.get().getAddress());
-                configuration.setInteger(RestOptions.PORT, restEndpoint.get().getPort());
+                configuration.set(RestOptions.ADDRESS, restEndpoint.get().getAddress());
+                configuration.set(RestOptions.PORT, restEndpoint.get().getPort());
             } else {
                 throw new RuntimeException(
                         new ClusterRetrieveException(
@@ -209,12 +214,21 @@ public class KubernetesClusterDescriptor implements ClusterDescriptor<String> {
 
         applicationConfiguration.applyToConfiguration(flinkConfig);
 
-        // No need to do pipelineJars validation if it is a PyFlink job.
+        // No need to do pipelineJars validation if it is a PyFlink job or using system classpath.
         if (!(PackagedProgramUtils.isPython(applicationConfiguration.getApplicationClassName())
-                || PackagedProgramUtils.isPython(applicationConfiguration.getProgramArguments()))) {
-            final List<File> pipelineJars =
+                        || PackagedProgramUtils.isPython(
+                                applicationConfiguration.getProgramArguments()))
+                && !PackagedProgramUtils.usingSystemClassPath(flinkConfig)) {
+            final List<URI> pipelineJars =
                     KubernetesUtils.checkJarFileForApplicationMode(flinkConfig);
-            Preconditions.checkArgument(pipelineJars.size() == 1, "Should only have one jar");
+            Preconditions.checkArgument(
+                    pipelineJars.size() <= 1, "Should only have at most one jar.");
+        }
+
+        try {
+            artifactUploader.uploadAll(flinkConfig);
+        } catch (Exception ex) {
+            throw new ClusterDeploymentException(ex);
         }
 
         final ClusterClientProvider<String> clusterClientProvider =
@@ -232,14 +246,6 @@ public class KubernetesClusterDescriptor implements ClusterDescriptor<String> {
         return clusterClientProvider;
     }
 
-    @Override
-    public ClusterClientProvider<String> deployJobCluster(
-            ClusterSpecification clusterSpecification, JobGraph jobGraph, boolean detached)
-            throws ClusterDeploymentException {
-        throw new ClusterDeploymentException(
-                "Per-Job Mode not supported by Active Kubernetes deployments.");
-    }
-
     private ClusterClientProvider<String> deployClusterInternal(
             String entryPoint, ClusterSpecification clusterSpecification, boolean detached)
             throws ClusterDeploymentException {
@@ -247,10 +253,10 @@ public class KubernetesClusterDescriptor implements ClusterDescriptor<String> {
                 detached
                         ? ClusterEntrypoint.ExecutionMode.DETACHED
                         : ClusterEntrypoint.ExecutionMode.NORMAL;
-        flinkConfig.setString(
+        flinkConfig.set(
                 ClusterEntrypoint.INTERNAL_CLUSTER_EXECUTION_MODE, executionMode.toString());
 
-        flinkConfig.setString(KubernetesConfigOptionsInternal.ENTRY_POINT_CLASS, entryPoint);
+        flinkConfig.set(KubernetesConfigOptionsInternal.ENTRY_POINT_CLASS, entryPoint);
 
         // Rpc, blob, rest, taskManagerRpc ports need to be exposed, so update them to fixed values.
         KubernetesUtils.checkAndUpdatePortConfigOption(
@@ -261,7 +267,7 @@ public class KubernetesClusterDescriptor implements ClusterDescriptor<String> {
                 flinkConfig, RestOptions.BIND_PORT, Constants.REST_PORT);
 
         if (HighAvailabilityMode.isHighAvailabilityModeActivated(flinkConfig)) {
-            flinkConfig.setString(HighAvailabilityOptions.HA_CLUSTER_ID, clusterId);
+            flinkConfig.set(HighAvailabilityOptions.HA_CLUSTER_ID, clusterId);
             KubernetesUtils.checkAndUpdatePortConfigOption(
                     flinkConfig,
                     HighAvailabilityOptions.HA_JOB_MANAGER_PORT_RANGE,

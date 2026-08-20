@@ -18,6 +18,7 @@
 package org.apache.flink.table.planner.expressions
 
 import org.apache.flink.table.api._
+import org.apache.flink.table.api.Expressions.toTimestampLtz
 import org.apache.flink.table.expressions.TimeIntervalUnit
 import org.apache.flink.table.planner.codegen.CodeGenException
 import org.apache.flink.table.planner.expressions.utils.ExpressionTestBase
@@ -26,7 +27,7 @@ import org.apache.flink.table.planner.utils.DateTimeTestUtil._
 import org.apache.flink.table.types.DataType
 import org.apache.flink.types.Row
 
-import org.junit.Test
+import org.junit.jupiter.api.Test
 
 import java.lang.{Double => JDouble, Float => JFloat, Integer => JInt, Long => JLong}
 import java.sql.Timestamp
@@ -609,7 +610,7 @@ class TemporalTypesTest extends ExpressionTestBase {
   @Test
   def testDateAndTime(): Unit = {
     testSqlApi("DATE '2018-03-14'", "2018-03-14")
-    testSqlApi("TIME '19:01:02.123'", "19:01:02")
+    testSqlApi("TIME '19:01:02.123'", "19:01:02.123")
 
     // DATE & TIME
     testSqlApi("CAST('12:44:31' AS TIME)", "12:44:31")
@@ -986,6 +987,13 @@ class TemporalTypesTest extends ExpressionTestBase {
       "2000-02-02 00:59:59.123")
 
     testSqlApi("TO_TIMESTAMP('1234567', 'SSSSSSS')", "1970-01-01 00:00:00.123")
+
+    testSqlApi(
+      "TO_TIMESTAMP('2017-09-15 00:00:00.12345', 'yyyy-MM-dd HH:mm:ss.SSS')",
+      "2017-09-15 00:00:00.123")
+    testSqlApi(
+      "CAST(TO_TIMESTAMP('2017-09-15 00:00:00.12345', 'yyyy-MM-dd HH:mm:ss.SSS') AS STRING)",
+      "2017-09-15 00:00:00.123")
   }
 
   @Test
@@ -1275,55 +1283,31 @@ class TemporalTypesTest extends ExpressionTestBase {
       s"TO_TIMESTAMP_LTZ(253402300800000, 3)",
       "NULL")
 
-    // test invalid number of arguments
-    testExpectedSqlException(
-      "TO_TIMESTAMP_LTZ(123)",
-      "Invalid number of arguments to function 'TO_TIMESTAMP_LTZ'. Was expecting 2 arguments")
-
-    // invalid precision
-    testExpectedAllApisException(
-      toTimestampLtz(12, 1),
-      "TO_TIMESTAMP_LTZ(12, 1)",
-      "The precision value '1' for function TO_TIMESTAMP_LTZ(numeric, precision) is unsupported," +
-        " the supported value is '0' for second or '3' for millisecond.",
-      classOf[TableException]
-    )
-
-    // invalid precision
-    testExpectedAllApisException(
-      toTimestampLtz(1000000000, 9),
-      "TO_TIMESTAMP_LTZ(1000000000, 9)",
-      "The precision value '9' for function TO_TIMESTAMP_LTZ(numeric, precision) is unsupported," +
-        " the supported value is '0' for second or '3' for millisecond.",
-      classOf[TableException]
-    )
-
     // invalid type for the first input
     testExpectedSqlException(
       "TO_TIMESTAMP_LTZ('test_string_type', 0)",
-      "Cannot apply 'TO_TIMESTAMP_LTZ' to arguments of type" +
-        " 'TO_TIMESTAMP_LTZ(<CHAR(16)>, <INTEGER>)'. Supported form(s):" +
-        " 'TO_TIMESTAMP_LTZ(<NUMERIC>, <INTEGER>)'",
+      "SQL validation failed. Invalid function call:\n" +
+        "TO_TIMESTAMP_LTZ(CHAR(16) NOT NULL, INT NOT NULL)",
       classOf[ValidationException]
     )
+
     testExpectedTableApiException(
       toTimestampLtz("test_string_type", 0),
-      "Unsupported argument type. " +
-        "Expected type of family 'NUMERIC' but actual type was 'CHAR(16) NOT NULL'"
+      "Invalid function call:\n" +
+        "TO_TIMESTAMP_LTZ(CHAR(16) NOT NULL, INT NOT NULL)"
     )
 
     // invalid type for the second input
     testExpectedSqlException(
       "TO_TIMESTAMP_LTZ(123, 'test_string_type')",
-      "Cannot apply 'TO_TIMESTAMP_LTZ' to arguments of type" +
-        " 'TO_TIMESTAMP_LTZ(<INTEGER>, <CHAR(16)>)'. Supported form(s):" +
-        " 'TO_TIMESTAMP_LTZ(<NUMERIC>, <INTEGER>)'"
+      "SQL validation failed. Invalid function call:\n" +
+        "TO_TIMESTAMP_LTZ(INT NOT NULL, CHAR(16) NOT NULL)"
     )
 
     testExpectedTableApiException(
       toTimestampLtz(123, "test_string_type"),
-      "Unsupported argument type. " +
-        "Expected type of family 'INTEGER_NUMERIC' but actual type was 'CHAR(16) NOT NULL'"
+      "Invalid function call:\n" +
+        "TO_TIMESTAMP_LTZ(INT NOT NULL, CHAR(16) NOT NULL)"
     )
   }
 
@@ -1343,6 +1327,8 @@ class TemporalTypesTest extends ExpressionTestBase {
     testSqlApi("TIMESTAMPDIFF(MONTH, TIME '00:00:00', TIMESTAMP '2021-02-04 12:00:00')", "613")
     testSqlApi("TIMESTAMPDIFF(MONTH, DATE '2021-01-04', TIME '00:00:00')", "-612")
     testSqlApi("TIMESTAMPDIFF(MONTH, TIME '00:00:00', DATE '2021-02-04')", "613")
+    testSqlApi("TIMESTAMPDIFF(SECOND, TIME'10:10:10', TIME'11:11:11')", "3661");
+    testSqlApi("TIMESTAMPDIFF(MINUTE, TIME'08:00:00', TIME'11:11:00')", "191");
   }
 
   @Test
@@ -1441,7 +1427,7 @@ class TemporalTypesTest extends ExpressionTestBase {
     testExpectedSqlException(
       s"TIMESTAMPDIFF(SECOND, ${timestampLtz("1970-01-01 00:00:00.123")}, 'test_string_type')",
       "Cannot apply 'TIMESTAMPDIFF' to arguments of type" +
-        " 'TIMESTAMPDIFF(<SYMBOL>, <TIMESTAMP_WITH_LOCAL_TIME_ZONE(3)>, <CHAR(16)>)'." +
+        " 'TIMESTAMPDIFF(<INTERVAL SECOND>, <TIMESTAMP_WITH_LOCAL_TIME_ZONE(3)>, <CHAR(16)>)'." +
         " Supported form(s): 'TIMESTAMPDIFF(<ANY>, <DATETIME>, <DATETIME>)'"
     )
   }

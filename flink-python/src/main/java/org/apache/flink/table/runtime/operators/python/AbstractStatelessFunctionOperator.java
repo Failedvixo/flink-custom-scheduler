@@ -105,7 +105,8 @@ public abstract class AbstractStatelessFunctionOperator<IN, OUT, UDFIN>
     @Override
     public PythonFunctionRunner createPythonFunctionRunner() throws IOException {
         return BeamTablePythonFunctionRunner.stateless(
-                getRuntimeContext().getTaskName(),
+                getContainingTask().getEnvironment(),
+                getRuntimeContext().getTaskInfo().getTaskName(),
                 createPythonEnvironmentManager(),
                 getFunctionUrn(),
                 createUserDefinedFunctionsProto(),
@@ -114,6 +115,7 @@ public abstract class AbstractStatelessFunctionOperator<IN, OUT, UDFIN>
                 getOperatorConfig()
                         .getManagedMemoryFractionOperatorUseCaseOfSlot(
                                 ManagedMemoryUseCase.PYTHON,
+                                getContainingTask().getJobConfiguration(),
                                 getContainingTask()
                                         .getEnvironment()
                                         .getTaskManagerInfo()

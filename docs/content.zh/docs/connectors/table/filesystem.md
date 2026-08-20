@@ -84,7 +84,7 @@ path
         ├── part-0.parquet
 ```
 
-文件系统表支持分区新增插入和分区覆盖插入。请参考 [INSERT Statement]({{< ref "docs/dev/table/sql/insert" >}})。当对分区表进行分区覆盖插入时，只有相应的分区会被覆盖，而不是整个表。
+文件系统表支持分区新增插入和分区覆盖插入。请参考 [INSERT Statement]({{< ref "docs/sql/reference/dml/insert" >}})。当对分区表进行分区覆盖插入时，只有相应的分区会被覆盖，而不是整个表。
 
 <a name="file-formats"></a>
 
@@ -241,8 +241,8 @@ CREATE TABLE MyUserTableWithFilepath (
 
 **注意：** 对于 bulk formats 数据 (parquet、orc、avro)，滚动策略与 checkpoint 间隔（pending 状态的文件会在下个 checkpoint 完成）控制了 part 文件的大小和个数。
 
-**注意：** 对于 row formats 数据 (csv、json)，如果想使得分区文件更快在文件系统中可见，可以设置  `sink.rolling-policy.file-size` 或 `sink.rolling-policy.rollover-interval` 属性以及在 flink-conf.yaml 中的 `execution.checkpointing.interval` 属性。
-对于其他 formats (avro、orc)，可以只设置 flink-conf.yaml 中的 `execution.checkpointing.interval` 属性。
+**注意：** 对于 row formats 数据 (csv、json)，如果想使得分区文件更快在文件系统中可见，可以设置  `sink.rolling-policy.file-size` 或 `sink.rolling-policy.rollover-interval` 属性以及在 [Flink 配置文件]({{< ref "docs/deployment/config#flink-配置文件" >}}) 中的 `execution.checkpointing.interval` 属性。
+对于其他 formats (avro、orc)，可以只设置 [Flink 配置文件]({{< ref "docs/deployment/config#flink-配置文件" >}}) 中的 `execution.checkpointing.interval` 属性。
 
 <a name="file-compaction"></a>
 

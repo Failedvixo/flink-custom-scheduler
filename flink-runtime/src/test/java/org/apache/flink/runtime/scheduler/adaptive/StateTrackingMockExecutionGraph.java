@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.scheduler.adaptive;
 
+import org.apache.flink.api.common.ApplicationID;
 import org.apache.flink.api.common.ArchivedExecutionConfig;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.JobID;
@@ -47,15 +48,18 @@ import org.apache.flink.runtime.executiongraph.IntermediateResultPartition;
 import org.apache.flink.runtime.executiongraph.JobStatusListener;
 import org.apache.flink.runtime.executiongraph.JobVertexInputInfo;
 import org.apache.flink.runtime.executiongraph.TaskExecutionStateTransition;
-import org.apache.flink.runtime.executiongraph.failover.flip1.ResultPartitionAvailabilityChecker;
+import org.apache.flink.runtime.executiongraph.failover.ResultPartitionAvailabilityChecker;
 import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
 import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
+import org.apache.flink.runtime.jobgraph.JobType;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.CheckpointCoordinatorConfiguration;
 import org.apache.flink.runtime.metrics.groups.JobManagerJobMetricGroup;
 import org.apache.flink.runtime.query.KvStateLocationRegistry;
+import org.apache.flink.runtime.rest.messages.JobPlanInfo;
 import org.apache.flink.runtime.scheduler.InternalFailuresListener;
+import org.apache.flink.runtime.scheduler.VertexParallelismStore;
 import org.apache.flink.runtime.scheduler.exceptionhistory.TestingAccessExecution;
 import org.apache.flink.runtime.scheduler.strategy.SchedulingTopology;
 import org.apache.flink.runtime.scheduler.strategy.TestingSchedulingTopology;
@@ -71,12 +75,15 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 /**
  * Mocked ExecutionGraph which (partially) tracks the job status, and provides some basic mocks to
@@ -88,6 +95,7 @@ class StateTrackingMockExecutionGraph implements ExecutionGraph {
             LoggerFactory.getLogger(StateTrackingMockExecutionGraph.class);
 
     private JobStatus state = JobStatus.INITIALIZING;
+    private JobType jobType = JobType.STREAMING;
     private final CompletableFuture<JobStatus> terminationFuture = new CompletableFuture<>();
     private final JobID jobId = new JobID();
     private static final ArchivedExecutionConfig archivedExecutionConfig =
@@ -125,6 +133,11 @@ class StateTrackingMockExecutionGraph implements ExecutionGraph {
     }
 
     @Override
+    public JobType getJobType() {
+        return jobType;
+    }
+
+    @Override
     public CompletableFuture<JobStatus> getTerminationFuture() {
         return terminationFuture;
     }
@@ -158,7 +171,8 @@ class StateTrackingMockExecutionGraph implements ExecutionGraph {
 
     @Override
     public Map<JobVertexID, ExecutionJobVertex> getAllVertices() {
-        return Collections.emptyMap();
+        return StreamSupport.stream(getVerticesTopologically().spliterator(), false)
+                .collect(Collectors.toMap(ExecutionJobVertex::getJobVertexId, v -> v));
     }
 
     @Override
@@ -172,12 +186,17 @@ class StateTrackingMockExecutionGraph implements ExecutionGraph {
     }
 
     @Override
-    public String getJsonPlan() {
-        return "";
+    public JobPlanInfo.Plan getPlan() {
+        return new JobPlanInfo.Plan("", "", "", new ArrayList<>());
     }
 
     @Override
-    public void setJsonPlan(String jsonPlan) {}
+    public String getStreamGraphJson() {
+        return null;
+    }
+
+    @Override
+    public void setPlan(JobPlanInfo.Plan jsonPlan) {}
 
     @Override
     public JobID getJobID() {
@@ -236,6 +255,11 @@ class StateTrackingMockExecutionGraph implements ExecutionGraph {
     @Override
     public Optional<String> getChangelogStorageName() {
         return Optional.empty();
+    }
+
+    @Override
+    public int getPendingOperatorCount() {
+        return 0;
     }
 
     @Override
@@ -384,14 +408,22 @@ class StateTrackingMockExecutionGraph implements ExecutionGraph {
     public void initializeJobVertex(
             ExecutionJobVertex ejv,
             long createTimestamp,
-            Map<IntermediateDataSetID, JobVertexInputInfo> jobVertexInputInfos,
-            JobManagerJobMetricGroup jobManagerJobMetricGroup)
+            Map<IntermediateDataSetID, JobVertexInputInfo> jobVertexInputInfos)
             throws JobException {
         throw new UnsupportedOperationException();
     }
 
     @Override
     public void notifyNewlyInitializedJobVertices(List<ExecutionJobVertex> vertices) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void addNewJobVertices(
+            List<JobVertex> sortedJobVertices,
+            JobManagerJobMetricGroup jobManagerJobMetricGroup,
+            VertexParallelismStore newVerticesParallelismStore)
+            throws JobException {
         throw new UnsupportedOperationException();
     }
 
@@ -407,5 +439,10 @@ class StateTrackingMockExecutionGraph implements ExecutionGraph {
     @Override
     public Optional<AccessExecution> findExecution(ExecutionAttemptID attemptId) {
         return Optional.ofNullable(executions.get(attemptId));
+    }
+
+    @Override
+    public Optional<ApplicationID> getApplicationId() {
+        return Optional.empty();
     }
 }

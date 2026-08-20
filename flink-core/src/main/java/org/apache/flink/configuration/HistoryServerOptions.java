@@ -21,8 +21,11 @@ package org.apache.flink.configuration;
 import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.configuration.description.Description;
 
+import java.time.Duration;
+
 import static org.apache.flink.configuration.ConfigOptions.key;
 import static org.apache.flink.configuration.description.TextElement.code;
+import static org.apache.flink.configuration.description.TextElement.text;
 
 /** The set of configuration options relating to the HistoryServer. */
 @PublicEvolving
@@ -32,12 +35,11 @@ public class HistoryServerOptions {
      * The interval at which the HistoryServer polls {@link
      * HistoryServerOptions#HISTORY_SERVER_ARCHIVE_DIRS} for new archives.
      */
-    public static final ConfigOption<Long> HISTORY_SERVER_ARCHIVE_REFRESH_INTERVAL =
+    public static final ConfigOption<Duration> HISTORY_SERVER_ARCHIVE_REFRESH_INTERVAL =
             key("historyserver.archive.fs.refresh-interval")
-                    .longType()
-                    .defaultValue(10000L)
-                    .withDescription(
-                            "Interval in milliseconds for refreshing the archived job directories.");
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(10000L))
+                    .withDescription("Interval for refreshing the archived job directories.");
 
     /** Comma-separated list of directories which the HistoryServer polls for new archives. */
     public static final ConfigOption<String> HISTORY_SERVER_ARCHIVE_DIRS =
@@ -48,17 +50,6 @@ public class HistoryServerOptions {
                             "Comma separated list of directories to fetch archived jobs from. The history server will"
                                     + " monitor these directories for archived jobs. You can configure the JobManager to archive jobs to a"
                                     + " directory via `jobmanager.archive.fs.dir`.");
-
-    /** If this option is enabled then deleted job archives are also deleted from HistoryServer. */
-    public static final ConfigOption<Boolean> HISTORY_SERVER_CLEANUP_EXPIRED_JOBS =
-            key("historyserver.archive.clean-expired-jobs")
-                    .booleanType()
-                    .defaultValue(false)
-                    .withDescription(
-                            String.format(
-                                    "Whether HistoryServer should cleanup jobs"
-                                            + " that are no longer present `%s`.",
-                                    HISTORY_SERVER_ARCHIVE_DIRS.key()));
 
     /**
      * Pattern of the log URL of TaskManager. The HistoryServer will generate actual URLs from it.
@@ -107,12 +98,11 @@ public class HistoryServerOptions {
                     .withDescription("Port of the HistoryServers's web interface.");
 
     /** The refresh interval for the HistoryServer web-frontend in milliseconds. */
-    public static final ConfigOption<Long> HISTORY_SERVER_WEB_REFRESH_INTERVAL =
+    public static final ConfigOption<Duration> HISTORY_SERVER_WEB_REFRESH_INTERVAL =
             key("historyserver.web.refresh-interval")
-                    .longType()
-                    .defaultValue(10000L)
-                    .withDescription(
-                            "The refresh interval for the HistoryServer web-frontend in milliseconds.");
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(10000L))
+                    .withDescription("The refresh interval for the HistoryServer web-frontend.");
 
     /**
      * Enables/Disables SSL support for the HistoryServer web-frontend. Only relevant if {@link
@@ -126,21 +116,135 @@ public class HistoryServerOptions {
                             "Enable HTTPs access to the HistoryServer web frontend. This is applicable only when the"
                                     + " global SSL flag security.ssl.enabled is set to true.");
 
+    private static final String HISTORY_SERVER_RETAINED_JOBS_KEY =
+            "historyserver.archive.retained-jobs";
+    private static final String HISTORY_SERVER_RETAINED_TTL_KEY =
+            "historyserver.archive.retained-ttl";
+    private static final String NOTE_MESSAGE =
+            "Note, when there are multiple history server instances, two recommended approaches when using this option are: ";
+    private static final String CONFIGURE_SINGLE_INSTANCE =
+            "Specify the option in only one HistoryServer instance to avoid errors caused by multiple instances simultaneously cleaning up remote files, ";
+    private static final String CONFIGURE_CONSISTENT =
+            "Or you can keep the value of this configuration consistent across them. ";
+    private static final String LEGACY_NOTE_MESSAGE =
+            "Note: This option applies only to legacy job archives created before the introduction of application archiving (FLINK-38761).";
+    private static final String RETAINED_STRATEGY_MESSAGE =
+            "Archived entities will be removed if their TTL has expired or the retention count limit has been reached. ";
+
+    /** If this option is enabled then deleted job archives are also deleted from HistoryServer. */
+    public static final ConfigOption<Boolean> HISTORY_SERVER_CLEANUP_EXPIRED_JOBS =
+            key("historyserver.archive.clean-expired-jobs")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "Whether HistoryServer should cleanup jobs that are no longer present in the archive directory defined by %s. ",
+                                            code(HISTORY_SERVER_ARCHIVE_DIRS.key()))
+                                    .linebreak()
+                                    .text(LEGACY_NOTE_MESSAGE)
+                                    .build());
+
     public static final ConfigOption<Integer> HISTORY_SERVER_RETAINED_JOBS =
-            key("historyserver.archive.retained-jobs")
+            key(HISTORY_SERVER_RETAINED_JOBS_KEY)
                     .intType()
                     .defaultValue(-1)
                     .withDescription(
                             Description.builder()
                                     .text(
-                                            String.format(
-                                                    "The maximum number of jobs to retain in each archive directory defined by `%s`. ",
-                                                    HISTORY_SERVER_ARCHIVE_DIRS.key()))
+                                            "The maximum number of jobs to retain in each archive directory defined by %s. ",
+                                            code(HISTORY_SERVER_ARCHIVE_DIRS.key()))
+                                    .list(
+                                            text(
+                                                    "If the option is not specified as a positive number without specifying %s, all of the jobs archives will be retained. ",
+                                                    code(HISTORY_SERVER_RETAINED_TTL_KEY)),
+                                            text(
+                                                    "If the option is specified as a positive number without specifying a value of %s, the jobs archive whose order index based modification time is equals to or less than the value will be retained. ",
+                                                    code(HISTORY_SERVER_RETAINED_TTL_KEY)),
+                                            text(
+                                                    "If this option is specified as a positive number together with the specified %s option, the job archive will be removed if its TTL has expired or the retained job count has been reached. ",
+                                                    code(HISTORY_SERVER_RETAINED_TTL_KEY)))
                                     .text(
-                                            "If set to `-1`(default), there is no limit to the number of archives. ")
-                                    .text(
-                                            "If set to `0` or less than `-1` HistoryServer will throw an %s. ",
+                                            "If set to %s or less than %s, HistoryServer will throw an %s. ",
+                                            code("0"),
+                                            code("-1"),
                                             code("IllegalConfigurationException"))
+                                    .linebreak()
+                                    .text(NOTE_MESSAGE)
+                                    .list(
+                                            text(CONFIGURE_SINGLE_INSTANCE),
+                                            text(CONFIGURE_CONSISTENT))
+                                    .linebreak()
+                                    .text(LEGACY_NOTE_MESSAGE)
+                                    .build());
+
+    /**
+     * If this option is enabled then deleted application archives are also deleted from
+     * HistoryServer.
+     */
+    public static final ConfigOption<Boolean> HISTORY_SERVER_CLEANUP_EXPIRED_APPLICATIONS =
+            key("historyserver.archive.clean-expired-applications")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "Whether HistoryServer should cleanup applications that are no longer present in the archive directory defined by %s. ",
+                                            code(HISTORY_SERVER_ARCHIVE_DIRS.key()))
+                                    .build());
+
+    public static final ConfigOption<Integer> HISTORY_SERVER_RETAINED_APPLICATIONS =
+            key("historyserver.archive.retained-applications")
+                    .intType()
+                    .defaultValue(-1)
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "The maximum number of applications to retain in each archive directory defined by %s. ",
+                                            code(HISTORY_SERVER_ARCHIVE_DIRS.key()))
+                                    .text(
+                                            "This option works together with the TTL (see %s). ",
+                                            code(HISTORY_SERVER_RETAINED_TTL_KEY))
+                                    .text(RETAINED_STRATEGY_MESSAGE)
+                                    .linebreak()
+                                    .text(
+                                            "If set to %s (default), there is no limit to the number of archives. ",
+                                            code("-1"))
+                                    .text(
+                                            "If set to %s or less than %s, HistoryServer will throw an %s. ",
+                                            code("0"),
+                                            code("-1"),
+                                            code("IllegalConfigurationException"))
+                                    .linebreak()
+                                    .text(NOTE_MESSAGE)
+                                    .list(
+                                            text(CONFIGURE_SINGLE_INSTANCE),
+                                            text(CONFIGURE_CONSISTENT))
+                                    .build());
+
+    public static final ConfigOption<Duration> HISTORY_SERVER_RETAINED_TTL =
+            key(HISTORY_SERVER_RETAINED_TTL_KEY)
+                    .durationType()
+                    .noDefaultValue()
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "The time-to-live duration to retain the archived entities (jobs and applications) in each archive directory defined by %s. ",
+                                            code(HISTORY_SERVER_ARCHIVE_DIRS.key()))
+                                    .text(
+                                            "This option works together with the retention count limits (see %s and %s). ",
+                                            code(HISTORY_SERVER_RETAINED_APPLICATIONS.key()),
+                                            code(HISTORY_SERVER_RETAINED_JOBS_KEY))
+                                    .text(RETAINED_STRATEGY_MESSAGE)
+                                    .linebreak()
+                                    .text(
+                                            "If set to equal to or less than %s milliseconds, HistoryServer will throw an %s. ",
+                                            code("0"), code("IllegalConfigurationException"))
+                                    .linebreak()
+                                    .text(NOTE_MESSAGE)
+                                    .list(
+                                            text(CONFIGURE_SINGLE_INSTANCE),
+                                            text(CONFIGURE_CONSISTENT))
                                     .build());
 
     private HistoryServerOptions() {}

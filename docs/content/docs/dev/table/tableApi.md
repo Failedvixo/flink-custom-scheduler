@@ -1,6 +1,6 @@
 ---
 title: "Table API"
-weight: 31
+weight: 4
 type: docs
 aliases:
   - /dev/table/tableApi.html
@@ -30,9 +30,9 @@ under the License.
 
 The Table API is a unified, relational API for stream and batch processing. Table API queries can be run on batch or streaming input without modifications. The Table API is a super set of the SQL language and is specially designed for working with Apache Flink. The Table API is a language-integrated API for Scala, Java and Python. Instead of specifying queries as String values as common with SQL, Table API queries are defined in a language-embedded style in Java, Scala or Python with IDE support like autocompletion and syntax validation. 
 
-The Table API shares many concepts and parts of its API with Flink's SQL integration. Have a look at the [Common Concepts & API]({{< ref "docs/dev/table/common" >}}) to learn how to register tables or to create a `Table` object. The [Streaming Concepts]({{< ref "docs/dev/table/concepts/overview" >}}) pages discuss streaming specific concepts such as dynamic tables and time attributes.
+The Table API shares many concepts and parts of its API with Flink's SQL integration. Have a look at the [Common Concepts & API]({{< ref "docs/dev/table/common" >}}) to learn how to register tables or to create a `Table` object. The [Streaming Concepts]({{< ref "docs/concepts/sql-table-concepts/overview" >}}) pages discuss streaming specific concepts such as dynamic tables and time attributes.
 
-The following examples assume a registered table called `Orders` with attributes `(a, b, c, rowtime)`. The `rowtime` field is either a logical [time attribute]({{< ref "docs/dev/table/concepts/time_attributes" >}}) in streaming or a regular timestamp field in batch.
+The following examples assume a registered table called `Orders` with attributes `(a, b, c, rowtime)`. The `rowtime` field is either a logical [time attribute]({{< ref "docs/concepts/sql-table-concepts/time_attributes" >}}) in streaming or a regular timestamp field in batch.
 
 
 Overview & Examples
@@ -222,7 +222,7 @@ result = orders.filter(col("a").is_not_null & col("b").is_not_null & col("c").is
 {{< /tab >}}
 {{< /tabs >}}
 
-Since the Table API is a unified API for batch and streaming data, both example programs can be executed on batch and streaming inputs without any modification of the table program itself. In both cases, the program produces the same results given that streaming records are not late (see [Streaming Concepts]({{< ref "docs/dev/table/concepts/overview" >}}) for details).
+Since the Table API is a unified API for batch and streaming data, both example programs can be executed on batch and streaming inputs without any modification of the table program itself. In both cases, the program produces the same results given that streaming records are not late (see [Streaming Concepts]({{< ref "docs/concepts/sql-table-concepts/overview" >}}) for details).
 
 {{< top >}}
 
@@ -376,7 +376,7 @@ result = orders.select(col("a"), col("c").alias('d'))
 {{< /tab >}}
 {{< /tabs >}}
 
-You can use star `(*)` to act as a wild card, selecting all of the columns in the table.
+You can use star `(*)` to act as a wild card, selecting all columns in the table.
 
 {{< tabs "selectstar" >}}
 {{< tab "Java" >}}
@@ -412,7 +412,7 @@ Table result = orders.as("x, y, z, t");
 ```
 {{< /tab >}}
 {{< tab "scala" >}}
-```java
+```scala
 val orders: Table = tableEnv.from("Orders").as("x", "y", "z", "t")
 ```
 {{< /tab >}}
@@ -729,7 +729,7 @@ result = orders.over_window(Over.partition_by(col("a")).order_by(col("rowtime"))
 {{< /tab >}}
 {{< /tabs >}}
 
-All aggregates must be defined over the same window, i.e., same partitioning, sorting, and range. Currently, only windows with PRECEDING (UNBOUNDED and bounded) to CURRENT ROW range are supported. Ranges with FOLLOWING are not supported yet. ORDER BY must be specified on a single [time attribute]({{< ref "docs/dev/table/concepts/time_attributes" >}}).
+All aggregates must be defined over the same window, i.e., same partitioning, sorting, and range. Currently, only windows with PRECEDING (UNBOUNDED and bounded) to CURRENT ROW range are supported. Ranges with FOLLOWING are not supported yet. ORDER BY must be specified on a single [time attribute]({{< ref "docs/concepts/sql-table-concepts/time_attributes" >}}).
 
 #### Distinct Aggregation
 
@@ -824,7 +824,7 @@ User-defined aggregation function can also be used with `DISTINCT` modifiers. To
 Table orders = tEnv.from("Orders");
 
 // Use distinct aggregation for user-defined aggregate functions
-tEnv.registerFunction("myUdagg", new MyUdagg());
+tEnv.createTemporarySystemFunction("myUdagg", MyUdagg.class);
 orders.groupBy("users")
     .select(
         $("users"),
@@ -854,7 +854,7 @@ Unsupported
 {{< label "Result Updating" >}}
 
 Similar to a SQL `DISTINCT` clause.
-Returns records with distinct value combinations.
+Return records with distinct value combinations.
 
 {{< tabs "distinct" >}}
 {{< tab "Java" >}}
@@ -1025,8 +1025,7 @@ A row of the left (outer) table is dropped, if its table function call returns a
 {{< tab "Java" >}}
 ```java
 // register User-Defined Table Function
-TableFunction<Tuple3<String,String,String>> split = new MySplitUDTF();
-tableEnv.registerFunction("split", split);
+tableEnv.createTemporarySystemFunction("split", MySplitUDTF.class);
 
 // join
 Table orders = tableEnv.from("Orders");
@@ -1074,8 +1073,7 @@ Currently, the predicate of a table function left outer join can only be empty o
 {{< tab "Java" >}}
 ```java
 // register User-Defined Table Function
-TableFunction<Tuple3<String,String,String>> split = new MySplitUDTF();
-tableEnv.registerFunction("split", split);
+tableEnv.createTemporarySystemFunction("split", MySplitUDTF.class);
 
 // join
 Table orders = tableEnv.from("Orders");
@@ -1116,7 +1114,7 @@ Temporal tables are tables that track changes over time.
 
 A temporal table function provides access to the state of a temporal table at a specific point in time. The syntax to join a table with a temporal table function is the same as in Inner Join with Table Function.
 
-Currently only inner joins with temporal tables are supported.
+Currently, only inner joins with temporal tables are supported.
 
 {{< tabs "temporaltablefunc" >}}
 {{< tab "Java" >}}
@@ -1127,14 +1125,15 @@ Table ratesHistory = tableEnv.from("RatesHistory");
 TemporalTableFunction rates = ratesHistory.createTemporalTableFunction(
     "r_proctime",
     "r_currency");
-tableEnv.registerFunction("rates", rates);
+tableEnv.createTemporarySystemFunction("rates", rates);
 
 // join with "Orders" based on the time attribute and key
 Table orders = tableEnv.from("Orders");
 Table result = orders
     .joinLateral(call("rates", $("o_proctime")), $("o_currency").isEqual($("r_currency")));
+```
 {{< /tab >}}
-{{< tabs "Scala" >}}
+{{< tab "Scala" >}}
 ```scala
 val ratesHistory = tableEnv.from("RatesHistory")
 
@@ -1146,7 +1145,7 @@ val orders = tableEnv.from("Orders")
 val result = orders
     .joinLateral(rates($"o_rowtime"), $"r_currency" === $"o_currency")
 ```
-{{< /tabs >}}
+{{< /tab >}}
 {{< tab "Python" >}}
 Currently not supported in Python Table API.
 {{< /tab >}}
@@ -1364,7 +1363,7 @@ Similar to a SQL `IN` clause. In returns true if an expression exists in a given
 {{< tabs "in" >}}
 {{< tab "Java" >}}
 ```java
-Table left = tableEnv.from("Orders1")
+Table left = tableEnv.from("Orders1");
 Table right = tableEnv.from("Orders2");
 
 Table result = left.select($("a"), $("b"), $("c")).where($("a").in(right));
@@ -1398,7 +1397,7 @@ result = left.select(col('a'), col('b'), col('c')).where(col('a').in_(right))
 
 {{< label Batch >}} {{< label Streaming >}}
 
-Similar to a SQL `ORDER BY` clause. Returns records globally sorted across all parallel partitions. For unbounded tables, this operation requires a sorting on a time attribute or a subsequent fetch operation.
+Similar to a SQL `ORDER BY` clause. Return records globally sorted across all parallel partitions. For unbounded tables, this operation requires a sorting on a time attribute or a subsequent fetch operation.
 
 {{< tabs "orderby" >}}
 {{< tab "Java" >}}
@@ -1627,7 +1626,7 @@ Tumbling windows are defined by using the `Tumble` class as follows:
     </tr>
     <tr>
       <td><code>on</code></td>
-      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/dev/table/concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
+      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/concepts/sql-table-concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
     </tr>
     <tr>
       <td><code>as</code></td>
@@ -1665,7 +1664,7 @@ Tumbling windows are defined by using the `Tumble` class as follows:
     </tr>
     <tr>
       <td><code>on</code></td>
-      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/dev/table/concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
+      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/concepts/sql-table-concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
     </tr>
     <tr>
       <td><code>as</code></td>
@@ -1703,7 +1702,7 @@ Tumbling windows are defined by using the `Tumble` class as follows:
     </tr>
     <tr>
       <td><code>on</code></td>
-      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/dev/table/concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
+      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/concepts/sql-table-concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
     </tr>
     <tr>
       <td><code>alias</code></td>
@@ -1752,7 +1751,7 @@ Sliding windows are defined by using the `Slide` class as follows:
     </tr>
     <tr>
       <td><code>on</code></td>
-      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/dev/table/concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
+      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/concepts/sql-table-concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
     </tr>
     <tr>
       <td><code>as</code></td>
@@ -1800,7 +1799,7 @@ Sliding windows are defined by using the `Slide` class as follows:
     </tr>
     <tr>
       <td><code>on</code></td>
-      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/dev/table/concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
+      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/concepts/sql-table-concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
     </tr>
     <tr>
       <td><code>as</code></td>
@@ -1842,7 +1841,7 @@ Sliding windows are defined by using the `Slide` class as follows:
     </tr>
     <tr>
       <td><code>on</code></td>
-      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/dev/table/concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
+      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/concepts/sql-table-concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
     </tr>
     <tr>
       <td><code>alias</code></td>
@@ -1866,7 +1865,7 @@ Sliding windows are defined by using the `Slide` class as follows:
 
 #### Session (Session Windows)
 
-Session windows do not have a fixed size but their bounds are defined by an interval of inactivity, i.e., a session window is closes if no event appears for a defined gap period. For example a session window with a 30 minute gap starts when a row is observed after 30 minutes inactivity (otherwise the row would be added to an existing window) and is closed if no row is added within 30 minutes. Session windows can work on event-time or processing-time.
+Session windows do not have a fixed size but their bounds are defined by an interval of inactivity, i.e., a session window is closes if no event appears for a defined gap period. For example a session window with a 30-minute gap starts when a row is observed after 30 minutes inactivity (otherwise the row would be added to an existing window) and is closed if no row is added within 30 minutes. Session windows can work on event-time or processing-time.
 
 {{< tabs "58943253-807b-4e4c-b068-0dc1b783b7b5" >}}
 {{< tab "Java" >}}
@@ -1887,7 +1886,7 @@ A session window is defined by using the `Session` class as follows:
     </tr>
     <tr>
       <td><code>on</code></td>
-      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/dev/table/concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
+      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/concepts/sql-table-concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
     </tr>
     <tr>
       <td><code>as</code></td>
@@ -1922,7 +1921,7 @@ A session window is defined by using the `Session` class as follows:
     </tr>
     <tr>
       <td><code>on</code></td>
-      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/dev/table/concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
+      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/concepts/sql-table-concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
     </tr>
     <tr>
       <td><code>as</code></td>
@@ -1957,7 +1956,7 @@ A session window is defined by using the `Session` class as follows:
     </tr>
     <tr>
       <td><code>on</code></td>
-      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/dev/table/concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
+      <td>The time attribute to group (time interval) or sort (row count) on. For batch queries this might be any Long or Timestamp attribute. For streaming queries this must be a <a href="{{< ref "docs/concepts/sql-table-concepts/time_attributes" >}}">declared event-time or processing-time time attribute</a>.</td>
     </tr>
     <tr>
       <td><code>alias</code></td>
@@ -1980,7 +1979,7 @@ A session window is defined by using the `Session` class as follows:
 
 ### Over Windows
 
-Over window aggregates are known from standard SQL (`OVER` clause) and defined in the `SELECT` clause of a query. Unlike group windows, which are specified in the `GROUP BY` clause, over windows do not collapse rows. Instead over window aggregates compute an aggregate for each input row over a range of its neighboring rows.
+Over window aggregates are known from standard SQL (`OVER` clause) and defined in the `SELECT` clause of a query. Unlike group windows, which are specified in the `GROUP BY` clause, over windows do not collapse rows. Instead, over window aggregates compute an aggregate for each input row over a range of its neighboring rows.
 
 Over windows are defined using the `window(w: OverWindow*)` clause (using `over_window(*OverWindow)` in Python API) and referenced via an alias in the `select()` method. The following example shows how to define an over window aggregation on a table.
 
@@ -2174,19 +2173,14 @@ The row-based operations generate outputs with multiple columns.
 Performs a map operation with a user-defined scalar function or built-in scalar function. The output will be flattened if the output type is a composite type.
 
 ```java
+@FunctionHint(input = @DataTypeHint("STRING"), output = @DataTypeHint("ROW<s1 STRING, s2 STRING>"))
 public class MyMapFunction extends ScalarFunction {
     public Row eval(String a) {
         return Row.of(a, "pre-" + a);
     }
-
-    @Override
-    public TypeInformation<?> getResultType(Class<?>[] signature) {
-        return Types.ROW(Types.STRING, Types.STRING);
-    }
 }
 
-ScalarFunction func = new MyMapFunction();
-tableEnv.registerFunction("func", func);
+tableEnv.createTemporarySystemFunction("func", MyMapFunction.class);
 
 Table table = input
   .map(call("func", $("c"))).as("a", "b");
@@ -2213,7 +2207,7 @@ val table = input
 {{< /tab >}}
 {{< tab "Python" >}}
 
-Performs a map operation with a python [general scalar function]({{< ref "docs/dev/python/table/udfs/python_udfs" >}}#scalar-functions) or [vectorized scalar function]({{< ref "docs/dev/python/table/udfs/vectorized_python_udfs" >}}#vectorized-scalar-functions). The output will be flattened if the output type is a composite type.
+Performs a map operation with a python [general scalar function]({{< ref "docs/dev/table/functions/python-udfs" >}}#scalar-functions) or [vectorized scalar function]({{< ref "docs/dev/table/functions/python-udfs" >}}#vectorized-scalar-functions). The output will be flattened if the output type is a composite type.
 
 ```python
 from pyflink.common import Row
@@ -2251,6 +2245,7 @@ table = input.map(pandas_func).alias('a', 'b')
 Performs a `flatMap` operation with a table function.
 
 ```java
+@FunctionHint(output = @DataTypeHint("ROW<s STRING, i INT>"))
 public class MyFlatMapFunction extends TableFunction<Row> {
 
     public void eval(String str) {
@@ -2261,15 +2256,9 @@ public class MyFlatMapFunction extends TableFunction<Row> {
             }
         }
     }
-
-    @Override
-    public TypeInformation<Row> getResultType() {
-        return Types.ROW(Types.STRING, Types.INT);
-    }
 }
 
-TableFunction func = new MyFlatMapFunction();
-tableEnv.registerFunction("func", func);
+tableEnv.createTemporarySystemFunction("func", MyFlatMapFunction.class);
 
 Table table = input
   .flatMap(call("func", $("c"))).as("a", "b");
@@ -2304,7 +2293,7 @@ val table = input
 {{< /tab >}}
 {{< tab "Python" >}}
 
-Performs a `flat_map` operation with a python [table function]({{< ref "docs/dev/python/table/udfs/python_udfs" >}}#table-functions).
+Performs a `flat_map` operation with a python [table function]({{< ref "docs/dev/table/functions/python-udfs" >}}#table-functions).
 
 ```python
 from pyflink.table.udf import udtf
@@ -2313,10 +2302,15 @@ from pyflink.common import Row
 
 @udtf(result_types=[DataTypes.INT(), DataTypes.STRING()])
 def split(x: Row) -> Row:
-    for s in x.b.split(","):
-        yield x.a, s
+    for s in x.data.split(","):
+        yield x.id, s
 
-input.flat_map(split)
+# use in flat_map
+table.flat_map(split)
+
+# the table function can also be used in join_lateral or left_outer_join_lateral
+table.join_lateral(split.alias('a', 'b'))
+table.left_outer_join_lateral(split.alias('a', 'b'))
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -2363,13 +2357,21 @@ public class MyMinMax extends AggregateFunction<Row, MyMinMaxAcc> {
     }
 
     @Override
-    public TypeInformation<Row> getResultType() {
-        return new RowTypeInfo(Types.INT, Types.INT);
+    public TypeInference getTypeInference(DataTypeFactory typeFactory) {
+        return TypeInference.newBuilder()
+                .typedArguments(DataTypes.INT())
+                .accumulatorTypeStrategy(
+                        TypeStrategies.explicit(
+                                DataTypes.STRUCTURED(
+                                        MyMinMaxAcc.class,
+                                        DataTypes.FIELD("min", DataTypes.INT()),
+                                        DataTypes.FIELD("max", DataTypes.INT()))))
+                .outputTypeStrategy(TypeStrategies.explicit(DataTypes.INT()))
+                .build();
     }
 }
 
-AggregateFunction myAggFunc = new MyMinMax();
-tableEnv.registerFunction("myAggFunc", myAggFunc);
+tableEnv.createTemporarySystemFunction("myAggFunc", MyMinMax.class);
 Table table = input
   .groupBy($("key"))
   .aggregate(call("myAggFunc", $("a")).as("x", "y"))
@@ -2405,9 +2407,17 @@ class MyMinMax extends AggregateFunction[Row, MyMinMaxAcc] {
     Row.of(Integer.valueOf(acc.min), Integer.valueOf(acc.max))
   }
 
-  override def getResultType: TypeInformation[Row] = {
-    new RowTypeInfo(Types.INT, Types.INT)
-  }
+  override def getTypeInference(typeFactory: DataTypeFactory): TypeInference =
+    TypeInference.newBuilder
+      .typedArguments(DataTypes.INT)
+      .accumulatorTypeStrategy(
+        TypeStrategies.explicit(
+          DataTypes.STRUCTURED(
+            classOf[MyMinMaxAcc],
+            DataTypes.FIELD("min", DataTypes.INT),
+            DataTypes.FIELD("max", DataTypes.INT))))
+      .outputTypeStrategy(TypeStrategies.explicit(DataTypes.INT))
+      .build
 }
 
 val myAggFunc = new MyMinMax
@@ -2419,7 +2429,7 @@ val table = input
 {{< /tab >}}
 {{< tab "Python" >}}
 
-Performs an aggregate operation with a python [general aggregate function]({{< ref "docs/dev/python/table/udfs/python_udfs" >}}#aggregate-functions) or [vectorized aggregate function]({{< ref "docs/dev/python/table/udfs/vectorized_python_udfs" >}}#vectorized-aggregate-functions). You have to close the "aggregate" with a select statement and the select statement does not support aggregate functions. The output of aggregate will be flattened if the output type is a composite type.
+Performs an aggregate operation with a python [general aggregate function]({{< ref "docs/dev/table/functions/python-udfs" >}}#aggregate-functions) or [vectorized aggregate function]({{< ref "docs/dev/table/functions/python-udfs" >}}#vectorized-aggregate-functions). You have to close the "aggregate" with a select statement and the select statement does not support aggregate functions. The output of aggregate will be flattened if the output type is a composite type.
 
 ```python
 from pyflink.common import Row
@@ -2490,8 +2500,7 @@ Groups and aggregates a table on a [group window](#group-window) and possibly on
 {{< tabs "group-window-agg" >}}
 {{< tab "Java" >}}
 ```java
-AggregateFunction myAggFunc = new MyMinMax();
-tableEnv.registerFunction("myAggFunc", myAggFunc);
+tableEnv.createTemporarySystemFunction("myAggFunc", MyMinMax.class);
 
 Table table = input
     .window(Tumble.over(lit(5).minutes())
@@ -2544,7 +2553,7 @@ t.select(col('b'), col('rowtime')) \
 
 Similar to a **GroupBy Aggregation**. Groups the rows on the grouping keys with the following running table aggregation operator to aggregate rows group-wise. The difference from an AggregateFunction is that TableAggregateFunction may return 0 or more records for a group. You have to close the "flatAggregate" with a select statement. And the select statement does not support aggregate functions.
 
-Instead of using emitValue to output results, you can also use the emitUpdateWithRetract method. Different from emitValue, emitUpdateWithRetract is used to emit values that have been updated. This method outputs data incrementally in retract mode, i.e., once there is an update, we have to retract old records before sending new updated ones. The emitUpdateWithRetract method will be used in preference to the emitValue method if both methods are defined in the table aggregate function, because the method is treated to be more efficient than emitValue as it can output values incrementally. 
+Instead of using `emitValue` to output results, you can also use the `emitUpdateWithRetract` method. Different from `emitValue`, `emitUpdateWithRetract` is used to emit values that have been updated. This method outputs data incrementally in retract mode, i.e., once there is an update, we have to retract old records before sending new updated ones. The emitUpdateWithRetract method will be used in preference to the emitValue method if both methods are defined in the table aggregate function, because the method is treated to be more efficient than emitValue as it can output values incrementally. 
 
 ```java
 /**
@@ -2596,7 +2605,7 @@ public class Top2 extends TableAggregateFunction<Tuple2<Integer, Integer>, Top2A
     }
 }
 
-tEnv.registerFunction("top2", new Top2());
+tEnv.createTemporarySystemFunction("top2", Top2.class);
 Table orders = tableEnv.from("Orders");
 Table result = orders
     .groupBy($("key"))
@@ -2608,12 +2617,12 @@ Table result = orders
 
 Similar to a **GroupBy Aggregation**. Groups the rows on the grouping keys with the following running table aggregation operator to aggregate rows group-wise. The difference from an AggregateFunction is that TableAggregateFunction may return 0 or more records for a group. You have to close the "flatAggregate" with a select statement. And the select statement does not support aggregate functions.
 
-Instead of using emitValue to output results, you can also use the emitUpdateWithRetract method. Different from emitValue, emitUpdateWithRetract is used to emit values that have been updated. This method outputs data incrementally in retract mode, i.e., once there is an update, we have to retract old records before sending new updated ones. The emitUpdateWithRetract method will be used in preference to the emitValue method if both methods are defined in the table aggregate function, because the method is treated to be more efficient than emitValue as it can output values incrementally. 
+Instead of using `emitValue` to output results, you can also use the `emitUpdateWithRetract` method. Different from `emitValue`, `emitUpdateWithRetract` is used to emit values that have been updated. This method outputs data incrementally in retract mode, i.e., once there is an update, we have to retract old records before sending new updated ones. The `emitUpdateWithRetract` method will be used in preference to the `emitValue` method if both methods are defined in the table aggregate function, because the method is treated to be more efficient than `emitValue` as it can output values incrementally. 
 
 ```scala
 import java.lang.{Integer => JInteger}
-import org.apache.flink.table.api.Types
 import org.apache.flink.table.functions.TableAggregateFunction
+import org.apache.flink.table.legacy.api.Types
 
 /**
  * Accumulator for top2.
@@ -2674,7 +2683,7 @@ val result = orders
 {{< /tab >}}
 {{< tab "Python" >}}
 
-Performs a flat_aggregate operation with a python general [Table Aggregate Function]({{< ref "docs/dev/python/table/udfs/python_udfs" >}}#table-aggregate-functions)
+Performs a flat_aggregate operation with a python general [Table Aggregate Function]({{< ref "docs/dev/table/functions/python-udfs" >}}#table-aggregate-functions)
 
 Similar to a **GroupBy Aggregation**. Groups the rows on the grouping keys with the following running table aggregation operator to aggregate rows group-wise. The difference from an AggregateFunction is that TableAggregateFunction may return 0 or more records for a group. You have to close the "flat_aggregate" with a select statement. And the select statement does not support aggregate functions.
 
@@ -2731,14 +2740,123 @@ result = t.select(col('a'), col('c')) \
 
 {{< query_state_warning >}}
 
+### Model Inference
+
+{{< label Streaming >}}
+
+The Table API supports model inference operations that allow you to integrate machine learning models directly into your data processing pipelines. You can create models with specific providers and use them to make inference on your data.
+
+#### Creating and Using Models
+
+Models are created using `ModelDescriptor` which specifies the provider, input/output schemas, and configuration options. Once created, you can use the model to make predictions on tables.
+
+{{< tabs "model-inference" >}}
+{{< tab "Java" >}}
+
+```java
+// 1. Set up the local environment
+EnvironmentSettings settings = EnvironmentSettings.inStreamingMode();
+TableEnvironment tEnv = TableEnvironment.create(settings);
+
+// 2. Create a source table from in-memory data
+Table myTable = tEnv.fromValues(
+    ROW(FIELD("text", STRING())),
+    row("Hello"),
+    row("Machine Learning"),
+    row("Good morning")
+);
+
+// 3. Create model
+tEnv.createModel(
+    "my_model",
+    ModelDescriptor.forProvider("openai")
+        .inputSchema(Schema.newBuilder().column("input", STRING()).build())
+        .outputSchema(Schema.newBuilder().column("output", STRING()).build())
+        .option("endpoint", "https://api.openai.com/v1/chat/completions")
+        .option("model", "gpt-4.1")
+        .option("system-prompt", "translate text to Chinese")
+        .option("api-key", "<your-openai-api-key-here>")
+        .build()
+);
+
+Model model = tEnv.fromModel("my_model");
+
+// 4. Use the model to translate text to Chinese
+Table predictResult = model.predict(myTable, ColumnList.of("text"));
+
+// 5. Async prediction example
+Table asyncPredictResult = model.predict(
+    myTable, 
+    ColumnList.of("text"), 
+    Map.of("async", "true")
+);
+```
+
+{{< /tab >}}
+{{< tab "Scala" >}}
+
+```scala
+// 1. Set up the local environment
+val settings = EnvironmentSettings.inStreamingMode()
+val tEnv = TableEnvironment.create(settings)
+
+// 2. Create a source table from in-memory data
+val myTable: Table = tEnv.fromValues(
+    ROW(FIELD("text", STRING())),
+    row("Hello"),
+    row("Machine Learning"),
+    row("Good morning")
+)
+
+// 3. Create model
+tEnv.createModel(
+    "my_model",
+    ModelDescriptor.forProvider("openai")
+        .inputSchema(Schema.newBuilder().column("input", STRING()).build())
+        .outputSchema(Schema.newBuilder().column("output", STRING()).build())
+        .option("endpoint", "https://api.openai.com/v1/chat/completions")
+        .option("model", "gpt-4.1")
+        .option("system-prompt", "translate to chinese")
+        .option("api-key", "<your-openai-api-key-here>")
+        .build()
+)
+
+val model = tEnv.fromModel("my_model")
+
+// 4. Use the model to translate text to Chinese
+val predictResult = model.predict(myTable, ColumnList.of("text"))
+
+// 5. Async prediction example
+val asyncPredictResult = model.predict(
+    myTable, 
+    ColumnList.of("text"), 
+    Map("async" -> "true").asJava
+)
+```
+
+{{< /tab >}}
+{{< tab "Python" >}}
+
+```python
+# Not yet supported in Python Table API
+```
+
+{{< /tab >}}
+{{< /tabs >}}
+
+Model inference supports both synchronous and asynchronous prediction modes (when supported by the underlying `ModelProvider` interface). 
+By default, the planner uses asynchronous mode to maximize throughput for high-latency models by processing multiple requests concurrently.
+
+{{< top >}}
+
 Data Types
 ----------
 
-Please see the dedicated page about [data types]({{< ref "docs/dev/table/types" >}}).
+Please see the dedicated page about [data types]({{< ref "docs/sql/reference/data-types" >}}).
 
 Generic types and (nested) composite types (e.g., POJOs, tuples, rows, Scala case classes) can be fields of a row as well.
 
-Fields of composite types with arbitrary nesting can be accessed with [value access functions]({{< ref "docs/dev/table/functions/systemFunctions" >}}#value-access-functions).
+Fields of composite types with arbitrary nesting can be accessed with [value access functions]({{< ref "docs/sql/functions/built-in-functions" >}}#value-access-functions).
 
 Generic types are treated as a black box and can be passed on or processed by [user-defined functions]({{< ref "docs/dev/table/functions/udfs" >}}).
 

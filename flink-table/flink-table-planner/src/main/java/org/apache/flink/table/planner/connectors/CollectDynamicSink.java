@@ -22,6 +22,8 @@ import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.configuration.MemorySize;
+import org.apache.flink.configuration.ReadableConfig;
+import org.apache.flink.configuration.RpcOptions;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSink;
@@ -39,6 +41,7 @@ import org.apache.flink.table.connector.RuntimeConverter;
 import org.apache.flink.table.connector.sink.DataStreamSinkProvider;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.planner.codegen.CodeGeneratorContext;
 import org.apache.flink.table.planner.functions.casting.RowDataToStringConverterImpl;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.DataType;
@@ -63,6 +66,7 @@ public final class CollectDynamicSink implements DynamicTableSink {
     private final ClassLoader classLoader;
     private final ZoneId sessionZoneId;
     private final boolean legacyCastBehaviour;
+    private final ReadableConfig config;
 
     // mutable attributes
     private CollectResultIterator<RowData> iterator;
@@ -75,7 +79,8 @@ public final class CollectDynamicSink implements DynamicTableSink {
             Duration socketTimeout,
             ClassLoader classLoader,
             ZoneId sessionZoneId,
-            boolean legacyCastBehaviour) {
+            boolean legacyCastBehaviour,
+            ReadableConfig config) {
         this.tableIdentifier = tableIdentifier;
         this.consumedDataType = consumedDataType;
         this.maxBatchSize = maxBatchSize;
@@ -83,12 +88,17 @@ public final class CollectDynamicSink implements DynamicTableSink {
         this.classLoader = classLoader;
         this.sessionZoneId = sessionZoneId;
         this.legacyCastBehaviour = legacyCastBehaviour;
+        this.config = config;
     }
 
     public ResultProvider getSelectResultProvider() {
         return new CollectResultProvider(
                 new RowDataToStringConverterImpl(
-                        consumedDataType, sessionZoneId, classLoader, legacyCastBehaviour));
+                        consumedDataType,
+                        sessionZoneId,
+                        classLoader,
+                        legacyCastBehaviour,
+                        new CodeGeneratorContext(config, classLoader)));
     }
 
     @Override
@@ -108,7 +118,7 @@ public final class CollectDynamicSink implements DynamicTableSink {
 
                 final TypeSerializer<RowData> externalSerializer =
                         InternalTypeInfo.<RowData>of(consumedDataType.getLogicalType())
-                                .createSerializer(config);
+                                .createSerializer(config.getSerializerConfig());
                 final String accumulatorName = tableIdentifier.getObjectName();
 
                 final CollectSinkOperatorFactory<RowData> factory =
@@ -116,19 +126,31 @@ public final class CollectDynamicSink implements DynamicTableSink {
                                 externalSerializer, accumulatorName, maxBatchSize, socketTimeout);
                 final CollectSinkOperator<RowData> operator =
                         (CollectSinkOperator<RowData>) factory.getOperator();
-
-                iterator =
-                        new CollectResultIterator<>(
-                                operator.getOperatorIdFuture(),
-                                externalSerializer,
-                                accumulatorName,
-                                checkpointConfig);
-                converter = context.createDataStructureConverter(consumedDataType);
-                converter.open(RuntimeConverter.Context.create(classLoader));
+                final long resultFetchTimeout =
+                        inputStream
+                                .getExecutionEnvironment()
+                                .getConfiguration()
+                                .get(RpcOptions.ASK_TIMEOUT_DURATION)
+                                .toMillis();
 
                 final CollectStreamSink<RowData> sink =
                         new CollectStreamSink<>(inputStream, factory);
-                providerContext.generateUid(COLLECT_TRANSFORMATION).ifPresent(sink::uid);
+                String operatorUid =
+                        providerContext
+                                .generateUid(COLLECT_TRANSFORMATION)
+                                .orElse("tableCollectSink_" + sink.getTransformation().getId());
+
+                iterator =
+                        new CollectResultIterator<>(
+                                operatorUid,
+                                externalSerializer,
+                                accumulatorName,
+                                checkpointConfig,
+                                resultFetchTimeout);
+                converter = context.createDataStructureConverter(consumedDataType);
+                converter.open(RuntimeConverter.Context.create(classLoader));
+
+                sink.uid(operatorUid);
                 return sink.name("Collect table sink");
             }
         };
@@ -143,7 +165,8 @@ public final class CollectDynamicSink implements DynamicTableSink {
                 socketTimeout,
                 classLoader,
                 sessionZoneId,
-                legacyCastBehaviour);
+                legacyCastBehaviour,
+                config);
     }
 
     @Override
@@ -197,6 +220,13 @@ public final class CollectDynamicSink implements DynamicTableSink {
             return (this.rowDataIterator != null && this.rowDataIterator.firstRowProcessed)
                     || (this.rowIterator != null && this.rowIterator.firstRowProcessed)
                     || iterator.hasNext();
+        }
+
+        @Override
+        public void reset() {
+            iterator = iterator.copy();
+            rowDataIterator = null;
+            rowIterator = null;
         }
     }
 

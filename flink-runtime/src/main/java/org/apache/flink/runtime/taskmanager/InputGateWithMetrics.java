@@ -22,6 +22,7 @@ import org.apache.flink.metrics.Counter;
 import org.apache.flink.runtime.checkpoint.channel.ChannelStateWriter;
 import org.apache.flink.runtime.checkpoint.channel.InputChannelInfo;
 import org.apache.flink.runtime.event.TaskEvent;
+import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
 import org.apache.flink.runtime.io.network.partition.consumer.BufferOrEvent;
 import org.apache.flink.runtime.io.network.partition.consumer.IndexedInputGate;
 import org.apache.flink.runtime.io.network.partition.consumer.InputChannel;
@@ -55,6 +56,10 @@ public class InputGateWithMetrics extends IndexedInputGate {
         return inputGate.getAvailableFuture();
     }
 
+    public void resumeGateConsumption() throws IOException {
+        inputGate.resumeGateConsumption();
+    }
+
     @Override
     public void resumeConsumption(InputChannelInfo channelInfo) throws IOException {
         inputGate.resumeConsumption(channelInfo);
@@ -86,6 +91,11 @@ public class InputGateWithMetrics extends IndexedInputGate {
     }
 
     @Override
+    public ResultPartitionType getConsumedPartitionType() {
+        return inputGate.getConsumedPartitionType();
+    }
+
+    @Override
     public void triggerDebloating() {
         inputGate.triggerDebloating();
     }
@@ -108,6 +118,11 @@ public class InputGateWithMetrics extends IndexedInputGate {
     @Override
     public CompletableFuture<Void> getStateConsumedFuture() {
         return inputGate.getStateConsumedFuture();
+    }
+
+    @Override
+    public CompletableFuture<Void> getBufferFilteringCompleteFuture() {
+        return inputGate.getBufferFilteringCompleteFuture();
     }
 
     @Override
@@ -148,6 +163,16 @@ public class InputGateWithMetrics extends IndexedInputGate {
     @Override
     public void finishReadRecoveredState() throws IOException {
         inputGate.finishReadRecoveredState();
+    }
+
+    @Override
+    public void setCheckpointingDuringRecoveryEnabled(boolean enabled) {
+        inputGate.setCheckpointingDuringRecoveryEnabled(enabled);
+    }
+
+    @Override
+    public boolean isCheckpointingDuringRecoveryEnabled() {
+        return inputGate.isCheckpointingDuringRecoveryEnabled();
     }
 
     private BufferOrEvent updateMetrics(BufferOrEvent bufferOrEvent) {

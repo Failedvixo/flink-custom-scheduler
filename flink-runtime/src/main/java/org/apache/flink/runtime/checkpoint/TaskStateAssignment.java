@@ -20,6 +20,9 @@ package org.apache.flink.runtime.checkpoint;
 import org.apache.flink.runtime.OperatorIDPair;
 import org.apache.flink.runtime.checkpoint.InflightDataRescalingDescriptor.InflightDataGateOrPartitionRescalingDescriptor;
 import org.apache.flink.runtime.checkpoint.InflightDataRescalingDescriptor.InflightDataGateOrPartitionRescalingDescriptor.MappingType;
+import org.apache.flink.runtime.checkpoint.channel.InputChannelInfo;
+import org.apache.flink.runtime.checkpoint.channel.ResultSubpartitionDistributor;
+import org.apache.flink.runtime.checkpoint.channel.ResultSubpartitionInfo;
 import org.apache.flink.runtime.executiongraph.ExecutionJobVertex;
 import org.apache.flink.runtime.executiongraph.IntermediateResult;
 import org.apache.flink.runtime.io.network.api.writer.SubtaskStateMapper;
@@ -28,6 +31,8 @@ import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.jobgraph.OperatorInstanceID;
 import org.apache.flink.runtime.state.InputChannelStateHandle;
 import org.apache.flink.runtime.state.KeyedStateHandle;
+import org.apache.flink.runtime.state.MergedInputChannelStateHandle;
+import org.apache.flink.runtime.state.MergedResultSubpartitionStateHandle;
 import org.apache.flink.runtime.state.OperatorStateHandle;
 import org.apache.flink.runtime.state.ResultSubpartitionStateHandle;
 import org.apache.flink.runtime.state.StateObject;
@@ -39,7 +44,9 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -48,9 +55,12 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static java.util.Collections.emptySet;
+import static org.apache.flink.runtime.state.ChannelStateHelper.castToInputStateCollection;
+import static org.apache.flink.runtime.state.ChannelStateHelper.castToOutputStateCollection;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 import static org.apache.flink.util.Preconditions.checkState;
 
@@ -65,11 +75,15 @@ class TaskStateAssignment {
     final Map<OperatorID, OperatorState> oldState;
     final boolean hasNonFinishedState;
     final boolean isFullyFinished;
-    final boolean hasInputState;
-    final boolean hasOutputState;
     final int newParallelism;
     final OperatorID inputOperatorID;
     final OperatorID outputOperatorID;
+
+    /** The InputGate set that containing input buffer state. */
+    private final Set<Integer> inputStateGates;
+
+    /** The ResultPartition set that containing input buffer state. */
+    private final Set<Integer> outputStatePartitions;
 
     final Map<OperatorInstanceID, List<OperatorStateHandle>> subManagedOperatorState;
     final Map<OperatorInstanceID, List<OperatorStateHandle>> subRawOperatorState;
@@ -78,10 +92,26 @@ class TaskStateAssignment {
 
     final Map<OperatorInstanceID, List<InputChannelStateHandle>> inputChannelStates;
     final Map<OperatorInstanceID, List<ResultSubpartitionStateHandle>> resultSubpartitionStates;
+
+    /**
+     * Stores input channel states that come from upstream task's output buffers. It takes effect
+     * when {@link
+     * org.apache.flink.configuration.CheckpointingOptions#UNALIGNED_RECOVER_OUTPUT_ON_DOWNSTREAM}
+     * is enabled.
+     */
+    private final Map<OperatorInstanceID, List<InputChannelStateHandle>> upstreamOutputBufferStates;
+
     /** The subtask mapping when the output operator was rescaled. */
     private final Map<Integer, SubtasksRescaleMapping> outputSubtaskMappings = new HashMap<>();
+
     /** The subtask mapping when the input operator was rescaled. */
     private final Map<Integer, SubtasksRescaleMapping> inputSubtaskMappings = new HashMap<>();
+
+    /** InflightDataRescalingDescriptor for each subtask. */
+    private final Map<OperatorInstanceID, InflightDataRescalingDescriptor>
+            outputRescalingDescriptors = new HashMap<>();
+
+    private final boolean recoverOutputOnDownstreamTask;
 
     @Nullable private TaskStateAssignment[] downstreamAssignments;
     @Nullable private TaskStateAssignment[] upstreamAssignments;
@@ -95,7 +125,8 @@ class TaskStateAssignment {
             ExecutionJobVertex executionJobVertex,
             Map<OperatorID, OperatorState> oldState,
             Map<IntermediateDataSetID, TaskStateAssignment> consumerAssignment,
-            Map<ExecutionJobVertex, TaskStateAssignment> vertexAssignments) {
+            Map<ExecutionJobVertex, TaskStateAssignment> vertexAssignments,
+            boolean recoverOutputOnDownstreamTask) {
 
         this.executionJobVertex = executionJobVertex;
         this.oldState = oldState;
@@ -112,6 +143,7 @@ class TaskStateAssignment {
         newParallelism = executionJobVertex.getParallelism();
         this.consumerAssignment = checkNotNull(consumerAssignment);
         this.vertexAssignments = checkNotNull(vertexAssignments);
+        this.recoverOutputOnDownstreamTask = recoverOutputOnDownstreamTask;
         final int expectedNumberOfSubtasks = newParallelism * oldState.size();
 
         subManagedOperatorState =
@@ -120,6 +152,8 @@ class TaskStateAssignment {
         inputChannelStates = CollectionUtil.newHashMapWithExpectedSize(expectedNumberOfSubtasks);
         resultSubpartitionStates =
                 CollectionUtil.newHashMapWithExpectedSize(expectedNumberOfSubtasks);
+        upstreamOutputBufferStates =
+                CollectionUtil.newHashMapWithExpectedSize(expectedNumberOfSubtasks);
         subManagedKeyedState = CollectionUtil.newHashMapWithExpectedSize(expectedNumberOfSubtasks);
         subRawKeyedState = CollectionUtil.newHashMapWithExpectedSize(expectedNumberOfSubtasks);
 
@@ -127,12 +161,63 @@ class TaskStateAssignment {
         outputOperatorID = operatorIDs.get(0).getGeneratedOperatorID();
         inputOperatorID = operatorIDs.get(operatorIDs.size() - 1).getGeneratedOperatorID();
 
-        hasInputState =
-                oldState.get(inputOperatorID).getStates().stream()
-                        .anyMatch(subState -> !subState.getInputChannelState().isEmpty());
-        hasOutputState =
-                oldState.get(outputOperatorID).getStates().stream()
-                        .anyMatch(subState -> !subState.getResultSubpartitionState().isEmpty());
+        inputStateGates = extractInputStateGates(oldState.get(inputOperatorID));
+        outputStatePartitions = extractOutputStatePartitions(oldState.get(outputOperatorID));
+    }
+
+    private static Set<Integer> extractInputStateGates(OperatorState operatorState) {
+        return operatorState.getStates().stream()
+                .map(OperatorSubtaskState::getInputChannelState)
+                .flatMap(Collection::stream)
+                .flatMapToInt(
+                        handle -> {
+                            if (handle instanceof InputChannelStateHandle) {
+                                return IntStream.of(
+                                        ((InputChannelStateHandle) handle).getInfo().getGateIdx());
+                            } else if (handle instanceof MergedInputChannelStateHandle) {
+                                return ((MergedInputChannelStateHandle) handle)
+                                        .getInfos().stream().mapToInt(InputChannelInfo::getGateIdx);
+                            } else {
+                                throw new IllegalStateException(
+                                        "Invalid input channel state : " + handle.getClass());
+                            }
+                        })
+                .distinct()
+                .boxed()
+                .collect(Collectors.toSet());
+    }
+
+    private static Set<Integer> extractOutputStatePartitions(OperatorState operatorState) {
+        return operatorState.getStates().stream()
+                .map(OperatorSubtaskState::getResultSubpartitionState)
+                .flatMap(Collection::stream)
+                .flatMapToInt(
+                        handle -> {
+                            if (handle instanceof ResultSubpartitionStateHandle) {
+                                return IntStream.of(
+                                        ((ResultSubpartitionStateHandle) handle)
+                                                .getInfo()
+                                                .getPartitionIdx());
+                            } else if (handle instanceof MergedResultSubpartitionStateHandle) {
+                                return ((MergedResultSubpartitionStateHandle) handle)
+                                        .getInfos().stream()
+                                                .mapToInt(ResultSubpartitionInfo::getPartitionIdx);
+                            } else {
+                                throw new IllegalStateException(
+                                        "Invalid output channel state : " + handle.getClass());
+                            }
+                        })
+                .distinct()
+                .boxed()
+                .collect(Collectors.toSet());
+    }
+
+    public boolean hasInputState() {
+        return !inputStateGates.isEmpty();
+    }
+
+    public boolean hasOutputState() {
+        return !outputStatePartitions.isEmpty();
     }
 
     public TaskStateAssignment[] getDownstreamAssignments() {
@@ -166,17 +251,22 @@ class TaskStateAssignment {
                         || !subRawKeyedState.containsKey(instanceID),
                 "If an operator has no managed key state, it should also not have a raw keyed state.");
 
-        final StateObjectCollection<InputChannelStateHandle> inputState =
-                getState(instanceID, inputChannelStates);
-        final StateObjectCollection<ResultSubpartitionStateHandle> outputState =
-                getState(instanceID, resultSubpartitionStates);
         return OperatorSubtaskState.builder()
                 .setManagedOperatorState(getState(instanceID, subManagedOperatorState))
                 .setRawOperatorState(getState(instanceID, subRawOperatorState))
                 .setManagedKeyedState(getState(instanceID, subManagedKeyedState))
                 .setRawKeyedState(getState(instanceID, subRawKeyedState))
-                .setInputChannelState(inputState)
-                .setResultSubpartitionState(outputState)
+                .setInputChannelState(
+                        castToInputStateCollection(inputChannelStates.get(instanceID)))
+                .setUpstreamOutputBufferState(
+                        new StateObjectCollection<>(upstreamOutputBufferStates.get(instanceID)))
+                .setResultSubpartitionState(
+                        // If recoverOutputOnDownstreamTask is enabled, clear own output buffers as
+                        // they are migrated to downstream
+                        recoverOutputOnDownstreamTask
+                                ? castToOutputStateCollection(null)
+                                : castToOutputStateCollection(
+                                        resultSubpartitionStates.get(instanceID)))
                 .setInputRescalingDescriptor(
                         createRescalingDescriptor(
                                 instanceID,
@@ -189,20 +279,9 @@ class TaskStateAssignment {
                                     return assignment.getOutputMapping(assignmentIndex, recompute);
                                 },
                                 inputSubtaskMappings,
-                                this::getInputMapping))
-                .setOutputRescalingDescriptor(
-                        createRescalingDescriptor(
-                                instanceID,
-                                outputOperatorID,
-                                getDownstreamAssignments(),
-                                (assignment, recompute) -> {
-                                    int assignmentIndex =
-                                            getAssignmentIndex(
-                                                    assignment.getUpstreamAssignments(), this);
-                                    return assignment.getInputMapping(assignmentIndex, recompute);
-                                },
-                                outputSubtaskMappings,
-                                this::getOutputMapping))
+                                this::getInputMapping,
+                                true))
+                .setOutputRescalingDescriptor(getOutputRescalingDescriptor(instanceID))
                 .build();
     }
 
@@ -210,7 +289,7 @@ class TaskStateAssignment {
         if (hasUpstreamOutputStates == null) {
             hasUpstreamOutputStates =
                     Arrays.stream(getUpstreamAssignments())
-                            .anyMatch(assignment -> assignment.hasOutputState);
+                            .anyMatch(TaskStateAssignment::hasOutputState);
         }
         return hasUpstreamOutputStates;
     }
@@ -219,9 +298,36 @@ class TaskStateAssignment {
         if (hasDownstreamInputStates == null) {
             hasDownstreamInputStates =
                     Arrays.stream(getDownstreamAssignments())
-                            .anyMatch(assignment -> assignment.hasInputState);
+                            .anyMatch(TaskStateAssignment::hasInputState);
         }
         return hasDownstreamInputStates;
+    }
+
+    /**
+     * Gets the output rescaling descriptor for a specific instance with caching. Each descriptor is
+     * computed only once and cached for subsequent access.
+     */
+    public InflightDataRescalingDescriptor getOutputRescalingDescriptor(
+            OperatorInstanceID instanceID) {
+        return outputRescalingDescriptors.computeIfAbsent(
+                instanceID, this::computeOutputRescalingDescriptor);
+    }
+
+    /** Computes the output rescaling descriptor for a single subtask. */
+    private InflightDataRescalingDescriptor computeOutputRescalingDescriptor(
+            OperatorInstanceID instanceID) {
+        return createRescalingDescriptor(
+                instanceID,
+                outputOperatorID,
+                getDownstreamAssignments(),
+                (downstreamAssignment, recompute) -> {
+                    int assignmentIndex =
+                            getAssignmentIndex(downstreamAssignment.getUpstreamAssignments(), this);
+                    return downstreamAssignment.getInputMapping(assignmentIndex, recompute);
+                },
+                outputSubtaskMappings,
+                this::getOutputMapping,
+                false);
     }
 
     private InflightDataGateOrPartitionRescalingDescriptor log(
@@ -251,7 +357,8 @@ class TaskStateAssignment {
             TaskStateAssignment[] connectedAssignments,
             BiFunction<TaskStateAssignment, Boolean, SubtasksRescaleMapping> mappingRetriever,
             Map<Integer, SubtasksRescaleMapping> subtaskGateOrPartitionMappings,
-            Function<Integer, SubtasksRescaleMapping> subtaskMappingCalculator) {
+            Function<Integer, SubtasksRescaleMapping> subtaskMappingCalculator,
+            boolean isInput) {
         if (!expectedOperatorID.equals(instanceID.getOperatorId())) {
             return InflightDataRescalingDescriptor.NO_RESCALE;
         }
@@ -274,7 +381,8 @@ class TaskStateAssignment {
                         assignment -> mappingRetriever.apply(assignment, true),
                         subtaskGateOrPartitionMappings,
                         subtaskMappingCalculator,
-                        rescaledChannelsMappings);
+                        rescaledChannelsMappings,
+                        isInput);
 
         if (Arrays.stream(gateOrPartitionDescriptors)
                 .allMatch(InflightDataGateOrPartitionRescalingDescriptor::isIdentity)) {
@@ -293,10 +401,14 @@ class TaskStateAssignment {
                     Function<TaskStateAssignment, SubtasksRescaleMapping> mappingCalculator,
                     Map<Integer, SubtasksRescaleMapping> subtaskGateOrPartitionMappings,
                     Function<Integer, SubtasksRescaleMapping> subtaskMappingCalculator,
-                    SubtasksRescaleMapping[] rescaledChannelsMappings) {
+                    SubtasksRescaleMapping[] rescaledChannelsMappings,
+                    boolean isInput) {
         return IntStream.range(0, rescaledChannelsMappings.length)
                 .mapToObj(
                         partition -> {
+                            if (!hasInFlightData(isInput, partition)) {
+                                return InflightDataGateOrPartitionRescalingDescriptor.NO_STATE;
+                            }
                             TaskStateAssignment connectedAssignment =
                                     connectedAssignments[partition];
                             SubtasksRescaleMapping rescaleMapping =
@@ -316,6 +428,14 @@ class TaskStateAssignment {
                                     instanceID, partition, rescaleMapping, subtaskMapping);
                         })
                 .toArray(InflightDataGateOrPartitionRescalingDescriptor[]::new);
+    }
+
+    private boolean hasInFlightData(boolean isInput, int gateOrPartitionIndex) {
+        if (isInput) {
+            return hasInFlightDataForInputGate(gateOrPartitionIndex);
+        } else {
+            return hasInFlightDataForResultPartition(gateOrPartitionIndex);
+        }
     }
 
     private InflightDataGateOrPartitionRescalingDescriptor
@@ -416,6 +536,123 @@ class TaskStateAssignment {
                         checkSubtaskMapping(oldMapping, mapping, mapper.isAmbiguous()));
     }
 
+    public boolean hasInFlightDataForInputGate(int gateIndex) {
+        // Check own input state for this gate
+        if (inputStateGates.contains(gateIndex)) {
+            return true;
+        }
+
+        // Check upstream output state for this gate
+        TaskStateAssignment upstreamAssignment = getUpstreamAssignments()[gateIndex];
+        if (upstreamAssignment != null && upstreamAssignment.hasOutputState()) {
+            IntermediateResult inputResult = executionJobVertex.getInputs().get(gateIndex);
+            IntermediateDataSetID resultId = inputResult.getId();
+            IntermediateResult[] producedDataSets = inputResult.getProducer().getProducedDataSets();
+            for (int i = 0; i < producedDataSets.length; i++) {
+                if (producedDataSets[i].getId().equals(resultId)) {
+                    return upstreamAssignment.outputStatePartitions.contains(i);
+                }
+            }
+        }
+
+        return false;
+    }
+
+    public boolean hasInFlightDataForResultPartition(int partitionIndex) {
+        // Check own output state for this partition
+        if (outputStatePartitions.contains(partitionIndex)) {
+            return true;
+        }
+
+        // Check downstream input state for this partition
+        TaskStateAssignment downstreamAssignment = getDownstreamAssignments()[partitionIndex];
+
+        if (downstreamAssignment != null && downstreamAssignment.hasInputState()) {
+            IntermediateResult producedResult =
+                    executionJobVertex.getProducedDataSets()[partitionIndex];
+            IntermediateDataSetID resultId = producedResult.getId();
+            List<IntermediateResult> inputs = downstreamAssignment.executionJobVertex.getInputs();
+            for (int i = 0; i < inputs.size(); i++) {
+                if (inputs.get(i).getId().equals(resultId)) {
+                    return downstreamAssignment.inputStateGates.contains(i);
+                }
+            }
+        }
+        return false;
+    }
+
+    void distributeOutputBuffersToDownstream() {
+        for (Map.Entry<OperatorInstanceID, List<ResultSubpartitionStateHandle>> entry :
+                resultSubpartitionStates.entrySet()) {
+            OperatorInstanceID operatorInstanceID = entry.getKey();
+            List<ResultSubpartitionStateHandle> stateHandles = entry.getValue();
+
+            ResultSubpartitionDistributor distributor =
+                    new ResultSubpartitionDistributor(
+                            getOutputRescalingDescriptor(operatorInstanceID));
+
+            for (final ResultSubpartitionStateHandle stateHandle : stateHandles) {
+                distributeOutputBufferToDownstream(stateHandle, distributor);
+            }
+        }
+    }
+
+    private void distributeOutputBufferToDownstream(
+            ResultSubpartitionStateHandle stateHandle, ResultSubpartitionDistributor distributor) {
+        // From the perspective of the downstream task, the oldUpstreamSubtaskIndex will be
+        // treated as the inputChannelIdx, and the info.getSubPartitionIdx() will be treated
+        // as the oldDownstreamSubtaskIndex.
+        int oldUpstreamSubtaskIndex = stateHandle.getSubtaskIndex();
+        ResultSubpartitionInfo info = stateHandle.getInfo();
+        int partitionIdx = info.getPartitionIdx();
+        int oldDownstreamSubtaskIndex = info.getSubPartitionIdx();
+
+        int gateIdxResultPartition = findInputGateIdxForResultPartition(partitionIdx);
+        TaskStateAssignment downstreamAssignment = getDownstreamAssignments()[partitionIdx];
+
+        List<ResultSubpartitionInfo> mappedSubpartitions = distributor.getMappedSubpartitions(info);
+        for (final ResultSubpartitionInfo mappedSubpartition : mappedSubpartitions) {
+            int targetDownstreamSubtaskId = mappedSubpartition.getSubPartitionIdx();
+
+            OperatorInstanceID downstreamOperatorInstance =
+                    new OperatorInstanceID(
+                            targetDownstreamSubtaskId, downstreamAssignment.inputOperatorID);
+
+            InputChannelInfo inputChannelInfo =
+                    new InputChannelInfo(gateIdxResultPartition, oldUpstreamSubtaskIndex);
+
+            InputChannelStateHandle upstreamOutputBufferHandle =
+                    new InputChannelStateHandle(
+                            oldDownstreamSubtaskIndex,
+                            inputChannelInfo,
+                            stateHandle.getDelegate(),
+                            stateHandle.getOffsets(),
+                            stateHandle.getStateSize());
+
+            List<InputChannelStateHandle> upstreamOutputBufferHandles =
+                    downstreamAssignment.upstreamOutputBufferStates.computeIfAbsent(
+                            downstreamOperatorInstance, k -> new ArrayList<>());
+            upstreamOutputBufferHandles.add(upstreamOutputBufferHandle);
+        }
+    }
+
+    private int findInputGateIdxForResultPartition(int partitionIndex) {
+        // Check downstream input state for this partition
+        TaskStateAssignment downstreamAssignment = getDownstreamAssignments()[partitionIndex];
+
+        IntermediateResult producedResult =
+                executionJobVertex.getProducedDataSets()[partitionIndex];
+        IntermediateDataSetID resultId = producedResult.getId();
+        List<IntermediateResult> inputs = downstreamAssignment.executionJobVertex.getInputs();
+        for (int i = 0; i < inputs.size(); i++) {
+            if (inputs.get(i).getId().equals(resultId)) {
+                return i;
+            }
+        }
+        throw new IllegalArgumentException(
+                "No channel rescaler found during rescaling of channel state");
+    }
+
     @Override
     public String toString() {
         return "TaskStateAssignment for " + executionJobVertex.getName();
@@ -444,6 +681,7 @@ class TaskStateAssignment {
 
     static class SubtasksRescaleMapping {
         private final RescaleMappings rescaleMappings;
+
         /**
          * If channel data cannot be safely divided into subtasks (several new subtask indexes are
          * associated with the same old subtask index). Mostly used for range partitioners.
