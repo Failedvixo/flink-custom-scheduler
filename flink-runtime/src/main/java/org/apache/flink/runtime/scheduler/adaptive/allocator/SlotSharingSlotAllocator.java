@@ -158,14 +158,29 @@ public class SlotSharingSlotAllocator implements SlotAllocator {
         return determineParallelism(jobInformation, slots)
                 .map(
                         parallelism -> {
-                            SlotAssigner slotAssigner =
-                                    localRecoveryEnabled && !jobAllocationsInformation.isEmpty()
-                                            ? new StateLocalitySlotAssigner(slotSharingResolver)
-                                            : new DefaultSlotAssigner(
-                                                    executionTarget,
-                                                    minimalTaskManagerPreferred,
-                                                    slotSharingResolver,
-                                                    slotMatchingResolver);
+                            final SlotAssigner slotAssigner;
+                            if (ThesisSlotAssigner.isEnabled()) {
+                                // Thesis fork: route placement through the custom assigner when
+                                // enabled via THESIS_SLOT_ASSIGNER; otherwise keep default
+                                // behaviour. It receives what the built-in assigners receive so it
+                                // can build the same slices and delegate faithfully for STOCK.
+                                slotAssigner =
+                                        new ThesisSlotAssigner(
+                                                executionTarget,
+                                                minimalTaskManagerPreferred,
+                                                slotSharingResolver,
+                                                slotMatchingResolver,
+                                                localRecoveryEnabled);
+                            } else if (localRecoveryEnabled && !jobAllocationsInformation.isEmpty()) {
+                                slotAssigner = new StateLocalitySlotAssigner(slotSharingResolver);
+                            } else {
+                                slotAssigner =
+                                        new DefaultSlotAssigner(
+                                                executionTarget,
+                                                minimalTaskManagerPreferred,
+                                                slotSharingResolver,
+                                                slotMatchingResolver);
+                            }
                             return new JobSchedulingPlan(
                                     parallelism,
                                     slotAssigner.assignSlots(
