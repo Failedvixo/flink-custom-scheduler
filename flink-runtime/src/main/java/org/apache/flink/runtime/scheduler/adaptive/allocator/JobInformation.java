@@ -25,6 +25,7 @@ import org.apache.flink.runtime.scheduler.VertexParallelismStore;
 import javax.annotation.Nullable;
 
 import java.util.Collection;
+import java.util.Collections;
 
 /** Information about the job. */
 public interface JobInformation {
@@ -54,6 +55,42 @@ public interface JobInformation {
 
     default VertexParallelismStore getVertexParallelismStore() {
         throw new UnsupportedOperationException();
+    }
+
+    /**
+     * The all-to-all edges of the job: pairs of (producer, consumer) job vertices connected by a
+     * shuffle rather than a forward.
+     *
+     * <p>Added by the thesis fork. Slot sharing already co-locates one subtask of every vertex in a
+     * sharing group, so a POINTWISE edge never leaves its slice and costs no network at all. Only
+     * ALL_TO_ALL edges make slices talk to each other, and there every pair exchanges roughly the
+     * same volume — which is what turns "minimise communication" into "minimise how many slice pairs
+     * sit on different TaskManagers".
+     *
+     * <p>Defaulted to empty so the test doubles in this package, and any other implementation, keep
+     * compiling; the real one is {@code JobGraphJobInformation}, which has the JobGraph.
+     */
+    default Collection<ShuffleEdge> getShuffleEdges() {
+        return Collections.emptyList();
+    }
+
+    /** One ALL_TO_ALL connection between two job vertices. */
+    final class ShuffleEdge {
+        private final JobVertexID producer;
+        private final JobVertexID consumer;
+
+        public ShuffleEdge(JobVertexID producer, JobVertexID consumer) {
+            this.producer = producer;
+            this.consumer = consumer;
+        }
+
+        public JobVertexID getProducer() {
+            return producer;
+        }
+
+        public JobVertexID getConsumer() {
+            return consumer;
+        }
     }
 
     /** Information about a single vertex. */

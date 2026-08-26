@@ -172,6 +172,25 @@ public class ThesisSlotAssigner implements SlotAssigner {
          */
         LPT,
         /**
+         * Fill TaskManagers one at a time, fastest first, instead of spreading across them.
+         *
+         * <p>A probe, not a serious policy. With slot sharing a slice already co-locates one subtask
+         * of every vertex in the sharing group, so the only communication left between slices is the
+         * all-to-all shuffle — where traffic between any two slices is roughly equal, and the only
+         * lever is how many slice PAIRS end up on different machines. Packing minimises that; every
+         * other arm here maximises it.
+         *
+         * <p>Exists to answer one question before a full communication term is worth building: in a
+         * regime where capacity does NOT bind, does concentrating slices measurably help? If it does,
+         * inter-TaskManager traffic is worth modelling (SP-Ant, Farrokh et al. 2022, makes it half of
+         * its objective). If packing merely ties, this testbed has no communication cost to trade
+         * against balance and the term would be a day spent on nothing.
+         *
+         * <p>Fastest-first so that packing does not ALSO destroy capacity, which would confound the
+         * measurement with the effect the other arms already isolate.
+         */
+        PACK,
+        /**
          * Ant Colony Optimisation over the balance-vs-state-locality cost in {@link
          * PlacementInstance}. Unlike the three arms above it optimises a trade-off rather than a
          * single objective, which is what gives the meta-scheduler something to choose between.
@@ -229,6 +248,14 @@ public class ThesisSlotAssigner implements SlotAssigner {
      * comparable and only a run that opts in changes objective.
      */
     private static final String ENV_BALANCE_METRIC = "THESIS_COST_BALANCE_METRIC";
+
+    /**
+     * Weight of the communication term — how much a placement is penalised for spreading slices
+     * that shuffle to each other across TaskManagers. Zero by default, so the cost keeps the exact
+     * meaning it had in every campaign run before the term existed; only a run that opts in changes
+     * objective.
+     */
+    private static final String ENV_COMMUNICATION_WEIGHT = "THESIS_COST_COMMUNICATION";
 
     private static final String ENV_BALANCE_WEIGHT = "THESIS_COST_BALANCE";
     private static final String ENV_LOCALITY_WEIGHT = "THESIS_COST_LOCALITY";
@@ -490,6 +517,9 @@ public class ThesisSlotAssigner implements SlotAssigner {
                 assignments = assignLongestProcessingTimeFirst(
                         allGroups, groupSlotsByTaskManager(freeSlots));
                 break;
+            case PACK:
+                assignments = assignPacked(allGroups, groupSlotsByTaskManager(freeSlots));
+                break;
             case ACO:
             case GA:
                 assignments =
@@ -616,6 +646,27 @@ public class ThesisSlotAssigner implements SlotAssigner {
         return assignments;
     }
 
+    /**
+     * The communication weight, defaulting to 0 rather than to 1 like the other two. The term did
+     * not exist when the earlier campaigns ran, and defaulting it on would silently change what
+     * ACO and GA optimise.
+     */
+    private static double communicationWeight() {
+        final String raw =
+                System.getProperty(
+                        ENV_COMMUNICATION_WEIGHT.toLowerCase().replace('_', '.'),
+                        System.getenv(ENV_COMMUNICATION_WEIGHT));
+        if (raw == null || raw.trim().isEmpty()) {
+            return 0.0;
+        }
+        try {
+            return Double.parseDouble(raw.trim());
+        } catch (NumberFormatException e) {
+            LOG.warn("[THESIS_ASSIGN] unreadable {}='{}', using 0.0", ENV_COMMUNICATION_WEIGHT, raw.trim());
+            return 0.0;
+        }
+    }
+
     /** The published TaskManager speeds keyed by resource id, or an empty map. */
     private static Map<String, Double> publishedTaskManagerSpeeds() {
         return publishedValues(
@@ -630,6 +681,39 @@ public class ThesisSlotAssigner implements SlotAssigner {
                         ENV_BALANCE_METRIC.toLowerCase().replace('_', '.'),
                         System.getenv(ENV_BALANCE_METRIC));
         return raw != null && "MAKESPAN".equalsIgnoreCase(raw.trim());
+    }
+
+    /**
+     * Fill each TaskManager to capacity before moving to the next, taking the fastest first.
+     *
+     * <p>The inverse of every other arm: it minimises the number of TaskManagers in play, and
+     * therefore the number of slice pairs whose shuffle traffic has to cross a Netty connection
+     * rather than stay in a local channel.
+     */
+    private static Collection<SlotAssignment> assignPacked(
+            List<ExecutionSlotSharingGroup> groups, List<TaskManagerSlots> taskManagers) {
+        final double[] speeds = taskManagerSpeeds(taskManagers);
+        final Integer[] order = new Integer[taskManagers.size()];
+        for (int t = 0; t < order.length; t++) {
+            order[t] = t;
+        }
+        // Descending speed; the index tie-break keeps equal machines in their stable order, so the
+        // placement is reproducible across the scheduler's speculative re-asks.
+        Arrays.sort(
+                order,
+                (a, b) -> speeds[a] != speeds[b] ? Double.compare(speeds[b], speeds[a]) : Integer.compare(a, b));
+
+        final Collection<SlotAssignment> assignments = new ArrayList<>(groups.size());
+        int cursor = 0;
+        for (ExecutionSlotSharingGroup group : groups) {
+            while (cursor < order.length && !taskManagers.get(order[cursor]).hasFreeSlot()) {
+                cursor++;
+            }
+            final TaskManagerSlots target =
+                    cursor < order.length ? taskManagers.get(order[cursor]) : null;
+            assignments.add(new SlotAssignment(takeSlot(target, group), group));
+        }
+        return assignments;
     }
 
     /** Published slice loads, or an all-ones vector when nothing is published. */
@@ -682,7 +766,9 @@ public class ThesisSlotAssigner implements SlotAssigner {
                         weightOf(ENV_LOCALITY_WEIGHT),
                         sliceLoads(groups),
                         publishedTaskManagerSpeeds(),
-                        useMakespanBalance());
+                        useMakespanBalance(),
+                        communicationWeight(),
+                        !jobInformation.getShuffleEdges().isEmpty());
 
         final int[] placement =
                 strategy == Strategy.ACO

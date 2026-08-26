@@ -216,6 +216,107 @@ class ThesisSlotAssignerTest {
     }
 
     /**
+     * PACK is the inverse of every other arm: it fills the fastest TaskManager before touching the
+     * next, so four slices over three two-slot machines occupy two of them rather than all three.
+     */
+    @Test
+    void packFillsTheFastestTaskManagerFirst(@TempDir Path tempDir) throws IOException {
+        publishSpeeds(tempDir, TM_A, 1.0, TM_B, 2.0, TM_C, 4.0);
+        final List<PhysicalSlot> freeSlots = slotsOf(TM_A, 2, TM_B, 2, TM_C, 2);
+
+        assertThat(spreadOf(assign(Strategy.PACK, 4, freeSlots)))
+                .as("fastest filled first, then the next fastest")
+                .containsEntry(TM_C, 2)
+                .containsEntry(TM_B, 2)
+                .doesNotContainKey(TM_A);
+        assertThat(spreadOf(assign(Strategy.LPT, 4, freeSlots)))
+                .as("LPT spreads over all three, which is what PACK exists to contrast with")
+                .containsOnlyKeys(TM_A, TM_B, TM_C);
+    }
+
+    /** With nothing published every machine is nominal, so PACK falls back to the stable ordering. */
+    @Test
+    void packWithoutPublishedSpeedsUsesTheStableOrdering() {
+        final List<PhysicalSlot> freeSlots = slotsOf(TM_A, 2, TM_B, 2, TM_C, 2);
+
+        assertThat(spreadOf(assign(Strategy.PACK, 3, freeSlots)))
+                .containsEntry(TM_A, 2)
+                .containsEntry(TM_B, 1);
+    }
+
+    /**
+     * The communication term prefers placements that keep shuffling slices together.
+     *
+     * <p>Asserted on the cost directly rather than through an arm, because the point is the
+     * OBJECTIVE, not any particular search over it: with the term switched on, four slices on one
+     * TaskManager must cost less than four slices split across two, and with it off the two must be
+     * indistinguishable. That difference is the whole reason ACO and GA have anything to optimise
+     * that a capacity-greedy does not.
+     */
+    @Test
+    void communicationTermPrefersKeepingShufflingSlicesTogether() {
+        final SlotSharingGroup slotSharingGroup = new SlotSharingGroup();
+        final JobVertexID vertexId = new JobVertexID();
+        final List<TestVertexInformation> vertices =
+                Collections.singletonList(new TestVertexInformation(vertexId, 4, slotSharingGroup));
+        final JobInformation jobInformation = new TestJobInformation(vertices);
+        final Map<JobVertexID, Integer> parallelism = new HashMap<>();
+        parallelism.put(vertexId, 4);
+
+        final List<SlotSharingSlotAllocator.ExecutionSlotSharingGroup> groups =
+                new ArrayList<>(
+                        DefaultSlotSharingResolver.INSTANCE.getExecutionSlotSharingGroups(
+                                jobInformation, new VertexParallelism(parallelism)));
+        final List<PhysicalSlot> slots = slotsOf(TM_A, 4, TM_B, 4);
+
+        // Balance and locality zeroed so the only thing being read is the communication term.
+        final PlacementInstance withTerm =
+                new PlacementInstance(
+                        groups, slots, jobInformation, JobAllocationsInformation.empty(),
+                        0.0, 0.0, null, null, false, 1.0, true);
+        final PlacementInstance withoutTerm =
+                new PlacementInstance(
+                        groups, slots, jobInformation, JobAllocationsInformation.empty(),
+                        0.0, 0.0, null, null, false, 0.0, true);
+
+        final int[] together = {0, 1, 2, 3};   // the four slots of TM_A
+        final int[] split = {0, 1, 4, 5};      // two on TM_A, two on TM_B
+
+        assertThat(withTerm.cost(together))
+                .as("keeping every shuffling slice on one TaskManager costs nothing in traffic")
+                .isLessThan(withTerm.cost(split));
+        assertThat(withoutTerm.cost(together))
+                .as("with the term off the two placements are indistinguishable")
+                .isEqualTo(withoutTerm.cost(split));
+    }
+
+    /** A job with no all-to-all edge has no inter-slice traffic, so the term stays silent. */
+    @Test
+    void communicationTermIsSilentWithoutShuffleEdges() {
+        final SlotSharingGroup slotSharingGroup = new SlotSharingGroup();
+        final JobVertexID vertexId = new JobVertexID();
+        final JobInformation jobInformation =
+                new TestJobInformation(
+                        Collections.singletonList(
+                                new TestVertexInformation(vertexId, 4, slotSharingGroup)));
+        final Map<JobVertexID, Integer> parallelism = new HashMap<>();
+        parallelism.put(vertexId, 4);
+        final List<SlotSharingSlotAllocator.ExecutionSlotSharingGroup> groups =
+                new ArrayList<>(
+                        DefaultSlotSharingResolver.INSTANCE.getExecutionSlotSharingGroups(
+                                jobInformation, new VertexParallelism(parallelism)));
+        final List<PhysicalSlot> slots = slotsOf(TM_A, 4, TM_B, 4);
+
+        final PlacementInstance noShuffle =
+                new PlacementInstance(
+                        groups, slots, jobInformation, JobAllocationsInformation.empty(),
+                        0.0, 0.0, null, null, false, 1.0, false);
+
+        assertThat(noShuffle.cost(new int[] {0, 1, 2, 3}))
+                .isEqualTo(noShuffle.cost(new int[] {0, 1, 4, 5}));
+    }
+
+    /**
      * The adaptive scheduler calls the assigner speculatively while evaluating candidate rescalings,
      * so the same inputs in a different iteration order must produce the same placement. This is
      * what the internal ordering of slices and slots buys.

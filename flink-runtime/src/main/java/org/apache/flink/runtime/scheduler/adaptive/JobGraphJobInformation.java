@@ -19,6 +19,8 @@ package org.apache.flink.runtime.scheduler.adaptive;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.runtime.jobgraph.JobEdge;
+import org.apache.flink.runtime.jobgraph.DistributionPattern;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
@@ -34,6 +36,8 @@ import org.apache.flink.shaded.guava33.com.google.common.collect.Iterables;
 
 import javax.annotation.Nullable;
 
+import java.util.List;
+import java.util.ArrayList;
 import java.util.Collection;
 
 /** {@link JobInformation} created from a {@link JobGraph}. */
@@ -50,6 +54,25 @@ public class JobGraphJobInformation implements JobInformation {
         this.jobID = jobGraph.getJobID();
         this.name = jobGraph.getName();
         this.vertexParallelismStore = vertexParallelismStore;
+    }
+
+    @Override
+    public Collection<ShuffleEdge> getShuffleEdges() {
+        final List<ShuffleEdge> edges = new ArrayList<>();
+        for (JobVertex vertex : jobGraph.getVertices()) {
+            for (JobEdge edge : vertex.getInputs()) {
+                // POINTWISE stays inside a slice under slot sharing, so it never crosses a
+                // TaskManager and is deliberately skipped.
+                if (edge.getDistributionPattern() != DistributionPattern.ALL_TO_ALL) {
+                    continue;
+                }
+                final JobVertex producer = edge.getSource().getProducer();
+                if (producer != null) {
+                    edges.add(new ShuffleEdge(producer.getID(), vertex.getID()));
+                }
+            }
+        }
+        return edges;
     }
 
     @Override
