@@ -77,7 +77,7 @@ final class GeneticPlacement {
 
     private static List<int[]> initialPopulation(PlacementInstance instance, Random random) {
         final List<int[]> population = new ArrayList<>(POPULATION);
-        population.add(instance.identityPlacement());
+        population.add(instance.lptPlacement());
         population.add(roundRobinPlacement(instance));
         while (population.size() < POPULATION) {
             population.add(randomPlacement(instance, random));

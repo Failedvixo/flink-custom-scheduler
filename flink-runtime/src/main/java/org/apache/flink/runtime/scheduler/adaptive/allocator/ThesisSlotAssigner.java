@@ -196,6 +196,22 @@ public class ThesisSlotAssigner implements SlotAssigner {
          * single objective, which is what gives the meta-scheduler something to choose between.
          */
         ACO,
+        /**
+         * The exact minimiser of the same cost, by exhaustive enumeration.
+         *
+         * <p>Not a proposal — a YARDSTICK. What matters about a heuristic is not whether it beats
+         * another heuristic but how much of the available gap it captures, and that question has no
+         * answer without knowing the optimum. At this cluster's size the answer is cheap: assigning
+         * 7 slices to 3 TaskManagers under their slot capacities is 1148 possibilities, microseconds
+         * to enumerate. At the scale the method actually targets — Li et al. run parallelism 20 over
+         * 11 TaskManagers — the same count is above 1e20, which is exactly why heuristics exist.
+         *
+         * <p>Enumerates over TASKMANAGERS rather than slots, since balance and communication depend
+         * only on which machine a slice lands on. State locality does distinguish slots within a
+         * machine, so with a non-zero locality weight this is the exact optimum of the other two
+         * terms and an approximation of the third. Falls back to LPT when the space is too large.
+         */
+        OPTIMAL,
         /** A genetic algorithm over the same cost as {@link #ACO}. */
         GA
     }
@@ -522,6 +538,7 @@ public class ThesisSlotAssigner implements SlotAssigner {
                 break;
             case ACO:
             case GA:
+            case OPTIMAL:
                 assignments =
                         assignBySearch(
                                 strategy, allGroups, freeSlots, jobInformation, previousAllocations);
@@ -603,6 +620,13 @@ public class ThesisSlotAssigner implements SlotAssigner {
      * <p>Deterministic: ties in load are broken by slice index and ties in finish time by the
      * TaskManager ordering, both of which are stable across the scheduler's speculative re-asks.
      */
+    /**
+     * How close two completion times have to be to count as equal. Loads are published in
+     * milliseconds per second with three decimals, so anything under a microsecond of difference is
+     * noise in the measurement rather than a reason to prefer one machine.
+     */
+    private static final double TIE_EPSILON = 1e-9;
+
     private static Collection<SlotAssignment> assignLongestProcessingTimeFirst(
             List<ExecutionSlotSharingGroup> groups, List<TaskManagerSlots> taskManagers) {
         final double[] loads = sliceLoadsOrUnit(groups);
@@ -629,7 +653,20 @@ public class ThesisSlotAssigner implements SlotAssigner {
                     continue;
                 }
                 final double finish = (assignedLoad[t] + loads[g]) / speeds[t];
-                if (best < 0 || finish < bestFinish) {
+                // On a TIE, take the FASTER machine. Not cosmetic: slices of the same slot
+                // sharing group hold the same vertices and therefore carry the same published
+                // load, so exact ties are systematic rather than rare. With the strict
+                // comparison alone the winner was whichever TaskManager sorted first by
+                // resource id — "tm-1-slow" before "tm-3-fast" — which is a coin flip dressed
+                // as a rule, and it lost 15% against the enumerated optimum on the campaign of
+                // 2026-08-30: the two 793-unit slices went to fast and medium (456) where both
+                // belonged on fast (396.5, the exact optimum). Equal finish times now leaves
+                // the faster machine the one with headroom for whatever comes next.
+                final boolean better =
+                        best < 0
+                                || finish < bestFinish - TIE_EPSILON
+                                || (finish <= bestFinish + TIE_EPSILON && speeds[t] > speeds[best]);
+                if (better) {
                     best = t;
                     bestFinish = finish;
                 }
@@ -768,12 +805,19 @@ public class ThesisSlotAssigner implements SlotAssigner {
                         publishedTaskManagerSpeeds(),
                         useMakespanBalance(),
                         communicationWeight(),
-                        !jobInformation.getShuffleEdges().isEmpty());
+                        jobInformation.getShuffleEdges());
 
-        final int[] placement =
-                strategy == Strategy.ACO
-                        ? AntColonyPlacement.search(instance)
-                        : GeneticPlacement.search(instance);
+        final int[] placement;
+        switch (strategy) {
+            case ACO:
+                placement = AntColonyPlacement.search(instance);
+                break;
+            case OPTIMAL:
+                placement = ExhaustivePlacement.search(instance);
+                break;
+            default:
+                placement = GeneticPlacement.search(instance);
+        }
 
         final Collection<SlotAssignment> assignments = new ArrayList<>(groups.size());
         for (int g = 0; g < placement.length; g++) {

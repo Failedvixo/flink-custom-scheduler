@@ -194,6 +194,56 @@ class ThesisSlotAssignerTest {
         assertThat(fcfs.get(0)).as("iteration order packs them").isEqualTo(fcfs.get(1));
     }
 
+    /**
+     * The TIE case, and it is not a corner: slices of one slot sharing group hold the same vertices
+     * and therefore carry the same published load, so two candidate machines finishing at the same
+     * instant is the normal situation rather than a rarity.
+     *
+     * <p>Two equal slices over a nominal and a double-speed machine. The first goes to the fast one;
+     * the second then finishes at 1.0 on EITHER, and the strict comparison alone handed it to
+     * whichever TaskManager sorted first by resource id — "tm-a" before "tm-b", a coin flip dressed
+     * as a rule. Measured against an enumerated optimum on the 2026-08-30 campaign that cost 15%:
+     * two equal 793-unit slices went to the fast and the medium machine (makespan 456) where both
+     * belonged on the fast one (396.5, the exact optimum).
+     */
+    @Test
+    void lptBreaksTiesTowardsTheFasterTaskManager(@TempDir Path tempDir) throws IOException {
+        // The fast machine sorts SECOND, which is what makes this discriminating — it mirrors the
+        // cluster, where "tm-1-slow" precedes "tm-3-fast".
+        publishSpeeds(tempDir, TM_A, 1.0, TM_B, 2.0);
+        final List<PhysicalSlot> freeSlots = slotsOf(TM_A, 2, TM_B, 2);
+
+        assertThat(spreadOf(assign(Strategy.LPT, 2, freeSlots)))
+                .as("both slices belong on the machine that can actually run them")
+                .containsEntry(TM_B, 2)
+                .doesNotContainKey(TM_A);
+    }
+
+    /**
+     * The yardstick property: the enumerated optimum can never cost more than the greedy, and on an
+     * instance with unequal slices it should cost strictly less — otherwise there is no gap for a
+     * search to capture and reporting one would be meaningless.
+     */
+    @Test
+    void optimalIsNeverWorseThanTheGreedy(@TempDir Path tempDir) throws IOException {
+        final JobVertexID wide = new JobVertexID();
+        final JobVertexID narrow = new JobVertexID();
+        publishLoads(tempDir, wide, 1.0, narrow, 3.0);
+        publishSpeeds(tempDir, TM_A, 1.0, TM_B, 4.0);
+        final List<PhysicalSlot> freeSlots = slotsOf(TM_A, 3, TM_B, 3);
+
+        final List<String> optimal =
+                placementOf(assignStaggered(Strategy.OPTIMAL, freeSlots, wide, 4, narrow, 2));
+        final List<String> lpt =
+                placementOf(assignStaggered(Strategy.LPT, freeSlots, wide, 4, narrow, 2));
+
+        assertThat(optimal).as("every slice is placed").hasSameSizeAs(lpt);
+        assertThat(optimal)
+                .as("the two expensive slices belong on the machine four times as fast")
+                .satisfies(p -> assertThat(p.get(0)).isEqualTo(TM_B))
+                .satisfies(p -> assertThat(p.get(1)).isEqualTo(TM_B));
+    }
+
     /** With nothing published every slice weighs 1.0 and every machine is nominal: an even split. */
     @Test
     void lptWithoutPublishedFilesSplitsEvenly() {
@@ -229,9 +279,16 @@ class ThesisSlotAssignerTest {
                 .containsEntry(TM_C, 2)
                 .containsEntry(TM_B, 2)
                 .doesNotContainKey(TM_A);
+        // With four EQUAL slices the two arms agree, and both are right: 0/2/2 and 1/1/2 both
+        // finish at 1.0, so nothing separates them on makespan. LPT lands on the packed one
+        // because every step here ends in a tie and ties now go to the faster machine. The two
+        // arms part company when the slices are UNEQUAL — PACK still fills fastest-first while
+        // LPT reorders by cost — which is what lptSplitsTheExpensiveSlicesInsteadOfPackingThem
+        // measures. Asserting a spread here was asserting an artefact of the old tie-break.
         assertThat(spreadOf(assign(Strategy.LPT, 4, freeSlots)))
-                .as("LPT spreads over all three, which is what PACK exists to contrast with")
-                .containsOnlyKeys(TM_A, TM_B, TM_C);
+                .as("equal slices leave nothing to separate the two arms")
+                .containsEntry(TM_C, 2)
+                .containsEntry(TM_B, 2);
     }
 
     /** With nothing published every machine is nominal, so PACK falls back to the stable ordering. */
@@ -273,11 +330,15 @@ class ThesisSlotAssignerTest {
         final PlacementInstance withTerm =
                 new PlacementInstance(
                         groups, slots, jobInformation, JobAllocationsInformation.empty(),
-                        0.0, 0.0, null, null, false, 1.0, true);
+                        0.0, 0.0, null, null, false, 1.0,
+                        Collections.singletonList(
+                                new JobInformation.ShuffleEdge(vertexId, vertexId)));
         final PlacementInstance withoutTerm =
                 new PlacementInstance(
                         groups, slots, jobInformation, JobAllocationsInformation.empty(),
-                        0.0, 0.0, null, null, false, 0.0, true);
+                        0.0, 0.0, null, null, false, 0.0,
+                        Collections.singletonList(
+                                new JobInformation.ShuffleEdge(vertexId, vertexId)));
 
         final int[] together = {0, 1, 2, 3};   // the four slots of TM_A
         final int[] split = {0, 1, 4, 5};      // two on TM_A, two on TM_B
@@ -310,7 +371,7 @@ class ThesisSlotAssignerTest {
         final PlacementInstance noShuffle =
                 new PlacementInstance(
                         groups, slots, jobInformation, JobAllocationsInformation.empty(),
-                        0.0, 0.0, null, null, false, 1.0, false);
+                        0.0, 0.0, null, null, false, 1.0, Collections.emptyList());
 
         assertThat(noShuffle.cost(new int[] {0, 1, 2, 3}))
                 .isEqualTo(noShuffle.cost(new int[] {0, 1, 4, 5}));

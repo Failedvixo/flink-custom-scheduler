@@ -71,12 +71,14 @@ final class AntColonyPlacement {
             }
         }
 
-        int[] best = instance.identityPlacement();
+        final Integer[] order = heaviestFirst(instance);
+
+        int[] best = instance.lptPlacement();
         double bestCost = instance.cost(best);
 
         for (int iteration = 0; iteration < ITERATIONS; iteration++) {
             for (int ant = 0; ant < ANTS; ant++) {
-                final int[] tour = walk(instance, pheromone, maxLocalKeyGroups, random);
+                final int[] tour = walk(instance, pheromone, order, maxLocalKeyGroups, random);
                 final double cost = instance.cost(tour);
                 if (cost < bestCost) {
                     bestCost = cost;
@@ -89,30 +91,82 @@ final class AntColonyPlacement {
         return best;
     }
 
-    /** One ant's construction: slices in order, each taking a slot still free in this tour. */
+    /**
+     * The order slices are placed in: heaviest first.
+     *
+     * <p>Index order let the cheap slices claim the fast machines before the expensive ones were
+     * even considered, which is how a slice of load ~27 ended up alone on the four-core machine
+     * while two of load ~1135 sat on the single-core one (campaign 20260828-174259). Descending
+     * load is the order LPT owes its guarantee to, and starting from it means the pheromone
+     * refines a sound placement instead of rescuing a bad one.
+     */
+    private static Integer[] heaviestFirst(PlacementInstance instance) {
+        final Integer[] order = new Integer[instance.groupCount()];
+        for (int g = 0; g < order.length; g++) {
+            order[g] = g;
+        }
+        java.util.Arrays.sort(
+                order,
+                (a, b) ->
+                        instance.sliceLoad(a) != instance.sliceLoad(b)
+                                ? Double.compare(instance.sliceLoad(b), instance.sliceLoad(a))
+                                : Integer.compare(a, b));
+        return order;
+    }
+
+    /** One ant's construction: slices heaviest-first, each taking a slot still free in this tour. */
     private static int[] walk(
             PlacementInstance instance,
             double[][] pheromone,
+            Integer[] order,
             long maxLocalKeyGroups,
             Random random) {
-        final int groups = instance.groupCount();
         final int slots = instance.slotCount();
         final boolean[] taken = new boolean[slots];
-        final int[] slicesPerTaskManager = new int[instance.taskManagerCount()];
-        final int[] tour = new int[groups];
+        final double[] loadPerTaskManager = new double[instance.taskManagerCount()];
+        final int[] tour = new int[instance.groupCount()];
+        final boolean[] placed = new boolean[instance.groupCount()];
         final double[] weights = new double[slots];
 
-        for (int g = 0; g < groups; g++) {
+        for (int step = 0; step < order.length; step++) {
+            final int g = order[step];
             double total = 0;
             for (int s = 0; s < slots; s++) {
                 if (taken[s]) {
                     weights[s] = 0;
                     continue;
                 }
-                final double spread = 1.0 / (1.0 + slicesPerTaskManager[instance.taskManagerOf(s)]);
+                final int tm = instance.taskManagerOf(s);
+
+                // How soon this machine would be done with the slice if it took it. Replaces a
+                // count of slices per TaskManager, which knew neither how heavy this slice is nor
+                // how fast the machine is — the two facts the objective is made of, so the ants
+                // were searching blind and the cost function could only rank what they happened to
+                // propose. This is the LPT rule used as a construction heuristic, which is what
+                // SP-Ant's is too.
+                final double finish =
+                        (loadPerTaskManager[tm] + instance.sliceLoad(g))
+                                / instance.taskManagerSpeed(tm);
+                final double compute = 1.0 / (1.0 + finish);
+
+                // Pull towards machines already holding slices this one exchanges data with, so
+                // "collect for communication or scatter for compute" is a choice the ants can
+                // actually express rather than one only the cost function can score after the fact.
+                int partners = 0;
+                int partnersHere = 0;
+                for (int other = 0; other < placed.length; other++) {
+                    if (placed[other] && instance.communicates(g, other)) {
+                        partners++;
+                        if (instance.taskManagerOf(tour[other]) == tm) {
+                            partnersHere++;
+                        }
+                    }
+                }
+                final double affinity = partners == 0 ? 0.0 : (double) partnersHere / partners;
+
                 final double locality =
                         (double) instance.localKeyGroups(g, s) / maxLocalKeyGroups;
-                final double heuristic = spread + locality;
+                final double heuristic = compute + locality + affinity;
                 weights[s] = Math.pow(pheromone[g][s], ALPHA) * Math.pow(heuristic, BETA);
                 total += weights[s];
             }
@@ -120,7 +174,8 @@ final class AntColonyPlacement {
             final int chosen = pick(weights, total, taken, random);
             tour[g] = chosen;
             taken[chosen] = true;
-            slicesPerTaskManager[instance.taskManagerOf(chosen)]++;
+            placed[g] = true;
+            loadPerTaskManager[instance.taskManagerOf(chosen)] += instance.sliceLoad(g);
         }
         return tour;
     }

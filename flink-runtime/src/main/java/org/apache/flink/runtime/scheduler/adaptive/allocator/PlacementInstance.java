@@ -30,6 +30,8 @@ import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.KeyGroupRangeAssignment;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -134,7 +136,21 @@ final class PlacementInstance {
      */
     private final double communicationWeight;
 
-    private final boolean hasShuffle;
+    /**
+     * Which PAIRS of slices actually exchange data, so the communication term charges only for the
+     * traffic that exists.
+     *
+     * <p>Counting every pair was defensible while Flink's default slot sharing put one subtask of
+     * every vertex in every slice: the graph was then effectively all-to-all and any two slices did
+     * talk. Once the job splits its operators into separate slot sharing groups that stops being
+     * true — two slices of the same stage never exchange anything — and charging for them buries the
+     * real signal under a constant. SP-Ant (Farrokh et al., ESWA 2022, Eq. 5) is explicit about it:
+     * its network term is over CONNECTED executors only.
+     *
+     * <p>Under one shared group this degenerates back to all pairs, so every campaign run before the
+     * split keeps its exact meaning.
+     */
+    private final boolean[][] communicates;
 
     PlacementInstance(
             List<ExecutionSlotSharingGroup> groups,
@@ -154,7 +170,7 @@ final class PlacementInstance {
                 null,
                 false,
                 0.0,
-                false);
+                Collections.emptyList());
     }
 
     PlacementInstance(
@@ -168,14 +184,14 @@ final class PlacementInstance {
             @Nullable Map<String, Double> speedByTaskManager,
             boolean makespanBalance,
             double communicationWeight,
-            boolean hasShuffle) {
+            Collection<JobInformation.ShuffleEdge> shuffleEdges) {
         this.groups = groups;
         this.slots = slots;
         this.balanceWeight = balanceWeight;
         this.localityWeight = localityWeight;
         this.makespanBalance = makespanBalance;
         this.communicationWeight = communicationWeight;
-        this.hasShuffle = hasShuffle;
+        this.communicates = communicationMatrix(groups, shuffleEdges);
 
         final Map<String, Integer> taskManagerIndex = new HashMap<>();
         this.taskManagerOfSlot = new int[slots.size()];
@@ -241,6 +257,11 @@ final class PlacementInstance {
 
     double sliceLoad(int groupIndex) {
         return sliceLoad[groupIndex];
+    }
+
+    /** Whether these two slices exchange data, i.e. whether separating them costs anything. */
+    boolean communicates(int groupA, int groupB) {
+        return communicates[groupA][groupB];
     }
 
     int groupCount() {
@@ -333,13 +354,16 @@ final class PlacementInstance {
      * term lands in [0, 1] like the other two and the weights mean what they look like they mean.
      */
     private double crossMachineTraffic(int[] slotOfGroup) {
-        if (!hasShuffle || communicationWeight == 0.0 || slotOfGroup.length < 2) {
+        if (communicationWeight == 0.0 || slotOfGroup.length < 2) {
             return 0.0;
         }
         int cross = 0;
         int total = 0;
         for (int a = 0; a < slotOfGroup.length; a++) {
             for (int b = a + 1; b < slotOfGroup.length; b++) {
+                if (!communicates[a][b]) {
+                    continue;
+                }
                 total++;
                 if (taskManagerOfSlot[slotOfGroup[a]] != taskManagerOfSlot[slotOfGroup[b]]) {
                     cross++;
@@ -347,6 +371,44 @@ final class PlacementInstance {
             }
         }
         return total == 0 ? 0.0 : (double) cross / total;
+    }
+
+    /**
+     * Marks the slice pairs joined by an all-to-all edge: a pair counts when one slice holds a
+     * subtask of the producing vertex and the other holds one of the consuming vertex.
+     *
+     * <p>A vertex that shuffles into itself marks every pair holding it, which is what the
+     * single-shared-group case reduces to.
+     */
+    private static boolean[][] communicationMatrix(
+            List<ExecutionSlotSharingGroup> groups,
+            Collection<JobInformation.ShuffleEdge> shuffleEdges) {
+        final boolean[][] matrix = new boolean[groups.size()][groups.size()];
+        if (shuffleEdges.isEmpty()) {
+            return matrix;
+        }
+        final Map<JobVertexID, List<Integer>> holders = new HashMap<>();
+        for (int g = 0; g < groups.size(); g++) {
+            for (ExecutionVertexID vertex : groups.get(g).getContainedExecutionVertices()) {
+                holders.computeIfAbsent(vertex.getJobVertexId(), ignored -> new ArrayList<>())
+                        .add(g);
+            }
+        }
+        for (JobInformation.ShuffleEdge edge : shuffleEdges) {
+            final List<Integer> producers =
+                    holders.getOrDefault(edge.getProducer(), Collections.emptyList());
+            final List<Integer> consumers =
+                    holders.getOrDefault(edge.getConsumer(), Collections.emptyList());
+            for (int a : producers) {
+                for (int b : consumers) {
+                    if (a != b) {
+                        matrix[a][b] = true;
+                        matrix[b][a] = true;
+                    }
+                }
+            }
+        }
+        return matrix;
     }
 
     /**
@@ -430,6 +492,67 @@ final class PlacementInstance {
     }
 
     /** The trivial placement — slice {@code i} on slot {@code i} — used as a search starting point. */
+    /**
+     * The placement LPT would produce, as a seed for the searches.
+     *
+     * <p>{@link #identityPlacement()} — slice g into slot g — is an arbitrary starting incumbent,
+     * and a search that never improves on it can return something WORSE than the greedy it is meant
+     * to beat. Starting from LPT makes a search's margin over LPT exactly the value the search adds,
+     * which is the quantity worth measuring.
+     *
+     * <p>Ties go to the faster machine, matching {@code ThesisSlotAssigner.LPT}: slices of one slot
+     * sharing group carry the same published load, so ties are systematic rather than rare.
+     */
+    int[] lptPlacement() {
+        final int[] placement = new int[groups.size()];
+        final double[] assigned = new double[taskManagerCount];
+        final int[] usedSlots = new int[taskManagerCount];
+        final int[] capacity = new int[taskManagerCount];
+        for (int slot = 0; slot < slots.size(); slot++) {
+            capacity[taskManagerOfSlot[slot]]++;
+        }
+        final Integer[] order = new Integer[groups.size()];
+        for (int g = 0; g < order.length; g++) {
+            order[g] = g;
+        }
+        java.util.Arrays.sort(
+                order,
+                (a, b) ->
+                        sliceLoad[a] != sliceLoad[b]
+                                ? Double.compare(sliceLoad[b], sliceLoad[a])
+                                : Integer.compare(a, b));
+        final boolean[] taken = new boolean[slots.size()];
+        for (int g : order) {
+            int best = -1;
+            double bestFinish = Double.MAX_VALUE;
+            for (int t = 0; t < taskManagerCount; t++) {
+                if (usedSlots[t] >= capacity[t]) {
+                    continue;
+                }
+                final double finish = (assigned[t] + sliceLoad[g]) / taskManagerSpeed[t];
+                final boolean better =
+                        best < 0
+                                || finish < bestFinish - 1e-9
+                                || (finish <= bestFinish + 1e-9
+                                        && taskManagerSpeed[t] > taskManagerSpeed[best]);
+                if (better) {
+                    best = t;
+                    bestFinish = finish;
+                }
+            }
+            for (int slot = 0; slot < slots.size(); slot++) {
+                if (!taken[slot] && taskManagerOfSlot[slot] == best) {
+                    placement[g] = slot;
+                    taken[slot] = true;
+                    break;
+                }
+            }
+            assigned[best] += sliceLoad[g];
+            usedSlots[best]++;
+        }
+        return placement;
+    }
+
     int[] identityPlacement() {
         final int[] placement = new int[groups.size()];
         for (int g = 0; g < placement.length; g++) {
