@@ -66,6 +66,8 @@ class Executing extends StateWithExecutionGraph
     private final int rescaleOnFailedCheckpointCount;
     // null indicates that there was no change event observed, yet
     @Nullable private AtomicInteger failedCheckpointCountdown;
+    // THESIS: a replan request waiting for the next completed checkpoint (see ThesisReplanTrigger)
+    @Nullable private ThesisReplanTrigger.Request pendingReplan;
 
     Executing(
             ExecutionGraph executionGraph,
@@ -101,6 +103,8 @@ class Executing extends StateWithExecutionGraph
         recordRescaleForJobIntoExecuting(logger, context);
 
         deploy();
+
+        scheduleReplanPoll();
 
         // check if new resources have come available in the meantime
         context.runIfState(
@@ -278,7 +282,57 @@ class Executing extends StateWithExecutionGraph
 
     @Override
     public void onCompletedCheckpoint() {
+        if (pendingReplan != null) {
+            final ThesisReplanTrigger.Request request = pendingReplan;
+            pendingReplan = null;
+            replan(request);
+            return;
+        }
         triggerPotentialRescale();
+    }
+
+    // ---- THESIS: replan at constant parallelism (see ThesisReplanTrigger) --------------------
+
+    private void scheduleReplanPoll() {
+        final Duration interval = ThesisReplanTrigger.pollInterval();
+        if (interval != null) {
+            context.runIfState(this, this::pollReplan, interval);
+        }
+    }
+
+    private void pollReplan() {
+        final ThesisReplanTrigger.Request request = ThesisReplanTrigger.poll();
+        if (request == null) {
+            scheduleReplanPoll();
+        } else if (request.atCheckpoint) {
+            getLogger().info("[THESIS_REPLAN] request {} armed for the next checkpoint", request);
+            pendingReplan = request;
+            scheduleReplanPoll();
+        } else {
+            replan(request);
+        }
+    }
+
+    /**
+     * Restart with the parallelism the job already has, so that the execution graph is recreated
+     * and the slot assigner applies the current plan. The same transition a rescale makes.
+     */
+    private void replan(ThesisReplanTrigger.Request request) {
+        final VertexParallelism parallelism =
+                context.getAvailableVertexParallelism()
+                        .orElseGet(() -> extractCurrentVertexParallelism(getExecutionGraph()));
+        getLogger()
+                .info(
+                        "[THESIS_REPLAN] request {}: restarting job {} at unchanged parallelism to apply the plan",
+                        request,
+                        getExecutionGraph().getJobID());
+        context.goToRestarting(
+                getExecutionGraph(),
+                getExecutionGraphHandler(),
+                getOperatorCoordinatorHandler(),
+                Duration.ofMillis(0L),
+                parallelism,
+                getFailures());
     }
 
     @Override
